@@ -62,7 +62,6 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AdministratorAccess-Amplify
 
-
   # Amplify App
   AmplifyApp:
     Type: AWS::Amplify::App
