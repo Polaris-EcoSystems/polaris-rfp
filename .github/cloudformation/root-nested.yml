@@ -131,7 +131,10 @@ Outputs:
 
   FrontendCustomDomainUrl:
     Description: Custom domain URL (if enabled)
-    Value: !GetAtt FrontendStack.Outputs.CustomDomainUrl
+    Value: !If
+      - UseCustomDomain
+      - !Sub 'https://${CustomDomainPrefix}.${CustomDomainName}'
+      - ''
 
   AppRunnerInstanceRoleArn:
     Description: IAM role ARN used by App Runner instances

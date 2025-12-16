@@ -143,11 +143,9 @@ Outputs:
       Name: !Sub '${AWS::StackName}-AmplifyAppUrl'
 
   CustomDomainUrl:
+    Condition: UseCustomDomain
     Description: 'Custom domain URL (if enabled)'
-    Value: !If
-      - UseCustomDomain
-      - !Sub 'https://${CustomDomainPrefix}.${CustomDomainName}'
-      - ''
+    Value: !Sub 'https://${CustomDomainPrefix}.${CustomDomainName}'
     Export:
       Name: !Sub '${AWS::StackName}-CustomDomainUrl'
 
