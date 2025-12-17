@@ -1,8 +1,8 @@
-import Head from 'next/head'
 import type { GetServerSideProps } from 'next'
-import Layout from '../components/Layout'
-import Dashboard from '../components/Dashboard'
+import Head from 'next/head'
 import AuthGuard from '../components/AuthGuard'
+import Dashboard from '../components/Dashboard'
+import Layout from '../components/Layout'
 
 export const getServerSideProps: GetServerSideProps = async () => {
   // Force SSR so the app is deployed via Amplify WEB_COMPUTE (not pure static export).

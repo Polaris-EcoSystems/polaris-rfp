@@ -27,6 +27,21 @@ function copyDir(src, dest) {
   }
 }
 
+function readNextVersion(root) {
+  try {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(root, 'package.json'), 'utf8'),
+    )
+    const v =
+      (pkg && pkg.dependencies && pkg.dependencies.next) ||
+      (pkg && pkg.devDependencies && pkg.devDependencies.next) ||
+      ''
+    return String(v).replace(/^[^0-9]*/, '')
+  } catch {
+    return ''
+  }
+}
+
 function main() {
   const root = path.resolve(__dirname, '..')
   const nextDir = path.join(root, '.next')
@@ -40,7 +55,9 @@ function main() {
 
   if (!fs.existsSync(standaloneDir)) {
     console.error('Expected Next standalone output missing:', standaloneDir)
-    console.error('Make sure next.config.js has output: "standalone" and build ran.')
+    console.error(
+      'Make sure next.config.js has output: "standalone" and build ran.',
+    )
     process.exit(1)
   }
 
@@ -58,9 +75,11 @@ function main() {
     copyDir(nextStaticDir, dest)
   }
 
+  const nextVersion = readNextVersion(root) || '0.0.0'
+
   const deployManifest = {
     version: 1,
-    framework: { name: 'nextjs', version: '15' },
+    framework: { name: 'nextjs', version: nextVersion },
     computeResources: [
       {
         name: 'default',
@@ -69,6 +88,14 @@ function main() {
       },
     ],
     routes: [
+      {
+        path: '/*.*',
+        target: {
+          kind: 'Static',
+          cacheControl: 'public, max-age=31536000, immutable',
+        },
+        fallback: { kind: 'Compute', src: 'default' },
+      },
       {
         path: '/*',
         target: { kind: 'Compute', src: 'default' },
