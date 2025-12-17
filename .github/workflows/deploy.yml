@@ -78,6 +78,8 @@ jobs:
               CanvaClientSecret=${{ secrets.CANVA_CLIENT_SECRET }} \
               CanvaRedirectUri=${{ secrets.CANVA_REDIRECT_URI }} \
               CanvaTokenEncKey=${{ secrets.CANVA_TOKEN_ENC_KEY }} \
+              MongoDbUri=${{ secrets.MONGODB_URI }} \
+              JwtSecret=${{ secrets.JWT_SECRET }} \
             --region ${{ env.AWS_REGION }}
 
       - name: Get Amplify App ID

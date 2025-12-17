@@ -61,6 +61,20 @@ Parameters:
     NoEcho: true
     Default: ''
 
+  MongoDbUri:
+    Type: String
+    NoEcho: true
+    Default: ''
+
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Default: ''
+
+  JwtExpire:
+    Type: String
+    Default: '24h'
+
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
 
@@ -96,6 +110,9 @@ Resources:
         CanvaClientSecret: !Ref CanvaClientSecret
         CanvaRedirectUri: !Ref CanvaRedirectUri
         CanvaTokenEncKey: !Ref CanvaTokenEncKey
+        MongoDbUri: !Ref MongoDbUri
+        JwtSecret: !Ref JwtSecret
+        JwtExpire: !Ref JwtExpire
         AppRunnerInstanceRoleArn: !GetAtt AppRunnerInstanceRole.Arn
 
   FrontendStack:

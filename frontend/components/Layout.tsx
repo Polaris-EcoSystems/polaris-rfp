@@ -388,16 +388,16 @@ export default function Layout({ children }: LayoutProps) {
                   backendUp === null
                     ? 'Checking backend…'
                     : backendUp
-                      ? `Backend reachable${
-                          backendLastCheckedAt
-                            ? ` (checked ${backendLastCheckedAt.toLocaleTimeString()})`
-                            : ''
-                        }`
-                      : `Backend unreachable${
-                          backendLastCheckedAt
-                            ? ` (checked ${backendLastCheckedAt.toLocaleTimeString()})`
-                            : ''
-                        }`
+                    ? `Backend reachable${
+                        backendLastCheckedAt
+                          ? ` (checked ${backendLastCheckedAt.toLocaleTimeString()})`
+                          : ''
+                      }`
+                    : `Backend unreachable${
+                        backendLastCheckedAt
+                          ? ` (checked ${backendLastCheckedAt.toLocaleTimeString()})`
+                          : ''
+                      }`
                 }
               >
                 <span
@@ -405,8 +405,8 @@ export default function Layout({ children }: LayoutProps) {
                     backendUp === null
                       ? 'bg-gray-300'
                       : backendUp
-                        ? 'bg-green-500'
-                        : 'bg-red-500'
+                      ? 'bg-green-500'
+                      : 'bg-red-500'
                   }`}
                 />
                 <span>API</span>

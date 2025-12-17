@@ -50,6 +50,23 @@ Parameters:
     NoEcho: true
     Default: ''
 
+  MongoDbUri:
+    Type: String
+    Description: MongoDB connection string (required for auth/users)
+    NoEcho: true
+    Default: ''
+
+  JwtSecret:
+    Type: String
+    Description: JWT secret for auth token signing
+    NoEcho: true
+    Default: ''
+
+  JwtExpire:
+    Type: String
+    Description: JWT expiry (e.g. 24h)
+    Default: '24h'
+
   AppRunnerInstanceRoleArn:
     Type: String
     Description: IAM role ARN used by App Runner instances (created by root stack)
@@ -100,6 +117,12 @@ Resources:
                   Value: !Ref CanvaRedirectUri
                 - Name: CANVA_TOKEN_ENC_KEY
                   Value: !Ref CanvaTokenEncKey
+                - Name: MONGODB_URI
+                  Value: !Ref MongoDbUri
+                - Name: JWT_SECRET
+                  Value: !Ref JwtSecret
+                - Name: JWT_EXPIRE
+                  Value: !Ref JwtExpire
         AutoDeploymentsEnabled: true
       InstanceConfiguration:
         Cpu: '1024'
