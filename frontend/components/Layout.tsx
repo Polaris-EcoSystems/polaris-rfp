@@ -13,7 +13,7 @@ import {
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { ReactNode, useEffect, useRef, useState } from 'react'
-import { extractList, rfpApi, type RFP } from '../lib/api'
+import api, { extractList, rfpApi, type RFP } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import GlobalSearch from './GlobalSearch'
 
@@ -26,6 +26,10 @@ export default function Layout({ children }: LayoutProps) {
   const [topMenuOpen, setTopMenuOpen] = useState(false)
   const [footerMenuOpen, setFooterMenuOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [backendUp, setBackendUp] = useState<boolean | null>(null)
+  const [backendLastCheckedAt, setBackendLastCheckedAt] = useState<Date | null>(
+    null,
+  )
   const [notificationItems, setNotificationItems] = useState<
     {
       id: string
@@ -71,6 +75,33 @@ export default function Layout({ children }: LayoutProps) {
     return () => {
       document.removeEventListener('mousedown', handleDocClick)
       document.removeEventListener('keydown', handleKey)
+    }
+  }, [])
+
+  // Heartbeat: check backend is reachable every minute.
+  useEffect(() => {
+    let mounted = true
+    let timer: any = null
+
+    const check = async () => {
+      try {
+        // Backend responds at "/" with JSON health data.
+        await api.get('/')
+        if (!mounted) return
+        setBackendUp(true)
+        setBackendLastCheckedAt(new Date())
+      } catch (_e) {
+        if (!mounted) return
+        setBackendUp(false)
+        setBackendLastCheckedAt(new Date())
+      }
+    }
+
+    check()
+    timer = window.setInterval(check, 60_000)
+    return () => {
+      mounted = false
+      if (timer) window.clearInterval(timer)
     }
   }, [])
 
@@ -351,6 +382,35 @@ export default function Layout({ children }: LayoutProps) {
             </div>
 
             <div className="flex items-center space-x-4">
+              <div
+                className="hidden sm:flex items-center gap-2 text-xs text-gray-600"
+                title={
+                  backendUp === null
+                    ? 'Checking backend…'
+                    : backendUp
+                      ? `Backend reachable${
+                          backendLastCheckedAt
+                            ? ` (checked ${backendLastCheckedAt.toLocaleTimeString()})`
+                            : ''
+                        }`
+                      : `Backend unreachable${
+                          backendLastCheckedAt
+                            ? ` (checked ${backendLastCheckedAt.toLocaleTimeString()})`
+                            : ''
+                        }`
+                }
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    backendUp === null
+                      ? 'bg-gray-300'
+                      : backendUp
+                        ? 'bg-green-500'
+                        : 'bg-red-500'
+                  }`}
+                />
+                <span>API</span>
+              </div>
               <div ref={notificationsRef} className="relative">
                 <button
                   onClick={() => setNotificationsOpen((s) => !s)}
