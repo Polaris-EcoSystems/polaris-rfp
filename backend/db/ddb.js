@@ -27,7 +27,31 @@ function getRegion() {
   )
 }
 
-const client = new DynamoDBClient({ region: getRegion() })
+function getEndpoint() {
+  const v = String(
+    process.env.DDB_ENDPOINT || process.env.DYNAMODB_ENDPOINT || '',
+  ).trim()
+  return v || null
+}
+
+function getClientConfig() {
+  const region = getRegion()
+  const endpoint = getEndpoint()
+  const cfg = { region }
+
+  if (endpoint) {
+    cfg.endpoint = endpoint
+    // DynamoDB Local / custom endpoints usually run without AWS auth,
+    // but the SDK still requires credentials to be present.
+    if (!process.env.AWS_ACCESS_KEY_ID && !process.env.AWS_SECRET_ACCESS_KEY) {
+      cfg.credentials = { accessKeyId: 'local', secretAccessKey: 'local' }
+    }
+  }
+
+  return cfg
+}
+
+const client = new DynamoDBClient(getClientConfig())
 const ddb = DynamoDBDocumentClient.from(client, {
   marshallOptions: { removeUndefinedValues: true },
 })
@@ -70,6 +94,7 @@ module.exports = {
   ddb,
   getTableName,
   getRegion,
+  getEndpoint,
   get,
   put,
   update,

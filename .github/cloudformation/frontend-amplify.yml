@@ -68,7 +68,7 @@ Resources:
     Properties:
       Name: !Sub 'polaris-frontend-${Environment}'
       Repository: !Ref RepositoryUrl
-      OauthToken: '{{resolve:secretsmanager:arn:aws:secretsmanager:us-east-1:211125621822:secret:github-cNxbJE:SecretString:github_pat}}'
+      OauthToken: !Ref GitHubToken
       BuildSpec: |
         version: 1
         applications:

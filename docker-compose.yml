@@ -1,34 +1,23 @@
-version: '3.8'
+version: "3.8"
 
 services:
-  postgres:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: rfp_system
-      POSTGRES_USER: rfp_user
-      POSTGRES_PASSWORD: rfp_password
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
     ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-  mongodb:
-    image: mongo:7.0
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongodb_data:/data/db
+      - "8000:8000"
 
   backend:
     build: ./backend
     ports:
       - "8080:8080"
     environment:
-      - DATABASE_URL=postgresql://rfp_user:rfp_password@postgres:5432/rfp_system
-      - MONGODB_URL=mongodb://mongodb:27017/rfp_system
+      - PORT=8080
+      - AWS_REGION=us-east-1
+      - DDB_TABLE_NAME=polaris-rfp-local
+      - DDB_ENDPOINT=http://dynamodb:8000
     depends_on:
-      - postgres
-      - mongodb
+      - dynamodb
     volumes:
       - ./backend:/app
       - backend_uploads:/app/uploads
@@ -38,7 +27,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - API_BASE_URL=http://backend:8000
+      - API_BASE_URL=http://backend:8080
     depends_on:
       - backend
     volumes:
@@ -46,6 +35,4 @@ services:
       - /app/node_modules
 
 volumes:
-  postgres_data:
-  mongodb_data:
   backend_uploads:

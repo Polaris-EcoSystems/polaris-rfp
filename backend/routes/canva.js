@@ -1,14 +1,15 @@
 const express = require('express')
 const jwt = require('jsonwebtoken')
 const { authMiddleware } = require('../middleware/auth')
-const Proposal = require('../models/Proposal')
-const CanvaCompanyTemplate = require('../models/CanvaCompanyTemplate')
-const CanvaConnection = require('../models/CanvaConnection')
-const Company = require('../models/Company')
-const TeamMember = require('../models/TeamMember')
-const ProjectReference = require('../models/ProjectReference')
-const CanvaAssetLink = require('../models/CanvaAssetLink')
-const CanvaProposalDesign = require('../models/CanvaProposalDesign')
+const { getProposalById, updateProposal } = require('../db/proposals')
+const { getRfpById } = require('../db/rfps')
+const {
+  getCompanyByCompanyId,
+  getTeamMembersByIds,
+  getTeamMemberById,
+  getProjectReferencesByIds,
+} = require('../db/content')
+const canvaDb = require('../db/canva')
 
 const canvaClient = require('../services/canvaClient')
 const {
@@ -58,19 +59,17 @@ async function pollAssetJob(userId, mode, jobId) {
 async function upsertAssetLink({ ownerType, ownerId, kind, asset, sourceUrl }) {
   const assetId = asset?.id ? String(asset.id) : ''
   if (!assetId) return null
-  const doc = await CanvaAssetLink.findOneAndUpdate(
-    { ownerType, ownerId, kind },
-    {
-      ownerType,
-      ownerId,
-      kind,
-      assetId,
-      name: String(asset?.name || ''),
-      sourceUrl: String(sourceUrl || ''),
-      meta: asset && typeof asset === 'object' ? asset : {},
-    },
-    { upsert: true, new: true },
-  ).lean()
+  const doc = await canvaDb.upsertAssetLink({
+    ownerType,
+    ownerId,
+    kind,
+    canvaAssetId: assetId,
+    sourceUrl: String(sourceUrl || ''),
+    meta:
+      asset && typeof asset === 'object'
+        ? { ...asset, name: String(asset?.name || '') }
+        : {},
+  })
   return doc
 }
 
@@ -78,10 +77,12 @@ async function upsertAssetLink({ ownerType, ownerId, kind, asset, sourceUrl }) {
 
 router.get('/status', authMiddleware, async (req, res) => {
   try {
-    const conn = await CanvaConnection.findOne({ userId: req.user._id })
-      .select('-accessTokenEnc -refreshTokenEnc')
-      .lean()
-    return res.json({ connected: !!conn, connection: conn || null })
+    const conn = await canvaDb.getConnectionForUser(req.user._id)
+    if (!conn) return res.json({ connected: false, connection: null })
+    const safe = { ...conn }
+    delete safe.accessTokenEnc
+    delete safe.refreshTokenEnc
+    return res.json({ connected: true, connection: safe })
   } catch (e) {
     return res.status(500).json({ error: 'Failed to get Canva status' })
   }
@@ -89,7 +90,7 @@ router.get('/status', authMiddleware, async (req, res) => {
 
 router.post('/disconnect', authMiddleware, async (req, res) => {
   try {
-    await CanvaConnection.deleteOne({ userId: req.user._id })
+    await canvaDb.deleteConnectionForUser(req.user._id)
     return res.json({ ok: true })
   } catch (e) {
     return res.status(500).json({ error: 'Failed to disconnect Canva' })
@@ -205,7 +206,7 @@ router.get('/brand-templates/:id/dataset', authMiddleware, async (req, res) => {
 
 router.get('/company-mappings', authMiddleware, async (_req, res) => {
   try {
-    const items = await CanvaCompanyTemplate.find().lean()
+    const items = await canvaDb.listCompanyMappings({ limit: 200 })
     return res.json({ data: items })
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load Canva mappings' })
@@ -222,16 +223,11 @@ router.put('/company-mappings/:companyId', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'brandTemplateId is required' })
     }
 
-    const doc = await CanvaCompanyTemplate.findOneAndUpdate(
-      { companyId },
-      {
-        companyId,
-        brandTemplateId: String(brandTemplateId).trim(),
-        fieldMapping:
-          fieldMapping && typeof fieldMapping === 'object' ? fieldMapping : {},
-      },
-      { upsert: true, new: true },
-    )
+    const doc = await canvaDb.upsertCompanyMapping(companyId, {
+      brandTemplateId: String(brandTemplateId).trim(),
+      fieldMapping:
+        fieldMapping && typeof fieldMapping === 'object' ? fieldMapping : {},
+    })
     return res.json(doc)
   } catch (e) {
     return res.status(500).json({ error: 'Failed to save Canva mapping' })
@@ -305,11 +301,11 @@ router.get('/companies/:companyId/logo', authMiddleware, async (req, res) => {
     const companyId = String(req.params.companyId || '').trim()
     if (!companyId)
       return res.status(400).json({ error: 'companyId is required' })
-    const link = await CanvaAssetLink.findOne({
+    const link = await canvaDb.getAssetLink({
       ownerType: 'company',
       ownerId: companyId,
       kind: 'logo',
-    }).lean()
+    })
     return res.json({ ok: true, link: link || null })
   } catch (e) {
     return res
@@ -328,7 +324,7 @@ router.post(
       if (!companyId)
         return res.status(400).json({ error: 'companyId is required' })
       if (!url) return res.status(400).json({ error: 'url is required' })
-      const company = await Company.findOne({ companyId })
+      const company = await getCompanyByCompanyId(companyId)
       if (!company) return res.status(404).json({ error: 'Company not found' })
 
       const created = await canvaClient.createUrlAssetUploadJob(req.user._id, {
@@ -353,7 +349,7 @@ router.post(
       })
       return res.json({
         ok: true,
-        company: company.toObject(),
+        company,
         asset,
         link,
       })
@@ -371,11 +367,11 @@ router.get('/team/:memberId/headshot', authMiddleware, async (req, res) => {
     const memberId = String(req.params.memberId || '').trim()
     if (!memberId)
       return res.status(400).json({ error: 'memberId is required' })
-    const link = await CanvaAssetLink.findOne({
+    const link = await canvaDb.getAssetLink({
       ownerType: 'teamMember',
       ownerId: memberId,
       kind: 'headshot',
-    }).lean()
+    })
     return res.json({ ok: true, link: link || null })
   } catch (e) {
     return res.status(500).json({ error: 'Failed to load headshot asset link' })
@@ -392,7 +388,7 @@ router.post(
       if (!memberId)
         return res.status(400).json({ error: 'memberId is required' })
       if (!url) return res.status(400).json({ error: 'url is required' })
-      const member = await TeamMember.findOne({ memberId })
+      const member = await getTeamMemberById(memberId)
       if (!member)
         return res.status(404).json({ error: 'Team member not found' })
 
@@ -418,7 +414,7 @@ router.post(
       })
       return res.json({
         ok: true,
-        member: member.toObject(),
+        member,
         asset,
         link,
       })
@@ -443,7 +439,9 @@ function collectSelectedIdsFromProposalSections(sections) {
       const v = String(id || '').trim()
       if (!v) return
       if (v.startsWith('member_')) teamIds.add(v)
-      else if (/^[a-f0-9]{24}$/i.test(v)) referenceIds.add(v)
+      else if (v.startsWith('company_')) return
+      else if (v.startsWith('ref_') || /^[a-f0-9]{24}$/i.test(v))
+        referenceIds.add(v)
     })
   })
   return {
@@ -462,16 +460,16 @@ async function ensureCanvaDesignForProposal({
   const companyId = proposal.companyId
   const proposalUpdatedAt = new Date(proposal.updatedAt || Date.now())
 
-  const existing = await CanvaProposalDesign.findOne({
+  const existing = await canvaDb.getProposalDesignCache({
     proposalId: proposal._id,
     companyId,
     brandTemplateId: cfg.brandTemplateId,
-  }).lean()
+  })
 
   const isFresh =
     existing &&
-    existing.lastProposalUpdatedAt &&
-    new Date(existing.lastProposalUpdatedAt).getTime() >=
+    existing.meta?.lastProposalUpdatedAt &&
+    new Date(existing.meta.lastProposalUpdatedAt).getTime() >=
       proposalUpdatedAt.getTime()
 
   if (isFresh) {
@@ -487,39 +485,42 @@ async function ensureCanvaDesignForProposal({
   const { teamIds, referenceIds } = collectSelectedIdsFromProposalSections(
     proposal.sections,
   )
-  const [teamMembers, references, companyLogo] = await Promise.all([
-    teamIds.length
-      ? TeamMember.find({ memberId: { $in: teamIds }, isActive: true }).lean()
-      : Promise.resolve([]),
-    referenceIds.length
-      ? ProjectReference.find({ _id: { $in: referenceIds } }).lean()
-      : Promise.resolve([]),
-    CanvaAssetLink.findOne({
-      ownerType: 'company',
-      ownerId: companyId,
-      kind: 'logo',
-    }).lean(),
-  ])
-  const headshotLinks = teamIds.length
-    ? await CanvaAssetLink.find({
-        ownerType: 'teamMember',
-        ownerId: { $in: teamIds },
-        kind: 'headshot',
-      }).lean()
-    : []
+  const [teamMembers, references, companyLogo, headshotLinks] =
+    await Promise.all([
+      teamIds.length ? getTeamMembersByIds(teamIds) : Promise.resolve([]),
+      referenceIds.length
+        ? getProjectReferencesByIds(referenceIds)
+        : Promise.resolve([]),
+      canvaDb.getAssetLink({
+        ownerType: 'company',
+        ownerId: companyId,
+        kind: 'logo',
+      }),
+      teamIds.length
+        ? Promise.all(
+            teamIds.map((memberId) =>
+              canvaDb.getAssetLink({
+                ownerType: 'teamMember',
+                ownerId: memberId,
+                kind: 'headshot',
+              }),
+            ),
+          ).then((xs) => xs.filter(Boolean))
+        : Promise.resolve([]),
+    ])
   const headshotByMemberId = {}
   headshotLinks.forEach((l) => {
-    if (l?.ownerId && l?.assetId)
-      headshotByMemberId[String(l.ownerId)] = l.assetId
+    if (l?.ownerId && l?.canvaAssetId)
+      headshotByMemberId[String(l.ownerId)] = l.canvaAssetId
   })
 
   const datasetValues = buildDatasetValues({
     datasetDef,
     mapping: cfg.fieldMapping || {},
-    proposal: proposal.toObject ? proposal.toObject() : proposal,
-    rfp: rfp && rfp.toObject ? rfp.toObject() : rfp,
+    proposal,
+    rfp,
     company,
-    companyLogoAssetId: companyLogo?.assetId || '',
+    companyLogoAssetId: companyLogo?.canvaAssetId || '',
     teamMembers,
     headshotByMemberId,
     references,
@@ -555,26 +556,20 @@ async function ensureCanvaDesignForProposal({
 
   const now = new Date()
   const tempUrlsExpireAt = new Date(now.getTime() + 29 * 24 * 60 * 60 * 1000)
-  const record = await CanvaProposalDesign.findOneAndUpdate(
-    {
-      proposalId: proposal._id,
-      companyId,
-      brandTemplateId: cfg.brandTemplateId,
-    },
-    {
-      proposalId: proposal._id,
-      companyId,
-      brandTemplateId: cfg.brandTemplateId,
-      designId,
-      designUrl: String(designSummary?.url || ''),
+  const record = await canvaDb.upsertProposalDesignCache({
+    proposalId: proposal._id,
+    companyId,
+    brandTemplateId: cfg.brandTemplateId,
+    designId,
+    designUrl: String(designSummary?.url || ''),
+    meta: {
       editUrl: String(designSummary?.urls?.edit_url || ''),
       viewUrl: String(designSummary?.urls?.view_url || ''),
-      tempUrlsExpireAt,
-      lastProposalUpdatedAt: proposalUpdatedAt,
-      lastGeneratedAt: now,
+      tempUrlsExpireAt: tempUrlsExpireAt.toISOString(),
+      lastProposalUpdatedAt: proposalUpdatedAt.toISOString(),
+      lastGeneratedAt: now.toISOString(),
     },
-    { upsert: true, new: true },
-  ).lean()
+  })
 
   return { cached: false, designId, record }
 }
@@ -586,10 +581,7 @@ router.post(
     try {
       const id = String(req.params.id)
       const force = String(req.query.force || '') === '1'
-      const proposal = await Proposal.findById(id).populate(
-        'rfpId',
-        'title clientName submissionDeadline questionsDeadline bidMeetingDate bidRegistrationDate timeline projectDeadline',
-      )
+      const proposal = await getProposalById(id, { includeSections: true })
       if (!proposal)
         return res.status(404).json({ error: 'Proposal not found' })
 
@@ -607,14 +599,11 @@ router.post(
         })
       }
 
-      const rfp =
-        proposal.rfpId && typeof proposal.rfpId === 'object'
-          ? proposal.rfpId
-          : null
+      const rfp = await getRfpById(proposal.rfpId)
       const company = await loadCompanyForProposal(proposal)
 
       if (force) {
-        await CanvaProposalDesign.deleteOne({
+        await canvaDb.deleteProposalDesignCache({
           proposalId: proposal._id,
           companyId,
           brandTemplateId: cfg.brandTemplateId,
@@ -637,13 +626,14 @@ router.post(
           id: ensured.record?.designId,
           url: ensured.record?.designUrl || '',
           urls: {
-            edit_url: ensured.record?.editUrl || '',
-            view_url: ensured.record?.viewUrl || '',
+            edit_url: ensured.record?.meta?.editUrl || '',
+            view_url: ensured.record?.meta?.viewUrl || '',
           },
         },
         meta: {
-          lastGeneratedAt: ensured.record?.lastGeneratedAt || null,
-          lastProposalUpdatedAt: ensured.record?.lastProposalUpdatedAt || null,
+          lastGeneratedAt: ensured.record?.meta?.lastGeneratedAt || null,
+          lastProposalUpdatedAt:
+            ensured.record?.meta?.lastProposalUpdatedAt || null,
         },
       })
     } catch (e) {
@@ -660,10 +650,7 @@ router.post(
 router.get('/proposals/:id/export-pdf', authMiddleware, async (req, res) => {
   try {
     const id = String(req.params.id)
-    const proposal = await Proposal.findById(id).populate(
-      'rfpId',
-      'title clientName submissionDeadline timeline projectDeadline',
-    )
+    const proposal = await getProposalById(id, { includeSections: true })
     if (!proposal) return res.status(404).json({ error: 'Proposal not found' })
     const companyId = proposal.companyId
     if (!companyId) {
@@ -678,10 +665,7 @@ router.get('/proposals/:id/export-pdf', authMiddleware, async (req, res) => {
       })
     }
 
-    const rfp =
-      proposal.rfpId && typeof proposal.rfpId === 'object'
-        ? proposal.rfpId
-        : null
+    const rfp = await getRfpById(proposal.rfpId)
     const company = await loadCompanyForProposal(proposal)
     const ensured = await ensureCanvaDesignForProposal({
       userId: req.user._id,
@@ -745,10 +729,7 @@ router.get('/proposals/:id/export-pdf', authMiddleware, async (req, res) => {
 router.post('/proposals/:id/validate', authMiddleware, async (req, res) => {
   try {
     const id = String(req.params.id)
-    const proposal = await Proposal.findById(id).populate(
-      'rfpId',
-      'title clientName submissionDeadline questionsDeadline bidMeetingDate bidRegistrationDate timeline projectDeadline',
-    )
+    const proposal = await getProposalById(id, { includeSections: true })
     if (!proposal) return res.status(404).json({ error: 'Proposal not found' })
     const companyId = proposal.companyId
     if (!companyId) {
@@ -763,10 +744,7 @@ router.post('/proposals/:id/validate', authMiddleware, async (req, res) => {
       })
     }
 
-    const rfp =
-      proposal.rfpId && typeof proposal.rfpId === 'object'
-        ? proposal.rfpId
-        : null
+    const rfp = await getRfpById(proposal.rfpId)
     const company = await loadCompanyForProposal(proposal)
 
     const datasetResp = await canvaClient.getBrandTemplateDataset(
@@ -778,39 +756,42 @@ router.post('/proposals/:id/validate', authMiddleware, async (req, res) => {
     const { teamIds, referenceIds } = collectSelectedIdsFromProposalSections(
       proposal.sections,
     )
-    const [teamMembers, references, companyLogo] = await Promise.all([
-      teamIds.length
-        ? TeamMember.find({ memberId: { $in: teamIds }, isActive: true }).lean()
-        : Promise.resolve([]),
-      referenceIds.length
-        ? ProjectReference.find({ _id: { $in: referenceIds } }).lean()
-        : Promise.resolve([]),
-      CanvaAssetLink.findOne({
-        ownerType: 'company',
-        ownerId: companyId,
-        kind: 'logo',
-      }).lean(),
-    ])
-    const headshotLinks = teamIds.length
-      ? await CanvaAssetLink.find({
-          ownerType: 'teamMember',
-          ownerId: { $in: teamIds },
-          kind: 'headshot',
-        }).lean()
-      : []
+    const [teamMembers, references, companyLogo, headshotLinks] =
+      await Promise.all([
+        teamIds.length ? getTeamMembersByIds(teamIds) : Promise.resolve([]),
+        referenceIds.length
+          ? getProjectReferencesByIds(referenceIds)
+          : Promise.resolve([]),
+        canvaDb.getAssetLink({
+          ownerType: 'company',
+          ownerId: companyId,
+          kind: 'logo',
+        }),
+        teamIds.length
+          ? Promise.all(
+              teamIds.map((memberId) =>
+                canvaDb.getAssetLink({
+                  ownerType: 'teamMember',
+                  ownerId: memberId,
+                  kind: 'headshot',
+                }),
+              ),
+            ).then((xs) => xs.filter(Boolean))
+          : Promise.resolve([]),
+      ])
     const headshotByMemberId = {}
     headshotLinks.forEach((l) => {
-      if (l?.ownerId && l?.assetId)
-        headshotByMemberId[String(l.ownerId)] = l.assetId
+      if (l?.ownerId && l?.canvaAssetId)
+        headshotByMemberId[String(l.ownerId)] = l.canvaAssetId
     })
 
     const diag = diagnoseDatasetValues({
       datasetDef,
       mapping: cfg.fieldMapping || {},
-      proposal: proposal.toObject ? proposal.toObject() : proposal,
-      rfp: rfp && rfp.toObject ? rfp.toObject() : rfp,
+      proposal,
+      rfp,
       company,
-      companyLogoAssetId: companyLogo?.assetId || '',
+      companyLogoAssetId: companyLogo?.canvaAssetId || '',
       teamMembers,
       headshotByMemberId,
       references,

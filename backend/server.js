@@ -150,8 +150,13 @@ app.use('*', (req, res) => {
   res.status(404).json({ error: 'Route not found' })
 })
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`)
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`)
-  console.log(`Listening on 0.0.0.0:${PORT}`)
-})
+// Only listen when executed directly (keeps require() safe for tests/checks)
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`)
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`)
+    console.log(`Listening on 0.0.0.0:${PORT}`)
+  })
+}
+
+module.exports = app

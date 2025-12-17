@@ -1,6 +1,6 @@
 const axios = require('axios')
-const CanvaConnection = require('../models/CanvaConnection')
 const { encryptString, decryptString } = require('../utils/tokenCrypto')
+const canvaDb = require('../db/canva')
 
 const CANVA_API_BASE = 'https://api.canva.com/rest'
 const CANVA_AUTH_URL = 'https://www.canva.com/api/oauth/authorize'
@@ -84,23 +84,18 @@ async function upsertConnectionForUser(userId, tokenPayload) {
   const expiresIn = Number(tokenPayload?.expires_in || 0)
   const expiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000) : null
 
-  const doc = await CanvaConnection.findOneAndUpdate(
-    { userId },
-    {
-      userId,
-      accessTokenEnc: accessToken ? encryptString(accessToken) : null,
-      refreshTokenEnc: refreshToken ? encryptString(refreshToken) : null,
-      tokenType,
-      scopes,
-      expiresAt,
-    },
-    { upsert: true, new: true },
-  )
+  const doc = await canvaDb.upsertConnectionForUser(userId, {
+    accessTokenEnc: accessToken ? encryptString(accessToken) : null,
+    refreshTokenEnc: refreshToken ? encryptString(refreshToken) : null,
+    tokenType,
+    scopes,
+    expiresAt: expiresAt ? expiresAt.toISOString() : null,
+  })
   return doc
 }
 
 async function getValidAccessTokenForUser(userId) {
-  const conn = await CanvaConnection.findOne({ userId }).lean()
+  const conn = await canvaDb.getConnectionForUser(userId)
   if (!conn) {
     const err = new Error('Canva is not connected for this user')
     err.code = 'not_connected'
@@ -133,7 +128,7 @@ async function getValidAccessTokenForUser(userId) {
   const nextAccess = decryptString(updated.accessTokenEnc)
   return {
     accessToken: nextAccess,
-    conn: updated.toObject ? updated.toObject() : updated,
+    conn: updated,
   }
 }
 

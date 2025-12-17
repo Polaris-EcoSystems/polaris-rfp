@@ -1,5 +1,5 @@
-const Company = require('../models/Company')
-const CanvaCompanyTemplate = require('../models/CanvaCompanyTemplate')
+const { getCompanyByCompanyId } = require('../db/content')
+const { getCompanyMapping } = require('../db/canva')
 
 function get(obj, path) {
   if (!obj || !path) return undefined
@@ -54,7 +54,7 @@ async function loadCompanyForProposal(proposal) {
   const companyId = proposal?.companyId
   if (!companyId) return null
   try {
-    const c = await Company.findOne({ companyId }).lean()
+    const c = await getCompanyByCompanyId(companyId)
     return c || null
   } catch {
     return null
@@ -63,7 +63,7 @@ async function loadCompanyForProposal(proposal) {
 
 async function getCompanyTemplate(companyId) {
   if (!companyId) return null
-  const cfg = await CanvaCompanyTemplate.findOne({ companyId }).lean()
+  const cfg = await getCompanyMapping(companyId)
   return cfg || null
 }
 

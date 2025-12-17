@@ -1,8 +1,15 @@
 const express = require('express')
 const multer = require('multer')
-const RFP = require('../models/RFP')
 const rfpAnalyzer = require('../services/rfpAnalyzer')
 const SectionTitlesGenerator = require('../services/aiSectionsTitleGenerator')
+const {
+  createRfpFromAnalysis,
+  getRfpById,
+  listRfps,
+  updateRfp,
+  deleteRfp,
+  listRfpProposalSummaries,
+} = require('../db/rfps')
 
 const router = express.Router()
 
@@ -35,30 +42,13 @@ router.post('/analyze-url', async (req, res) => {
     // Analyze the RFP from URL
     const analysis = await rfpAnalyzer.analyzeRFP(url, url)
 
-    // Create RFP document
-    const rfp = new RFP({
-      ...analysis,
-      fileName: `URL_${Date.now()}`,
-      fileSize: 0, // URLs don't have file size
-      clientName: analysis.clientName || 'Unknown Client',
+    const saved = await createRfpFromAnalysis({
+      analysis,
+      sourceFileName: `URL_${Date.now()}`,
+      sourceFileSize: 0,
     })
-
-    await rfp.save()
-
-    console.log('RFP from URL saved successfully:', rfp._id)
-    // Attach computed metadata for immediate UI use
-    const obj = rfp.toObject ? rfp.toObject() : rfp
-    if (typeof rfp.computeDateSanity === 'function') {
-      const { warnings, meta } = rfp.computeDateSanity()
-      obj.dateWarnings = warnings
-      obj.dateMeta = meta
-    }
-    if (typeof rfp.computeFitScore === 'function') {
-      const fit = rfp.computeFitScore()
-      obj.fitScore = fit.score
-      obj.fitReasons = fit.reasons
-    }
-    res.status(201).json(obj)
+    console.log('RFP from URL saved successfully:', saved._id)
+    res.status(201).json(saved)
   } catch (error) {
     console.error('RFP URL analysis error:', error)
     res.status(500).json({
@@ -82,25 +72,12 @@ router.post('/analyze-urls', async (req, res) => {
     for (const url of urls) {
       try {
         const analysis = await rfpAnalyzer.analyzeRFP(url, url)
-        const rfp = new RFP({
-          ...analysis,
-          fileName: `URL_${Date.now()}`,
-          fileSize: 0,
-          clientName: analysis.clientName || 'Unknown Client',
+        const saved = await createRfpFromAnalysis({
+          analysis,
+          sourceFileName: `URL_${Date.now()}`,
+          sourceFileSize: 0,
         })
-        await rfp.save()
-        const obj = rfp.toObject ? rfp.toObject() : rfp
-        if (typeof rfp.computeDateSanity === 'function') {
-          const { warnings, meta } = rfp.computeDateSanity()
-          obj.dateWarnings = warnings
-          obj.dateMeta = meta
-        }
-        if (typeof rfp.computeFitScore === 'function') {
-          const fit = rfp.computeFitScore()
-          obj.fitScore = fit.score
-          obj.fitReasons = fit.reasons
-        }
-        results.push({ url, ok: true, rfp: obj })
+        results.push({ url, ok: true, rfp: saved })
       } catch (e) {
         results.push({
           url,
@@ -134,19 +111,13 @@ router.post('/upload', upload.single('file'), async (req, res) => {
       req.file.buffer,
       req.file.originalname,
     )
-    console.log(analysis)
-    // Create RFP document
-    const rfp = new RFP({
-      ...analysis,
-      fileName: req.file.originalname,
-      fileSize: req.file.size,
-      clientName: analysis.clientName || 'Unknown Client',
+    const saved = await createRfpFromAnalysis({
+      analysis,
+      sourceFileName: req.file.originalname,
+      sourceFileSize: req.file.size,
     })
-
-    await rfp.save()
-
-    console.log('RFP saved successfully:', rfp._id)
-    res.status(201).json(rfp)
+    console.log('RFP saved successfully:', saved._id)
+    res.status(201).json(saved)
   } catch (error) {
     console.error('RFP upload error:', error)
     res.status(500).json({
@@ -161,42 +132,8 @@ router.get('/', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1
     const limit = parseInt(req.query.limit) || 20
-    const skip = (page - 1) * limit
-
-    const rfps = await RFP.find()
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .select('-rawText -parsedSections')
-
-    const total = await RFP.countDocuments()
-
-    // Compute disqualification + date sanity + fit score without persisting on read
-    const rfpsWithStatus = rfps.map((rfp) => {
-      rfp.checkDisqualification()
-      const obj = rfp.toObject ? rfp.toObject() : rfp
-      if (typeof rfp.computeDateSanity === 'function') {
-        const { warnings, meta } = rfp.computeDateSanity()
-        obj.dateWarnings = warnings
-        obj.dateMeta = meta
-      }
-      if (typeof rfp.computeFitScore === 'function') {
-        const fit = rfp.computeFitScore()
-        obj.fitScore = fit.score
-        obj.fitReasons = fit.reasons
-      }
-      return obj
-    })
-
-    res.json({
-      data: rfpsWithStatus,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-      },
-    })
+    const resp = await listRfps({ page, limit })
+    res.json(resp)
   } catch (error) {
     console.error('Error fetching RFPs:', error)
     res.status(500).json({ error: 'Failed to fetch RFPs' })
@@ -206,26 +143,9 @@ router.get('/', async (req, res) => {
 // Get single RFP
 router.get('/:id', async (req, res) => {
   try {
-    const rfp = await RFP.findById(req.params.id)
-
-    if (!rfp) {
-      return res.status(404).json({ error: 'RFP not found' })
-    }
-
-    rfp.checkDisqualification()
-    const obj = rfp.toObject ? rfp.toObject() : rfp
-    if (typeof rfp.computeDateSanity === 'function') {
-      const { warnings, meta } = rfp.computeDateSanity()
-      obj.dateWarnings = warnings
-      obj.dateMeta = meta
-    }
-    if (typeof rfp.computeFitScore === 'function') {
-      const fit = rfp.computeFitScore()
-      obj.fitScore = fit.score
-      obj.fitReasons = fit.reasons
-    }
-
-    res.json(obj)
+    const rfp = await getRfpById(req.params.id)
+    if (!rfp) return res.status(404).json({ error: 'RFP not found' })
+    res.json(rfp)
   } catch (error) {
     console.error('Error fetching RFP:', error)
     res.status(500).json({ error: 'Failed to fetch RFP' })
@@ -235,20 +155,13 @@ router.get('/:id', async (req, res) => {
 // Generate AI-driven proposal section titles (titles only)
 router.post('/:id/ai-section-titles', async (req, res) => {
   try {
-    const rfp = await RFP.findById(req.params.id)
-    if (!rfp) {
-      return res.status(404).json({ error: 'RFP not found' })
-    }
-
-    // Return existing if present
+    const rfp = await getRfpById(req.params.id)
+    if (!rfp) return res.status(404).json({ error: 'RFP not found' })
     if (Array.isArray(rfp.sectionTitles) && rfp.sectionTitles.length > 0) {
       return res.json({ titles: rfp.sectionTitles })
     }
-
-    // Otherwise, generate and persist
     const titles = await SectionTitlesGenerator.generateSectionTitles(rfp)
-    rfp.sectionTitles = titles
-    await rfp.save()
+    await updateRfp(req.params.id, { sectionTitles: titles })
     return res.json({ titles })
   } catch (error) {
     console.error('AI section titles error:', error)
@@ -262,37 +175,9 @@ router.post('/:id/ai-section-titles', async (req, res) => {
 // Update RFP
 router.put('/:id', async (req, res) => {
   try {
-    const allowedUpdates = [
-      'title',
-      'clientName',
-      'submissionDeadline',
-      'questionsDeadline',
-      'bidMeetingDate',
-      'bidRegistrationDate',
-      'budgetRange',
-      'keyRequirements',
-      'deliverables',
-      'criticalInformation',
-      'timeline',
-    ]
-
-    const rfp = await RFP.findById(req.params.id)
-
-    if (!rfp) {
-      return res.status(404).json({ error: 'RFP not found' })
-    }
-
-    // Apply updates
-    Object.keys(req.body).forEach((key) => {
-      if (allowedUpdates.includes(key)) {
-        rfp[key] = req.body[key]
-      }
-    })
-
-    // Save (this will trigger pre-save hook to check disqualification)
-    await rfp.save()
-
-    res.json(rfp)
+    const updated = await updateRfp(req.params.id, req.body || {})
+    if (!updated) return res.status(404).json({ error: 'RFP not found' })
+    res.json(updated)
   } catch (error) {
     console.error('Error updating RFP:', error)
     res.status(500).json({ error: 'Failed to update RFP' })
@@ -302,16 +187,8 @@ router.put('/:id', async (req, res) => {
 // Get proposals for a specific RFP
 router.get('/:id/proposals', async (req, res) => {
   try {
-    const rfpId = req.params.id
-    const Proposal = require('../models/Proposal')
-
-    const proposals = await Proposal.find({ rfpId })
-      .sort({ createdAt: -1 })
-      .select('-sections') // Exclude large sections data for list view
-
-    res.json({
-      data: proposals,
-    })
+    const proposals = await listRfpProposalSummaries(req.params.id)
+    res.json({ data: proposals })
   } catch (error) {
     console.error('Error fetching RFP proposals:', error)
     res.status(500).json({ error: 'Failed to fetch RFP proposals' })
@@ -321,12 +198,7 @@ router.get('/:id/proposals', async (req, res) => {
 // Delete RFP
 router.delete('/:id', async (req, res) => {
   try {
-    const rfp = await RFP.findByIdAndDelete(req.params.id)
-
-    if (!rfp) {
-      return res.status(404).json({ error: 'RFP not found' })
-    }
-
+    await deleteRfp(req.params.id)
     res.json({ message: 'RFP deleted successfully' })
   } catch (error) {
     console.error('Error deleting RFP:', error)
@@ -337,22 +209,16 @@ router.delete('/:id', async (req, res) => {
 // Search RFPs
 router.get('/search/:query', async (req, res) => {
   try {
-    const query = req.params.query
-    const searchRegex = new RegExp(query, 'i')
-
-    const rfps = await RFP.find({
-      $or: [
-        { title: searchRegex },
-        { clientName: searchRegex },
-        { projectType: searchRegex },
-        { keyRequirements: { $in: [searchRegex] } },
-      ],
+    // Cheap search: fetch first page and filter in memory (good enough for now)
+    const q = String(req.params.query || '').toLowerCase()
+    const { data } = await listRfps({ page: 1, limit: 200 })
+    const filtered = (data || []).filter((r) => {
+      const hay = `${r.title || ''} ${r.clientName || ''} ${
+        r.projectType || ''
+      }`.toLowerCase()
+      return hay.includes(q)
     })
-      .sort({ createdAt: -1 })
-      .limit(20)
-      .select('-rawText -parsedSections')
-
-    res.json(rfps)
+    res.json(filtered.slice(0, 20))
   } catch (error) {
     console.error('Error searching RFPs:', error)
     res.status(500).json({ error: 'Search failed' })

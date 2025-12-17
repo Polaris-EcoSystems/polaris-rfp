@@ -1,7 +1,4 @@
 const express = require('express')
-const Proposal = require('../models/Proposal')
-const RFP = require('../models/RFP')
-const Company = require('../models/Company')
 const PDFDocument = require('pdfkit')
 const path = require('path')
 const AIProposalGenerator = require('../services/aiProposalGenerator')
@@ -10,7 +7,26 @@ const DocxGenerator = require('../services/docxGenerator')
 const PdfGenerator = require('../services/pdfGenerator')
 const { Packer } = require('docx')
 const router = express.Router()
-const Template = require('../models/Template')
+const { getRfpById } = require('../db/rfps')
+const { getTemplateById } = require('../db/templates')
+const {
+  getBuiltinTemplate,
+  toGeneratorTemplate,
+} = require('../services/templatesCatalog')
+const {
+  createProposal,
+  getProposalById,
+  listProposals,
+  updateProposal,
+  deleteProposal,
+  updateProposalReview,
+} = require('../db/proposals')
+const {
+  getCompanyByCompanyId,
+  listCompanies,
+  getTeamMembersByIds,
+  getProjectReferencesByIds,
+} = require('../db/content')
 
 // Generate new proposal with AI
 router.post('/generate', async (req, res) => {
@@ -25,7 +41,7 @@ router.post('/generate', async (req, res) => {
     }
 
     // Get RFP data
-    const rfp = await RFP.findById(rfpId)
+    const rfp = await getRfpById(rfpId)
     if (!rfp) {
       return res.status(404).json({ error: 'RFP not found' })
     }
@@ -46,33 +62,33 @@ router.post('/generate', async (req, res) => {
         effectiveCustomContent,
       )
     } else {
-      // Load template and generate content strictly from template sections
-      const template = await Template.findById(templateId)
-      if (!template) {
+      const builtin = getBuiltinTemplate(templateId)
+      const template = builtin
+        ? { ...builtin, isBuiltin: true }
+        : await getTemplateById(templateId)
+      if (!template)
         return res.status(404).json({ error: 'Template not found' })
-      }
-
+      const genTemplate = toGeneratorTemplate(template)
       sections = await TemplateGenerator.generateAIProposalFromTemplate(
-        rfp.toObject ? rfp.toObject() : rfp,
-        template.toObject ? template.toObject() : template,
+        rfp,
+        genTemplate,
         effectiveCustomContent,
       )
     }
 
-    // Create proposal
-    const proposal = new Proposal({
+    const proposal = await createProposal({
       rfpId,
       companyId: companyId || null,
       templateId,
       title,
       sections,
       customContent: effectiveCustomContent,
-      lastModifiedBy: 'system',
+      rfpSummary: {
+        title: rfp.title,
+        clientName: rfp.clientName,
+        projectType: rfp.projectType,
+      },
     })
-
-    await proposal.save()
-    await proposal.populate('rfpId', 'title clientName projectType')
-
     res.status(201).json(proposal)
   } catch (error) {
     console.error('Error generating proposal:', error)
@@ -86,10 +102,9 @@ router.post('/generate', async (req, res) => {
 // Generate proposal sections using AI
 router.post('/:id/generate-sections', async (req, res) => {
   try {
-    const proposal = await Proposal.findById(req.params.id).populate(
-      'rfpId',
-      'title clientName projectType keyRequirements deliverables budgetRange submissionDeadline location contactInformation rawText',
-    )
+    const proposal = await getProposalById(req.params.id, {
+      includeSections: true,
+    })
 
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' })
@@ -101,20 +116,21 @@ router.post('/:id/generate-sections', async (req, res) => {
 
     // Generate AI sections
     const sections = await AIProposalGenerator.generateAIProposalSections(
-      proposal.rfpId,
+      await getRfpById(proposal.rfpId),
       proposal.templateId,
       {},
     )
 
     // Update proposal with new sections
-    proposal.sections = sections
-    proposal.lastModifiedBy = 'ai-generation'
-    await proposal.save()
+    const updated = await updateProposal(req.params.id, {
+      sections,
+      lastModifiedBy: 'ai-generation',
+    })
 
     res.json({
       message: 'Sections generated successfully',
       sections: sections,
-      proposal: proposal,
+      proposal: updated,
     })
   } catch (error) {
     console.error('Error generating AI sections:', error)
@@ -130,26 +146,8 @@ router.get('/', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1
     const limit = parseInt(req.query.limit) || 20
-    const skip = (page - 1) * limit
-
-    const proposals = await Proposal.find()
-      .populate('rfpId', 'title clientName projectType')
-      .sort({ updatedAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .select('-sections') // Exclude large sections data
-
-    const total = await Proposal.countDocuments()
-
-    res.json({
-      data: proposals,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-      },
-    })
+    const resp = await listProposals({ page, limit })
+    res.json(resp)
   } catch (error) {
     console.error('Error fetching proposals:', error)
     res.status(500).json({ error: 'Failed to fetch proposals' })
@@ -159,10 +157,9 @@ router.get('/', async (req, res) => {
 // Get single proposal
 router.get('/:id', async (req, res) => {
   try {
-    const proposal = await Proposal.findById(req.params.id).populate(
-      'rfpId',
-      'title clientName projectType keyRequirements deliverables',
-    )
+    const proposal = await getProposalById(req.params.id, {
+      includeSections: true,
+    })
 
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' })
@@ -178,35 +175,12 @@ router.get('/:id', async (req, res) => {
 // Update proposal
 router.put('/:id', async (req, res) => {
   try {
-    const allowedUpdates = [
-      'title',
-      'status',
-      'sections',
-      'customContent',
-      'budgetBreakdown',
-      'timelineDetails',
-      'teamAssignments',
-    ]
-
-    const updates = {}
-    Object.keys(req.body).forEach((key) => {
-      if (allowedUpdates.includes(key)) {
-        updates[key] = req.body[key]
-      }
+    const updated = await updateProposal(req.params.id, {
+      ...(req.body || {}),
+      lastModifiedBy: 'system',
     })
-
-    updates.lastModifiedBy = 'system'
-
-    const proposal = await Proposal.findByIdAndUpdate(req.params.id, updates, {
-      new: true,
-      runValidators: true,
-    }).populate('rfpId', 'title clientName projectType')
-
-    if (!proposal) {
-      return res.status(404).json({ error: 'Proposal not found' })
-    }
-
-    res.json(proposal)
+    if (!updated) return res.status(404).json({ error: 'Proposal not found' })
+    res.json(updated)
   } catch (error) {
     console.error('Error updating proposal:', error)
     res.status(500).json({ error: 'Failed to update proposal' })
@@ -216,12 +190,7 @@ router.put('/:id', async (req, res) => {
 // Delete proposal
 router.delete('/:id', async (req, res) => {
   try {
-    const proposal = await Proposal.findByIdAndDelete(req.params.id)
-
-    if (!proposal) {
-      return res.status(404).json({ error: 'Proposal not found' })
-    }
-
+    await deleteProposal(req.params.id)
     res.json({ message: 'Proposal deleted successfully' })
   } catch (error) {
     console.error('Error deleting proposal:', error)
@@ -233,19 +202,23 @@ router.delete('/:id', async (req, res) => {
 
 router.get('/:id/export-pdf', async (req, res) => {
   try {
-    const proposal = await Proposal.findById(req.params.id).populate(
-      'rfpId',
-      'title clientName projectType keyRequirements deliverables budgetRange submissionDeadline location contactInformation',
-    )
+    const proposal = await getProposalById(req.params.id, {
+      includeSections: true,
+    })
 
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' })
     }
 
-    // Get company information (prefer proposal-selected company)
+    const rfp = await getRfpById(proposal.rfpId)
     const company = proposal.companyId
-      ? await Company.findOne({ companyId: proposal.companyId }).lean()
-      : await Company.findOne().sort({ createdAt: -1 }).lean()
+      ? await getCompanyByCompanyId(proposal.companyId)
+      : (await listCompanies({ limit: 1 })).at(0)
+
+    const hydratedProposal = {
+      ...proposal,
+      rfpId: rfp || proposal.rfpId,
+    }
 
     // Set response headers
     res.setHeader('Content-Type', 'application/pdf')
@@ -256,7 +229,7 @@ router.get('/:id/export-pdf', async (req, res) => {
 
     // Generate PDF using PdfGenerator service
     const pdfGenerator = new PdfGenerator()
-    pdfGenerator.generatePdf(proposal, company, res)
+    pdfGenerator.generatePdf(hydratedProposal, company || {}, res)
   } catch (error) {
     console.error('Error exporting proposal as PDF:', error)
     res.status(500).json({ error: 'Failed to export proposal PDF' })
@@ -270,28 +243,33 @@ router.get('/:id/export-docx', async (req, res) => {
 
   try {
     console.log('🔍 Looking up proposal with ID:', req.params.id)
-    const proposal = await Proposal.findById(req.params.id).populate(
-      'rfpId',
-      'title clientName projectType keyRequirements deliverables budgetRange submissionDeadline location contactInformation',
-    )
+    const proposal = await getProposalById(req.params.id, {
+      includeSections: true,
+    })
 
     if (!proposal) {
       console.error('❌ Proposal not found for ID:', req.params.id)
       return res.status(404).json({ error: 'Proposal not found' })
     }
 
+    const rfp = await getRfpById(proposal.rfpId)
+    const hydratedProposal = {
+      ...proposal,
+      rfpId: rfp || proposal.rfpId,
+    }
+
     console.log('✅ Proposal found:', {
-      id: proposal._id,
+      id: hydratedProposal._id,
       title: proposal.title,
-      hasRfpId: !!proposal.rfpId,
-      rfpId: proposal.rfpId?._id,
+      hasRfpId: !!hydratedProposal.rfpId,
+      rfpId: hydratedProposal.rfpId?._id || hydratedProposal.rfpId,
       sectionsCount: Object.keys(proposal.sections || {}).length,
     })
 
     console.log('🏢 Looking up company information...')
     const company = proposal.companyId
-      ? (await Company.findOne({ companyId: proposal.companyId }).lean()) || {}
-      : (await Company.findOne().sort({ createdAt: -1 }).lean()) || {}
+      ? (await getCompanyByCompanyId(proposal.companyId)) || {}
+      : (await listCompanies({ limit: 1 })).at(0) || {}
     console.log('✅ Company data retrieved:', {
       hasCompany: !!company,
       companyId: company?._id,
@@ -304,7 +282,7 @@ router.get('/:id/export-docx', async (req, res) => {
     console.log('✅ DocxGenerator created')
 
     console.log('📝 Starting DOCX generation with officegen...')
-    const buffer = await docxGenerator.generateDocx(proposal, company)
+    const buffer = await docxGenerator.generateDocx(hydratedProposal, company)
     console.log(
       '✅ DOCX document generated successfully, size:',
       buffer.length,
@@ -344,7 +322,7 @@ router.put('/:id/content-library/:sectionName', async (req, res) => {
     const { id, sectionName } = req.params
     const { selectedIds, type } = req.body // type: 'team', 'references', or 'company'
 
-    const proposal = await Proposal.findById(id)
+    const proposal = await getProposalById(id, { includeSections: true })
     if (!proposal) {
       return res.status(404).json({ error: 'Proposal not found' })
     }
@@ -352,18 +330,14 @@ router.put('/:id/content-library/:sectionName', async (req, res) => {
     let content = ''
 
     if (type === 'company') {
-      const Company = require('../models/Company')
       const SharedSectionFormatters = require('../services/sharedSectionFormatters')
 
       if (selectedIds.length > 0) {
-        const selectedCompany = await Company.findOne({
-          companyId: selectedIds[0], // Only use first selected company
-        }).lean()
+        const selectedCompany = await getCompanyByCompanyId(selectedIds[0]) // Only use first selected company
 
         if (selectedCompany) {
           // Get RFP data from the proposal
-          const RFP = require('../models/RFP')
-          const rfp = await RFP.findById(proposal.rfpId)
+          const rfp = await getRfpById(proposal.rfpId)
 
           // Determine section type based on section name
           const sectionTitle = sectionName.toLowerCase()
@@ -397,11 +371,9 @@ router.put('/:id/content-library/:sectionName', async (req, res) => {
         content = 'No company selected.'
       }
     } else if (type === 'team') {
-      const TeamMember = require('../models/TeamMember')
-      const selectedMembers = await TeamMember.find({
-        memberId: { $in: selectedIds },
-        isActive: true,
-      }).lean()
+      const selectedMembers = (await getTeamMembersByIds(selectedIds)).filter(
+        (m) => m && (m.isActive === undefined || m.isActive === true),
+      )
 
       if (selectedMembers.length > 0) {
         content =
@@ -414,12 +386,14 @@ router.put('/:id/content-library/:sectionName', async (req, res) => {
         content = 'No team members selected.'
       }
     } else if (type === 'references') {
-      const ProjectReference = require('../models/ProjectReference')
-      const selectedReferences = await ProjectReference.find({
-        _id: { $in: selectedIds },
-        isActive: true,
-        isPublic: true,
-      }).lean()
+      const selectedReferences = (
+        await getProjectReferencesByIds(selectedIds)
+      ).filter(
+        (r) =>
+          r &&
+          (r.isActive === undefined || r.isActive === true) &&
+          (r.isPublic === undefined || r.isPublic === true),
+      )
 
       if (selectedReferences.length > 0) {
         content =
@@ -468,11 +442,9 @@ router.put('/:id/content-library/:sectionName', async (req, res) => {
       },
     }
 
-    const updatedProposal = await Proposal.findByIdAndUpdate(
-      id,
-      { sections: updatedSections },
-      { new: true },
-    )
+    const updatedProposal = await updateProposal(id, {
+      sections: updatedSections,
+    })
 
     res.json(updatedProposal)
   } catch (error) {
@@ -492,13 +464,13 @@ router.put('/:id/company', async (req, res) => {
       return res.status(400).json({ error: 'companyId is required' })
     }
 
-    const proposal = await Proposal.findById(id)
+    const proposal = await getProposalById(id, { includeSections: true })
     if (!proposal) return res.status(404).json({ error: 'Proposal not found' })
 
-    const company = await Company.findOne({ companyId }).lean()
+    const company = await getCompanyByCompanyId(companyId)
     if (!company) return res.status(404).json({ error: 'Company not found' })
 
-    const rfp = await RFP.findById(proposal.rfpId)
+    const rfp = await getRfpById(proposal.rfpId)
     const SharedSectionFormatters = require('../services/sharedSectionFormatters')
 
     const updatedSections = { ...(proposal.sections || {}) }
@@ -551,17 +523,13 @@ router.put('/:id/company', async (req, res) => {
       }
     }
 
-    proposal.companyId = companyId
-    proposal.customContent = { ...(proposal.customContent || {}), companyId }
-    proposal.sections = updatedSections
-    proposal.lastModifiedBy = 'system'
-    await proposal.save()
-
-    const populated = await Proposal.findById(id).populate(
-      'rfpId',
-      'title clientName projectType',
-    )
-    return res.json(populated)
+    const updated = await updateProposal(id, {
+      companyId,
+      customContent: { ...(proposal.customContent || {}), companyId },
+      sections: updatedSections,
+      lastModifiedBy: 'system',
+    })
+    return res.json(updated)
   } catch (error) {
     console.error('Error switching proposal company:', error)
     return res.status(500).json({ error: 'Failed to switch proposal company' })
@@ -574,10 +542,7 @@ router.put('/:id/review', async (req, res) => {
     const { id } = req.params
     const { score, notes, rubric, decision } = req.body || {}
 
-    const proposal = await Proposal.findById(id).populate(
-      'rfpId',
-      'title clientName projectType',
-    )
+    const proposal = await getProposalById(id, { includeSections: true })
     if (!proposal) return res.status(404).json({ error: 'Proposal not found' })
 
     let nextScore = null
@@ -593,7 +558,7 @@ router.put('/:id/review', async (req, res) => {
       if (d === '' || d === 'shortlist' || d === 'reject') nextDecision = d
     }
 
-    proposal.review = {
+    const nextReview = {
       ...(proposal.review || {}),
       score: nextScore,
       decision: nextDecision,
@@ -602,13 +567,11 @@ router.put('/:id/review', async (req, res) => {
         rubric && typeof rubric === 'object'
           ? rubric
           : proposal.review?.rubric || {},
-      updatedAt: new Date(),
+      updatedAt: new Date().toISOString(),
     }
 
-    proposal.lastModifiedBy = 'review'
-    await proposal.save()
-
-    return res.json(proposal)
+    const updated = await updateProposalReview(id, nextReview)
+    return res.json(updated)
   } catch (error) {
     console.error('Error updating proposal review:', error)
     return res.status(500).json({ error: 'Failed to update proposal review' })

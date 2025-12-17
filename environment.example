@@ -7,9 +7,12 @@ PORT=8000
 NODE_ENV=development
 FRONTEND_URL=http://localhost:3000
 
-# Database URLs (if using databases)
-DATABASE_URL=postgresql://rfp_user:rfp_password@localhost:5432/rfp_system
-MONGODB_URL=mongodb://localhost:27017/rfp_system
+# DynamoDB
+# For AWS: set DDB_TABLE_NAME to the deployed table name (e.g. polaris-rfp-production)
+DDB_TABLE_NAME=polaris-rfp-local
+AWS_REGION=us-east-1
+# For DynamoDB Local (optional)
+DDB_ENDPOINT=http://localhost:8000
 
 # JWT Secret (generate a secure secret for production)
 JWT_SECRET=your-super-secret-jwt-key-here

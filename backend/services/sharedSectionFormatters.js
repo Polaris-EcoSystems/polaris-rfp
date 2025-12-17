@@ -1,7 +1,10 @@
 const OpenAI = require('openai')
-const TeamMember = require('../models/TeamMember')
-const ProjectReference = require('../models/ProjectReference')
-const Company = require('../models/Company')
+const {
+  getCompanyByCompanyId,
+  listCompanies,
+  listTeamMembers,
+  listProjectReferences,
+} = require('../db/content')
 
 class SharedSectionFormatters {
   // Lazy OpenAI initialization
@@ -86,11 +89,8 @@ class SharedSectionFormatters {
    */
   static async fetchCompanyInfo(companyId = null) {
     try {
-      const query = companyId ? { companyId } : {}
-      const company = await Company.findOne(query)
-        .sort({ createdAt: -1 })
-        .lean()
-      return company
+      if (companyId) return await getCompanyByCompanyId(companyId)
+      return (await listCompanies({ limit: 1 })).at(0) || null
     } catch (error) {
       console.error('Error fetching company info:', error)
       return null
@@ -102,8 +102,10 @@ class SharedSectionFormatters {
    */
   static async fetchTeamMembers() {
     try {
-      const teamMembers = await TeamMember.find({ isActive: true }).lean()
-      return teamMembers
+      const teamMembers = await listTeamMembers({ limit: 500 })
+      return teamMembers.filter(
+        (m) => m && (m.isActive === undefined || m.isActive === true),
+      )
     } catch (error) {
       console.error('Error fetching team members:', error)
       return []
@@ -115,11 +117,13 @@ class SharedSectionFormatters {
    */
   static async fetchProjectReferences() {
     try {
-      const references = await ProjectReference.find({
-        isActive: true,
-        isPublic: true,
-      }).lean()
-      return references
+      const references = await listProjectReferences({ limit: 500 })
+      return references.filter(
+        (r) =>
+          r &&
+          (r.isActive === undefined || r.isActive === true) &&
+          (r.isPublic === undefined || r.isPublic === true),
+      )
     } catch (error) {
       console.error('Error fetching project references:', error)
       return []

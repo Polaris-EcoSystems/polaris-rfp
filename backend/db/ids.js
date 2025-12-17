@@ -6,4 +6,3 @@ function newId(prefix = '') {
 }
 
 module.exports = { newId }
-
