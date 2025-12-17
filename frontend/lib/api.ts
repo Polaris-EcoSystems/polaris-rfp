@@ -1,9 +1,19 @@
 import axios from 'axios'
 
-const API_BASE_URL =
+function normalizeApiBaseUrl(input: string): string {
+  const raw = String(input || '').trim()
+  if (!raw) return ''
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+  // If a hostname was provided (common for App Runner ServiceUrl), default to https.
+  if (raw.includes('localhost')) return `http://${raw}`
+  return `https://${raw}`
+}
+
+const API_BASE_URL = normalizeApiBaseUrl(
   process.env.NEXT_PUBLIC_API_BASE_URL ||
-  process.env.API_BASE_URL ||
-  'https://cvsmuhhazj.us-east-1.awsapprunner.com'
+    process.env.API_BASE_URL ||
+    'https://cvsmuhhazj.us-east-1.awsapprunner.com',
+)
 
 const api = axios.create({
   baseURL: API_BASE_URL,
