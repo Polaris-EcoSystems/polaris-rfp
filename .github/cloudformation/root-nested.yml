@@ -22,7 +22,7 @@ Parameters:
 
   EnableCustomDomain:
     Type: String
-    Default: 'false'
+    Default: 'true'
     AllowedValues: ['true', 'false']
 
   CustomDomainName:

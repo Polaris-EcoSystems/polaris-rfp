@@ -70,7 +70,7 @@ jobs:
               BranchName=${{ github.ref_name }} \
               Environment=production \
               GitHubToken=${{ secrets.GH_PERSONAL_TOKEN }} \
-              EnableCustomDomain=false \
+              EnableCustomDomain=true \
               CustomDomainName=polariseco.com \
               CustomDomainPrefix=rfp \
               FrontendBaseUrl=https://rfp.polariseco.com \
