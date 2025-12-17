@@ -28,6 +28,18 @@ Parameters:
     Description: Backend API URL
     Default: 'https://cvsmuhhazj.us-east-1.awsapprunner.com'
 
+  CognitoUserPoolId:
+    Type: String
+    Default: ''
+
+  CognitoClientId:
+    Type: String
+    Default: ''
+
+  CognitoRegion:
+    Type: String
+    Default: 'us-east-1'
+
   EnableCustomDomain:
     Type: String
     Description: Whether to create Amplify custom domain mapping
@@ -96,6 +108,12 @@ Resources:
           Value: !Ref BackendUrl
         - Name: NEXT_PUBLIC_API_BASE_URL
           Value: !Ref BackendUrl
+        - Name: NEXT_PUBLIC_COGNITO_USER_POOL_ID
+          Value: !Ref CognitoUserPoolId
+        - Name: NEXT_PUBLIC_COGNITO_CLIENT_ID
+          Value: !Ref CognitoClientId
+        - Name: NEXT_PUBLIC_COGNITO_REGION
+          Value: !Ref CognitoRegion
       Platform: WEB_COMPUTE
 
   # Amplify Branch
@@ -114,6 +132,12 @@ Resources:
           Value: !Ref BackendUrl
         - Name: NEXT_PUBLIC_API_BASE_URL
           Value: !Ref BackendUrl
+        - Name: NEXT_PUBLIC_COGNITO_USER_POOL_ID
+          Value: !Ref CognitoUserPoolId
+        - Name: NEXT_PUBLIC_COGNITO_CLIENT_ID
+          Value: !Ref CognitoClientId
+        - Name: NEXT_PUBLIC_COGNITO_REGION
+          Value: !Ref CognitoRegion
 
   # Amplify Domain (optional)
   AmplifyDomain:

@@ -52,7 +52,8 @@ Parameters:
   Memory:
     Type: String
     Default: '2048'
-    AllowedValues: ['512', '1024', '2048', '3072', '4096', '8192', '16384', '30720']
+    AllowedValues:
+      ['512', '1024', '2048', '3072', '4096', '8192', '16384', '30720']
 
   HealthCheckPath:
     Type: String
@@ -62,6 +63,18 @@ Parameters:
   FrontendBaseUrl:
     Type: String
     Default: 'https://rfp.polariseco.com'
+
+  CognitoUserPoolId:
+    Type: String
+    Default: ''
+
+  CognitoClientId:
+    Type: String
+    Default: ''
+
+  CognitoRegion:
+    Type: String
+    Default: 'us-east-1'
 
   DdbTableName:
     Type: String
@@ -331,6 +344,12 @@ Resources:
               Value: !Ref DdbTableName
             - Name: ASSETS_BUCKET_NAME
               Value: !Ref AssetsBucketName
+            - Name: COGNITO_USER_POOL_ID
+              Value: !Ref CognitoUserPoolId
+            - Name: COGNITO_CLIENT_ID
+              Value: !Ref CognitoClientId
+            - Name: COGNITO_REGION
+              Value: !Ref CognitoRegion
             - !If
               - UseJwtSecretPlaintext
               - Name: JWT_SECRET
@@ -399,4 +418,3 @@ Outputs:
   EcsServiceName:
     Description: ECS service name
     Value: !Ref EcsService
-

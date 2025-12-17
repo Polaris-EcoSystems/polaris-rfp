@@ -94,6 +94,13 @@ Conditions:
   UseProvidedJwtSecret: !Not [!Equals [!Ref JwtSecret, '']]
 
 Resources:
+  AuthStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: auth-cognito.yml
+      Parameters:
+        Environment: !Ref Environment
+
   PolarisJwtSecret:
     Type: AWS::SecretsManager::Secret
     DeletionPolicy: Retain
@@ -200,6 +207,9 @@ Resources:
         Route53HostedZoneId: !Ref Route53HostedZoneId
         ImageUri: !Ref BackendImageUri
         FrontendBaseUrl: !Ref FrontendBaseUrl
+        CognitoUserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
+        CognitoClientId: !GetAtt AuthStack.Outputs.UserPoolClientId
+        CognitoRegion: !Ref AWS::Region
         CanvaClientId: !If
           - UseProvidedCanvaClientId
           - !Ref CanvaClientId
@@ -235,11 +245,22 @@ Resources:
         Environment: !Ref Environment
         GitHubToken: !Ref GitHubToken
         BackendUrl: !GetAtt BackendStack.Outputs.BackendUrl
+        CognitoUserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
+        CognitoClientId: !GetAtt AuthStack.Outputs.UserPoolClientId
+        CognitoRegion: !Ref AWS::Region
         EnableCustomDomain: !Ref EnableCustomDomain
         CustomDomainName: !Ref CustomDomainName
         CustomDomainPrefix: !Ref CustomDomainPrefix
 
 Outputs:
+  CognitoUserPoolId:
+    Description: Cognito user pool id
+    Value: !GetAtt AuthStack.Outputs.UserPoolId
+
+  CognitoUserPoolClientId:
+    Description: Cognito app client id
+    Value: !GetAtt AuthStack.Outputs.UserPoolClientId
+
   DdbTableName:
     Description: DynamoDB table name
     Value: !Ref PolarisDataTable
