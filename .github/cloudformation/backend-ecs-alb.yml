@@ -1,6 +1,12 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Polaris Backend on ECS Fargate behind an ALB with custom domain'
 
+Conditions:
+  UseJwtSecretArn: !Not [!Equals [!Ref JwtSecretArn, '']]
+  UseJwtSecretPlaintext: !And
+    - !Equals [!Ref JwtSecretArn, '']
+    - !Not [!Equals [!Ref JwtSecret, '']]
+
 Parameters:
   Environment:
     Type: String
@@ -65,7 +71,13 @@ Parameters:
 
   JwtSecret:
     Type: String
+    Description: (Deprecated) JWT secret passed as plaintext env var. Prefer JwtSecretArn.
     NoEcho: true
+    Default: ''
+
+  JwtSecretArn:
+    Type: String
+    Description: Secrets Manager secret ARN for JWT_SECRET
     Default: ''
 
   JwtExpire:
@@ -224,6 +236,22 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
+  TaskExecutionRoleJwtSecretPolicy:
+    Type: AWS::IAM::Policy
+    Condition: UseJwtSecretArn
+    Properties:
+      PolicyName: !Sub 'polaris-ecs-exec-jwt-secret-${Environment}-${AWS::Region}'
+      Roles:
+        - !Ref TaskExecutionRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadJwtSecret
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Ref JwtSecretArn
+
   TaskRole:
     Type: AWS::IAM::Role
     Properties:
@@ -303,8 +331,11 @@ Resources:
               Value: !Ref DdbTableName
             - Name: ASSETS_BUCKET_NAME
               Value: !Ref AssetsBucketName
-            - Name: JWT_SECRET
-              Value: !Ref JwtSecret
+            - !If
+              - UseJwtSecretPlaintext
+              - Name: JWT_SECRET
+                Value: !Ref JwtSecret
+              - !Ref AWS::NoValue
             - Name: JWT_EXPIRE
               Value: !Ref JwtExpire
             - Name: CANVA_CLIENT_ID
@@ -315,6 +346,11 @@ Resources:
               Value: !Ref CanvaRedirectUri
             - Name: CANVA_TOKEN_ENC_KEY
               Value: !Ref CanvaTokenEncKey
+          Secrets: !If
+            - UseJwtSecretArn
+            - - Name: JWT_SECRET
+                ValueFrom: !Ref JwtSecretArn
+            - !Ref AWS::NoValue
           LogConfiguration:
             LogDriver: awslogs
             Options:
