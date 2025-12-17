@@ -329,6 +329,7 @@ Resources:
       ServiceName: !Sub 'polaris-backend-${Environment}'
       Cluster: !Ref EcsCluster
       LaunchType: FARGATE
+      TaskDefinition: !Ref TaskDefinition
       DesiredCount: !Ref DesiredCount
       DeploymentConfiguration:
         MinimumHealthyPercent: 50
@@ -344,7 +345,7 @@ Resources:
           ContainerPort: !Ref ContainerPort
           TargetGroupArn: !Ref TargetGroup
       HealthCheckGracePeriodSeconds: 30
-      EnableExecuteCommand: true
+      EnableExecuteCommand: false
 
 Outputs:
   BackendUrl:
