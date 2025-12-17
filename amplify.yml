@@ -9,9 +9,11 @@ applications:
           commands:
             - npm run build
       artifacts:
-        baseDirectory: out
+        baseDirectory: .amplify-hosting
         files:
           - '**/*'
       cache:
-        paths: []
+        paths:
+          - node_modules/**/*
+          - .next/cache/**/*
     appRoot: frontend

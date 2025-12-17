@@ -16,9 +16,6 @@ const nextConfig = {
     API_BASE_URL: process.env.API_BASE_URL || 'https://cvsmuhhazj.us-east-1.awsapprunner.com',
     NEXT_PUBLIC_API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || process.env.API_BASE_URL || 'https://cvsmuhhazj.us-east-1.awsapprunner.com',
   },
-  // Static export for Amplify
-  output: 'export',
-  distDir: 'out',
 }
 
 module.exports = nextConfig

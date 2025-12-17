@@ -71,23 +71,26 @@ Resources:
       OauthToken: '{{resolve:secretsmanager:arn:aws:secretsmanager:us-east-1:211125621822:secret:github-cNxbJE:SecretString:github_pat}}'
       BuildSpec: |
         version: 1
-        frontend:
-          phases:
-            preBuild:
-              commands:
-                - cd frontend
-                - npm ci
-          build:
-            commands:
-              - npm run build
-        artifacts:
-          baseDirectory: frontend/out
-          files:
-            - '**/*'
-          cache:
-            paths:
-              - frontend/node_modules/**/*
-              - frontend/.next/cache/**/*
+        applications:
+          - appRoot: frontend
+            frontend:
+              phases:
+                preBuild:
+                  commands:
+                    - npm ci
+                build:
+                  commands:
+                    - npm run build
+              artifacts:
+                # For WEB_COMPUTE, Amplify expects deploy-manifest.json in the output.
+                # Amplify generates this under .amplify-hosting for Next.js SSR.
+                baseDirectory: .amplify-hosting
+                files:
+                  - '**/*'
+              cache:
+                paths:
+                  - node_modules/**/*
+                  - .next/cache/**/*
       EnvironmentVariables:
         - Name: NODE_ENV
           Value: !Ref Environment
@@ -95,11 +98,7 @@ Resources:
           Value: !Ref BackendUrl
         - Name: NEXT_PUBLIC_API_BASE_URL
           Value: !Ref BackendUrl
-      CustomRules:
-        - Source: '**'
-          Target: '/index.html'
-          Status: '200'
-      Platform: WEB
+      Platform: WEB_COMPUTE
 
   # Amplify Branch
   AmplifyBranch:
