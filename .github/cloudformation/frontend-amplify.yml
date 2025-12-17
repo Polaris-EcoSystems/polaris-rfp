@@ -80,10 +80,9 @@ Resources:
                     - npm ci
                 build:
                   commands:
-                    - npm run build
+                    - npm run build:amplify
               artifacts:
-                # WEB_COMPUTE / Next.js output directory
-                baseDirectory: .next
+                baseDirectory: .amplify-hosting
                 files:
                   - '**/*'
               cache:

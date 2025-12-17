@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  swcMinify: true,
+  // Produce a self-contained server bundle for Amplify Hosting (WEB_COMPUTE).
+  output: 'standalone',
   env: {
     API_BASE_URL:
       process.env.API_BASE_URL ||
