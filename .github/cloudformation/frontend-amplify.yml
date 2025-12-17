@@ -82,9 +82,8 @@ Resources:
                   commands:
                     - npm run build
               artifacts:
-                # For WEB_COMPUTE, Amplify expects deploy-manifest.json in the output.
-                # Amplify generates this under .amplify-hosting for Next.js SSR.
-                baseDirectory: .amplify-hosting
+                # WEB_COMPUTE / Next.js output directory
+                baseDirectory: .next
                 files:
                   - '**/*'
               cache:
