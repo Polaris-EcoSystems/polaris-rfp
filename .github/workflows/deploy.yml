@@ -58,6 +58,15 @@ jobs:
             --output-template-file /tmp/root.packaged.yml \
             --region "${{ env.AWS_REGION }}"
 
+      - name: Choose GitHub token for Amplify
+        run: |
+          # Prefer a long-lived PAT (recommended) if configured, otherwise fall back to the default GITHUB_TOKEN.
+          if [ -n "${{ secrets.GH_PERSONAL_TOKEN }}" ]; then
+            echo "AMPLIFY_GITHUB_TOKEN=${{ secrets.GH_PERSONAL_TOKEN }}" >> $GITHUB_ENV
+          else
+            echo "AMPLIFY_GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
+          fi
+
       - name: "Deploy Root Stack (Nested: Backend + Frontend)"
         run: |
           echo "Deploying root stack..."
@@ -69,7 +78,7 @@ jobs:
               RepositoryUrl=https://github.com/${{ github.repository }} \
               BranchName=${{ github.ref_name }} \
               Environment=production \
-              GitHubToken=${{ secrets.GH_PERSONAL_TOKEN }} \
+              GitHubToken=$AMPLIFY_GITHUB_TOKEN \
               EnableCustomDomain=true \
               CustomDomainName=polariseco.com \
               CustomDomainPrefix=rfp \

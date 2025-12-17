@@ -43,22 +43,6 @@ Parameters:
     Description: Frontend base URL for backend CORS + OAuth (use custom domain URL when available)
     Default: 'https://rfp.polariseco.com'
 
-  EnableBackendApiCustomDomain:
-    Type: String
-    Description: Whether to use a custom domain for the backend API (App Runner)
-    Default: 'true'
-    AllowedValues: ['true', 'false']
-
-  BackendApiCustomDomainName:
-    Type: String
-    Description: Backend API custom domain name
-    Default: 'api.rfp.polariseco.com'
-
-  Route53HostedZoneName:
-    Type: String
-    Description: Route53 hosted zone name (trailing dot), e.g. polariseco.com.
-    Default: 'polariseco.com.'
-
   CanvaClientId:
     Type: String
     Default: ''
@@ -93,7 +77,6 @@ Parameters:
 
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
-  UseBackendApiCustomDomain: !Equals [!Ref EnableBackendApiCustomDomain, 'true']
   UseProvidedCanvaClientId: !Not [!Equals [!Ref CanvaClientId, '']]
   UseProvidedCanvaClientSecret: !Not [!Equals [!Ref CanvaClientSecret, '']]
   UseProvidedCanvaRedirectUri: !Not [!Equals [!Ref CanvaRedirectUri, '']]
@@ -223,9 +206,6 @@ Resources:
         Environment: !Ref Environment
         CodeStarConnectionArn: !Ref CodeStarConnectionArn
         FrontendBaseUrl: !Ref FrontendBaseUrl
-        EnableApiCustomDomain: !Ref EnableBackendApiCustomDomain
-        ApiCustomDomainName: !Ref BackendApiCustomDomainName
-        Route53HostedZoneName: !Ref Route53HostedZoneName
         CanvaClientId: !If
           - UseProvidedCanvaClientId
           - !Ref CanvaClientId
@@ -257,10 +237,7 @@ Resources:
         BranchName: !Ref BranchName
         Environment: !Ref Environment
         GitHubToken: !Ref GitHubToken
-        BackendUrl: !If
-          - UseBackendApiCustomDomain
-          - !Sub 'https://${BackendApiCustomDomainName}'
-          - !GetAtt BackendStack.Outputs.AppRunnerServiceUrl
+        BackendUrl: !GetAtt BackendStack.Outputs.AppRunnerServiceUrl
         EnableCustomDomain: !Ref EnableCustomDomain
         CustomDomainName: !Ref CustomDomainName
         CustomDomainPrefix: !Ref CustomDomainPrefix
@@ -276,10 +253,7 @@ Outputs:
 
   BackendUrl:
     Description: App Runner backend URL
-    Value: !If
-      - UseBackendApiCustomDomain
-      - !Sub 'https://${BackendApiCustomDomainName}'
-      - !GetAtt BackendStack.Outputs.AppRunnerServiceUrl
+    Value: !GetAtt BackendStack.Outputs.AppRunnerServiceUrl
 
   BackendArn:
     Description: App Runner backend ARN

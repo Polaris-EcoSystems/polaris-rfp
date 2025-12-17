@@ -28,22 +28,6 @@ Parameters:
     Description: Frontend base URL (used for OAuth redirects)
     Default: 'https://rfp.polariseco.com'
 
-  EnableApiCustomDomain:
-    Type: String
-    Description: Whether to associate a custom domain with the App Runner service
-    Default: 'true'
-    AllowedValues: ['true', 'false']
-
-  ApiCustomDomainName:
-    Type: String
-    Description: Custom domain name for the backend (e.g. api.rfp.polariseco.com)
-    Default: 'api.rfp.polariseco.com'
-
-  Route53HostedZoneName:
-    Type: String
-    Description: Route53 hosted zone name (trailing dot), e.g. polariseco.com.
-    Default: 'polariseco.com.'
-
   CanvaClientId:
     Type: String
     Description: Canva Connect Client ID
@@ -90,13 +74,6 @@ Parameters:
   AppRunnerInstanceRoleArn:
     Type: String
     Description: IAM role ARN used by App Runner instances (created by root stack)
-
-Conditions:
-  UseApiCustomDomain: !Equals [!Ref EnableApiCustomDomain, 'true']
-  UseRoute53HostedZoneName: !Not [!Equals [!Ref Route53HostedZoneName, '']]
-  UseApiCustomDomainWithRoute53: !And
-    - !Condition UseApiCustomDomain
-    - !Condition UseRoute53HostedZoneName
 
 Resources:
   # CloudWatch Log Group for App Runner
@@ -170,36 +147,6 @@ Resources:
         - Key: Service
           Value: Backend
 
-  BackendApiCustomDomainAssociation:
-    Condition: UseApiCustomDomain
-    Type: AWS::AppRunner::CustomDomainAssociation
-    Properties:
-      DomainName: !Ref ApiCustomDomainName
-      ServiceArn: !GetAtt BackendAppRunnerService.ServiceArn
-      EnableWWWSubdomain: false
-
-  BackendApiCustomDomainRecord:
-    Condition: UseApiCustomDomainWithRoute53
-    Type: AWS::Route53::RecordSet
-    Properties:
-      HostedZoneName: !Ref Route53HostedZoneName
-      Name: !Ref ApiCustomDomainName
-      Type: CNAME
-      TTL: '300'
-      ResourceRecords:
-        - !GetAtt BackendApiCustomDomainAssociation.DNSTarget
-
-  BackendApiCustomDomainValidationRecord0:
-    Condition: UseApiCustomDomainWithRoute53
-    Type: AWS::Route53::RecordSet
-    Properties:
-      HostedZoneName: !Ref Route53HostedZoneName
-      Name: !GetAtt BackendApiCustomDomainAssociation.CertificateValidationRecords.0.Name
-      Type: !GetAtt BackendApiCustomDomainAssociation.CertificateValidationRecords.0.Type
-      TTL: '300'
-      ResourceRecords:
-        - !GetAtt BackendApiCustomDomainAssociation.CertificateValidationRecords.0.Value
-
 Outputs:
   AppRunnerServiceUrl:
     Description: 'App Runner Service URL'
@@ -212,13 +159,3 @@ Outputs:
     Value: !GetAtt BackendAppRunnerService.ServiceArn
     Export:
       Name: !Sub '${AWS::StackName}-AppRunnerServiceArn'
-
-  BackendApiCustomDomainUrl:
-    Condition: UseApiCustomDomain
-    Description: 'Backend custom domain URL (if enabled)'
-    Value: !Sub 'https://${ApiCustomDomainName}'
-
-  BackendApiCustomDomainDNSTarget:
-    Condition: UseApiCustomDomain
-    Description: 'DNS target for App Runner custom domain'
-    Value: !GetAtt BackendApiCustomDomainAssociation.DNSTarget
