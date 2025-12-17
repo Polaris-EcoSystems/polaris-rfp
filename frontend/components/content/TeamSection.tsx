@@ -1,12 +1,9 @@
 import {
-  UserGroupIcon,
   EyeIcon,
   PencilIcon,
   TrashIcon,
-  CheckIcon,
-  XMarkIcon,
-} from "@heroicons/react/24/outline";
-
+  UserGroupIcon,
+} from '@heroicons/react/24/outline'
 
 export default function TeamSection({ ctx }: { ctx: any }) {
   const {
@@ -26,7 +23,7 @@ export default function TeamSection({ ctx }: { ctx: any }) {
     editingMember,
     handleSaveMember,
     handleDeleteMember,
-  } = ctx;
+  } = ctx
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -53,8 +50,8 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                   key={index}
                   className={`px-6 py-4 cursor-pointer hover:bg-gray-50 transition-colors ${
                     selectedMember === member
-                      ? "bg-primary-50 border-r-2 border-primary-500"
-                      : ""
+                      ? 'bg-primary-50 border-r-2 border-primary-500'
+                      : ''
                   }`}
                   onClick={() => setSelectedMember(member)}
                 >
@@ -157,16 +154,16 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                     </h5>
                     <div className="text-sm text-gray-600 leading-relaxed">
                       {selectedMember.biography
-                        .split("\n")
+                        .split('\n')
                         .map((line: string, index: number) => {
-                          const trimmedLine = line.trim();
-                          if (!trimmedLine) return <br key={index} />;
+                          const trimmedLine = line.trim()
+                          if (!trimmedLine) return <br key={index} />
 
                           // If line starts with bullet point, render as list item
                           if (
-                            trimmedLine.startsWith("•") ||
-                            trimmedLine.startsWith("-") ||
-                            trimmedLine.startsWith("*")
+                            trimmedLine.startsWith('•') ||
+                            trimmedLine.startsWith('-') ||
+                            trimmedLine.startsWith('*')
                           ) {
                             return (
                               <div
@@ -177,10 +174,10 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                                   •
                                 </span>
                                 <span className="flex-1">
-                                  {trimmedLine.replace(/^[•\-*]\s*/, "")}
+                                  {trimmedLine.replace(/^[•\-*]\s*/, '')}
                                 </span>
                               </div>
-                            );
+                            )
                           }
 
                           // Regular paragraph
@@ -188,7 +185,7 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                             <p key={index} className="mb-2">
                               {trimmedLine}
                             </p>
-                          );
+                          )
                         })}
                     </div>
                   </div>
@@ -218,7 +215,7 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                             <li key={index} className="text-sm text-gray-600">
                               {edu}
                             </li>
-                          )
+                          ),
                         )}
                       </ul>
                     </div>
@@ -239,7 +236,7 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                             >
                               {cert}
                             </span>
-                          )
+                          ),
                         )}
                       </div>
                     </div>
@@ -259,5 +256,5 @@ export default function TeamSection({ ctx }: { ctx: any }) {
 
       {/* Modals moved to page level */}
     </div>
-  );
+  )
 }
