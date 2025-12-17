@@ -3,11 +3,15 @@ function nowIso() {
 }
 
 function normalizeEmail(email) {
-  return String(email || '').trim().toLowerCase()
+  return String(email || '')
+    .trim()
+    .toLowerCase()
 }
 
 function normalizeUsername(username) {
-  return String(username || '').trim().toLowerCase()
+  return String(username || '')
+    .trim()
+    .toLowerCase()
 }
 
 function userPk(userId) {

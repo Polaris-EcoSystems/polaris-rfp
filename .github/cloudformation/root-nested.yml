@@ -61,9 +61,9 @@ Parameters:
     NoEcho: true
     Default: ''
 
-  MongoDbUri:
+  # Data store (DynamoDB)
+  DdbTableName:
     Type: String
-    NoEcho: true
     Default: ''
 
   JwtSecret:
@@ -77,8 +77,43 @@ Parameters:
 
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
+  UseProvidedDdbTableName: !Not [!Equals [!Ref DdbTableName, '']]
 
 Resources:
+  PolarisDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !If
+        - UseProvidedDdbTableName
+        - !Ref DdbTableName
+        - !Sub 'polaris-rfp-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: gsi1pk
+          AttributeType: S
+        - AttributeName: gsi1sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: gsi1pk
+              KeyType: HASH
+            - AttributeName: gsi1sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
   # Shared App Runner instance role (requested: full DynamoDB + S3 perms)
   AppRunnerInstanceRole:
     Type: AWS::IAM::Role
@@ -110,7 +145,7 @@ Resources:
         CanvaClientSecret: !Ref CanvaClientSecret
         CanvaRedirectUri: !Ref CanvaRedirectUri
         CanvaTokenEncKey: !Ref CanvaTokenEncKey
-        MongoDbUri: !Ref MongoDbUri
+        DdbTableName: !Ref PolarisDataTable
         JwtSecret: !Ref JwtSecret
         JwtExpire: !Ref JwtExpire
         AppRunnerInstanceRoleArn: !GetAtt AppRunnerInstanceRole.Arn
@@ -130,6 +165,10 @@ Resources:
         CustomDomainPrefix: !Ref CustomDomainPrefix
 
 Outputs:
+  DdbTableName:
+    Description: DynamoDB table name
+    Value: !Ref PolarisDataTable
+
   BackendUrl:
     Description: App Runner backend URL
     Value: !GetAtt BackendStack.Outputs.AppRunnerServiceUrl

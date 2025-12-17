@@ -145,7 +145,10 @@ async function verifyLogin({ usernameOrEmail, password }) {
     throw err
   }
 
-  const ok = await bcrypt.compare(String(password), String(user.passwordHash || ''))
+  const ok = await bcrypt.compare(
+    String(password),
+    String(user.passwordHash || ''),
+  )
   if (!ok) return null
 
   // update lastLogin (best-effort)

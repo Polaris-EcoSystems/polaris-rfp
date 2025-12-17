@@ -50,10 +50,9 @@ Parameters:
     NoEcho: true
     Default: ''
 
-  MongoDbUri:
+  DdbTableName:
     Type: String
-    Description: MongoDB connection string (required for auth/users)
-    NoEcho: true
+    Description: DynamoDB table name for Polaris data
     Default: ''
 
   JwtSecret:
@@ -117,8 +116,8 @@ Resources:
                   Value: !Ref CanvaRedirectUri
                 - Name: CANVA_TOKEN_ENC_KEY
                   Value: !Ref CanvaTokenEncKey
-                - Name: MONGODB_URI
-                  Value: !Ref MongoDbUri
+                - Name: DDB_TABLE_NAME
+                  Value: !Ref DdbTableName
                 - Name: JWT_SECRET
                   Value: !Ref JwtSecret
                 - Name: JWT_EXPIRE
