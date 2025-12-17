@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Polaris unified deployment (root stack) using nested stacks: Frontend (Amplify) + Backend (App Runner)'
+Description: 'Polaris unified deployment (root stack) using nested stacks: Frontend (Amplify) + Backend (ECS Fargate + ALB)'
 
 Parameters:
   Environment:
@@ -33,15 +33,24 @@ Parameters:
     Type: String
     Default: 'rfp'
 
-  # Backend (App Runner)
-  CodeStarConnectionArn:
-    Type: String
-    Default: 'arn:aws:apprunner:us-east-1:211125621822:connection/polaris-rfp/577729d32ae34e1380983e866e425016'
-
   FrontendBaseUrl:
     Type: String
     Description: Frontend base URL for backend CORS + OAuth (use custom domain URL when available)
     Default: 'https://rfp.polariseco.com'
+
+  # Backend (ECS + ALB)
+  BackendApiDomainName:
+    Type: String
+    Default: 'api.rfp.polariseco.com'
+
+  Route53HostedZoneId:
+    Type: String
+    Description: Route53 Hosted Zone ID for polariseco.com (e.g. Z123...)
+    Default: 'Z0175396CVZ5P50IACQB'
+
+  BackendImageUri:
+    Type: String
+    Description: ECR image URI for backend (including tag)
 
   CanvaClientId:
     Type: String
@@ -158,52 +167,25 @@ Resources:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
 
-  # Shared App Runner instance role (requested: full DynamoDB + S3 perms)
-  AppRunnerInstanceRole:
-    Type: AWS::IAM::Role
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
     Properties:
-      RoleName: !Sub 'polaris-apprunner-instance-${Environment}-${AWS::Region}'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: tasks.apprunner.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
-        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
-      Policies:
-        - PolicyName: PolarisAssetsS3Access
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: AssetsBucketList
-                Effect: Allow
-                Action:
-                  - s3:ListBucket
-                  - s3:GetBucketLocation
-                Resource:
-                  - !GetAtt PolarisAssetsBucket.Arn
-              - Sid: AssetsObjectRW
-                Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:CopyObject
-                Resource:
-                  - !Sub '${PolarisAssetsBucket.Arn}/*'
+      TemplateURL: network-vpc.yml
+      Parameters:
+        Environment: !Ref Environment
 
   BackendStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: backend-apprunner.yml
+      TemplateURL: backend-ecs-alb.yml
       Parameters:
-        RepositoryUrl: !Ref RepositoryUrl
-        BranchName: !Ref BranchName
         Environment: !Ref Environment
-        CodeStarConnectionArn: !Ref CodeStarConnectionArn
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PublicSubnetIds: !Split [',', !GetAtt NetworkStack.Outputs.PublicSubnetIds]
+        PrivateSubnetIds: !Split [',', !GetAtt NetworkStack.Outputs.PrivateSubnetIds]
+        BackendApiDomainName: !Ref BackendApiDomainName
+        Route53HostedZoneId: !Ref Route53HostedZoneId
+        ImageUri: !Ref BackendImageUri
         FrontendBaseUrl: !Ref FrontendBaseUrl
         CanvaClientId: !If
           - UseProvidedCanvaClientId
@@ -225,7 +207,6 @@ Resources:
         AssetsBucketName: !Ref PolarisAssetsBucket
         JwtSecret: !Ref JwtSecret
         JwtExpire: !Ref JwtExpire
-        AppRunnerInstanceRoleArn: !GetAtt AppRunnerInstanceRole.Arn
 
   FrontendStack:
     Type: AWS::CloudFormation::Stack
@@ -236,7 +217,7 @@ Resources:
         BranchName: !Ref BranchName
         Environment: !Ref Environment
         GitHubToken: !Ref GitHubToken
-        BackendUrl: !GetAtt BackendStack.Outputs.AppRunnerServiceUrl
+        BackendUrl: !GetAtt BackendStack.Outputs.BackendUrl
         EnableCustomDomain: !Ref EnableCustomDomain
         CustomDomainName: !Ref CustomDomainName
         CustomDomainPrefix: !Ref CustomDomainPrefix
@@ -251,12 +232,12 @@ Outputs:
     Value: !Ref PolarisAssetsBucket
 
   BackendUrl:
-    Description: App Runner backend URL
-    Value: !GetAtt BackendStack.Outputs.AppRunnerServiceUrl
+    Description: Backend API URL
+    Value: !GetAtt BackendStack.Outputs.BackendUrl
 
-  BackendArn:
-    Description: App Runner backend ARN
-    Value: !GetAtt BackendStack.Outputs.AppRunnerServiceArn
+  BackendAlbDnsName:
+    Description: Backend ALB DNS name
+    Value: !GetAtt BackendStack.Outputs.LoadBalancerDnsName
 
   AmplifyAppId:
     Description: Amplify App ID
@@ -273,6 +254,6 @@ Outputs:
       - !Sub 'https://${CustomDomainPrefix}.${CustomDomainName}'
       - ''
 
-  AppRunnerInstanceRoleArn:
-    Description: IAM role ARN used by App Runner instances
-    Value: !GetAtt AppRunnerInstanceRole.Arn
+  Route53HostedZoneId:
+    Description: Route53 hosted zone id used for backend domain
+    Value: !Ref Route53HostedZoneId
