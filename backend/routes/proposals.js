@@ -374,13 +374,22 @@ router.put('/:id/content-library/:sectionName', async (req, res) => {
       const selectedMembers = (await getTeamMembersByIds(selectedIds)).filter(
         (m) => m && (m.isActive === undefined || m.isActive === true),
       )
+      const rfp = await getRfpById(proposal.rfpId)
+      const projectType = rfp?.projectType || null
 
       if (selectedMembers.length > 0) {
+        const {
+          pickTeamMemberBio,
+          pickTeamMemberExperience,
+        } = require('../services/teamMemberProfiles')
         content =
           'Our experienced team brings together diverse expertise and proven track record to deliver exceptional results.\n\n'
         selectedMembers.forEach((member) => {
+          const bio = pickTeamMemberBio(member, projectType)
+          const exp = pickTeamMemberExperience(member, projectType)
           content += `**${member.nameWithCredentials}** - ${member.position}\n\n`
-          content += `${member.biography}\n\n`
+          if (bio) content += `${bio}\n\n`
+          if (exp) content += `**Relevant experience:**\n\n${exp}\n\n`
         })
       } else {
         content = 'No team members selected.'

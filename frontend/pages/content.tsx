@@ -43,6 +43,8 @@ export default function ContentLibrary() {
     email: '',
     companyId: null,
     biography: '',
+    headshotUrl: '',
+    bioProfiles: [],
   })
   const [projects, setProjects] = useState<any[]>([])
   const [references, setReferences] = useState<any[]>([])
@@ -296,6 +298,8 @@ export default function ContentLibrary() {
       email: '',
       companyId: null,
       biography: '',
+      headshotUrl: '',
+      bioProfiles: [],
     })
     setShowAddMember(true)
   }
@@ -310,6 +314,8 @@ export default function ContentLibrary() {
         email: '',
         companyId: null,
         biography: '',
+        headshotUrl: '',
+        bioProfiles: [],
       })
       setShowAddMember(false)
       toast.success('Team member added successfully!')

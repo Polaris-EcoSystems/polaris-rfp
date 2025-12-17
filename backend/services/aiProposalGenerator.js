@@ -240,6 +240,7 @@ Generate a comprehensive proposal with all sections formatted as markdown, using
                   SharedSectionFormatters.formatTeamMembersSection(
                     teamMembers,
                     selectedTeamIds.length > 0 ? selectedTeamIds : null,
+                    rfp?.projectType || null,
                   )
               } else if (libraryType === 'references') {
                 parsed[sectionTitle] =
@@ -311,6 +312,7 @@ Generate a comprehensive proposal with all sections formatted as markdown, using
                   content: SharedSectionFormatters.formatTeamMembersSection(
                     teamMembers,
                     selectedTeamIds.length > 0 ? selectedTeamIds : null,
+                    rfp?.projectType || null,
                   ),
                   type: 'content-library',
                   lastModified: new Date().toISOString(),
@@ -387,6 +389,7 @@ Generate a comprehensive proposal with all sections formatted as markdown, using
                 content: SharedSectionFormatters.formatTeamMembersSection(
                   teamMembers,
                   selectedTeamIds.length > 0 ? selectedTeamIds : null,
+                  rfp?.projectType || null,
                 ),
                 type: 'content-library',
                 lastModified: new Date().toISOString(),
@@ -618,11 +621,12 @@ Generate a comprehensive proposal with all sections formatted as markdown, using
     const openai = this.openai
     if (!openai || !teamMembers || teamMembers.length === 0) return []
     try {
+      const { pickTeamMemberBio } = require('./teamMemberProfiles')
       const membersSummary = teamMembers.map((member) => ({
         id: member.memberId,
         name: member.nameWithCredentials,
         position: member.position,
-        expertise: member.biography,
+        expertise: pickTeamMemberBio(member, rfp?.projectType),
       }))
 
       const prompt = `Based on the following RFP requirements, select the most relevant team members from our content library. Return ONLY the IDs of the selected members as a JSON array (e.g., ["id1", "id2"]).\n\nRFP Information:\n- Title: ${

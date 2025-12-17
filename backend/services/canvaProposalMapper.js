@@ -23,6 +23,8 @@ function toText(val) {
   }
 }
 
+const { pickTeamMemberBio } = require('./teamMemberProfiles')
+
 function guessSourceForKey(key) {
   const k = String(key).toLowerCase()
   if (k.includes('rfp') && k.includes('title')) return 'rfp.title'
@@ -211,7 +213,12 @@ function buildDatasetValues({
             )
               valueObj = { type: 'text', text: toText(member.position).trim() }
             else if (suffix === 'bio' || suffix === 'biography')
-              valueObj = { type: 'text', text: toText(member.biography).trim() }
+              valueObj = {
+                type: 'text',
+                text: toText(
+                  pickTeamMemberBio(member, rfp?.projectType),
+                ).trim(),
+              }
           }
           if (
             fieldType === 'image' &&

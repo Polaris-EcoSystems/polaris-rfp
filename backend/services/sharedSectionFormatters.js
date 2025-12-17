@@ -214,7 +214,11 @@ ${contactPhone}`
   /**
    * Format team members data into proposal section content
    */
-  static formatTeamMembersSection(teamMembers, selectedIds = null) {
+  static formatTeamMembersSection(
+    teamMembers,
+    selectedIds = null,
+    projectType = null,
+  ) {
     if (!teamMembers || teamMembers.length === 0) {
       return 'No team members available in the content library.'
     }
@@ -231,8 +235,15 @@ ${contactPhone}`
       'Our experienced team brings together diverse expertise and proven track record to deliver exceptional results.\n\n'
 
     membersToUse.forEach((member) => {
+      const {
+        pickTeamMemberBio,
+        pickTeamMemberExperience,
+      } = require('./teamMemberProfiles')
+      const bio = pickTeamMemberBio(member, projectType)
+      const exp = pickTeamMemberExperience(member, projectType)
       content += `**${member.nameWithCredentials}** - ${member.position}\n\n`
-      content += `${member.biography}\n\n`
+      if (bio) content += `${bio}\n\n`
+      if (exp) content += `**Relevant experience:**\n\n${exp}\n\n`
     })
 
     return content.trim()

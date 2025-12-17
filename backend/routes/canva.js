@@ -1,6 +1,8 @@
 const express = require('express')
+const crypto = require('crypto')
 const jwt = require('jsonwebtoken')
 const { authMiddleware } = require('../middleware/auth')
+const { encryptString, decryptString } = require('../utils/tokenCrypto')
 const { getProposalById, updateProposal } = require('../db/proposals')
 const { getRfpById } = require('../db/rfps')
 const {
@@ -99,10 +101,19 @@ router.post('/disconnect', authMiddleware, async (req, res) => {
 
 router.get('/connect-url', authMiddleware, async (req, res) => {
   try {
+    const pkceId = crypto.randomBytes(32).toString('base64url')
+    const { codeVerifier, codeChallenge } = canvaClient.generatePkcePair()
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString()
+
     // Store return path inside state so we can redirect nicely after callback
     const returnTo = String(req.query.returnTo || '/integrations/canva')
     const state = jwt.sign(
-      { userId: String(req.user._id), returnTo },
+      {
+        userId: String(req.user._id),
+        returnTo,
+        pkceId,
+        nonce: crypto.randomBytes(16).toString('base64url'),
+      },
       getJwtSecret(),
       { expiresIn: '10m' },
     )
@@ -117,7 +128,17 @@ router.get('/connect-url', authMiddleware, async (req, res) => {
       'design:meta:read',
     ]
 
-    const url = canvaClient.buildAuthorizeUrl({ state, scopes })
+    await canvaDb.upsertPkceForUser(req.user._id, pkceId, {
+      codeVerifierEnc: encryptString(codeVerifier),
+      expiresAt,
+    })
+
+    // Store PKCE verifier server-side; only send challenge to Canva.
+    const url = canvaClient.buildAuthorizeUrl({
+      state,
+      scopes,
+      codeChallenge,
+    })
     return res.json({ url })
   } catch (e) {
     return res
@@ -158,13 +179,37 @@ router.get('/callback', async (req, res) => {
 
     const userId = decoded?.userId
     const returnTo = decoded?.returnTo || '/integrations/canva'
+    const pkceId = decoded?.pkceId
     if (!userId) {
       return res.redirect(
         `${getFrontendBaseUrl()}/integrations/canva?error=missing_user`,
       )
     }
 
-    const token = await canvaClient.exchangeCodeForToken(code)
+    const pkce = pkceId ? await canvaDb.getPkceForUser(userId, pkceId) : null
+    if (!pkce || !pkce.codeVerifierEnc) {
+      return res.redirect(
+        `${getFrontendBaseUrl()}/integrations/canva?error=missing_pkce`,
+      )
+    }
+    if (pkce.expiresAt && Date.now() > new Date(pkce.expiresAt).getTime()) {
+      await canvaDb.deletePkceForUser(userId, pkceId)
+      return res.redirect(
+        `${getFrontendBaseUrl()}/integrations/canva?error=pkce_expired`,
+      )
+    }
+
+    // One-time use
+    await canvaDb.deletePkceForUser(userId, pkceId)
+
+    const codeVerifier = decryptString(pkce.codeVerifierEnc)
+    if (!codeVerifier) {
+      return res.redirect(
+        `${getFrontendBaseUrl()}/integrations/canva?error=invalid_pkce`,
+      )
+    }
+
+    const token = await canvaClient.exchangeCodeForToken(code, codeVerifier)
     await canvaClient.upsertConnectionForUser(userId, token)
 
     return res.redirect(`${getFrontendBaseUrl()}${returnTo}?connected=1`)

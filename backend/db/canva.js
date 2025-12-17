@@ -46,6 +46,39 @@ async function deleteConnectionForUser(userId) {
   return true
 }
 
+// --- OAuth PKCE (short-lived) ---
+function pkceKey(userId, pkceId) {
+  return { pk: `USER#${String(userId)}`, sk: `CANVA#PKCE#${String(pkceId)}` }
+}
+
+async function upsertPkceForUser(userId, pkceId, fields) {
+  const now = nowIso()
+  const item = {
+    ...pkceKey(userId, pkceId),
+    entityType: 'CanvaPkce',
+    userId: String(userId),
+    pkceId: String(pkceId),
+    codeVerifierEnc: fields.codeVerifierEnc || null,
+    expiresAt: fields.expiresAt || null,
+    createdAt: now,
+    updatedAt: now,
+    gsi1pk: typePk('CANVA_PKCE'),
+    gsi1sk: `${now}#${String(userId)}#${String(pkceId)}`,
+  }
+  await put({ Item: item })
+  return normalize(item)
+}
+
+async function getPkceForUser(userId, pkceId) {
+  const { Item } = await get({ Key: pkceKey(userId, pkceId) })
+  return normalize(Item)
+}
+
+async function deletePkceForUser(userId, pkceId) {
+  await del({ Key: pkceKey(userId, pkceId) })
+  return true
+}
+
 // --- Company mapping ---
 function companyMappingKey(companyId) {
   return { pk: `COMPANY#${String(companyId)}`, sk: 'CANVA#MAPPING' }
@@ -203,6 +236,10 @@ module.exports = {
   upsertConnectionForUser,
   getConnectionForUser,
   deleteConnectionForUser,
+  // pkce
+  upsertPkceForUser,
+  getPkceForUser,
+  deletePkceForUser,
   // mappings
   upsertCompanyMapping,
   getCompanyMapping,

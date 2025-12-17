@@ -1,4 +1,5 @@
 const axios = require('axios')
+const crypto = require('crypto')
 const { encryptString, decryptString } = require('../utils/tokenCrypto')
 const canvaDb = require('../db/canva')
 
@@ -16,7 +17,17 @@ function requiredEnv(name) {
   return v
 }
 
-function buildAuthorizeUrl({ state, scopes }) {
+function generatePkcePair() {
+  // Canva requires PKCE (S256). Use a high-entropy verifier per request.
+  const codeVerifier = crypto.randomBytes(96).toString('base64url')
+  const codeChallenge = crypto
+    .createHash('sha256')
+    .update(codeVerifier)
+    .digest('base64url')
+  return { codeVerifier, codeChallenge }
+}
+
+function buildAuthorizeUrl({ state, scopes, codeChallenge }) {
   const clientId = requiredEnv('CANVA_CLIENT_ID')
   const redirectUri = requiredEnv('CANVA_REDIRECT_URI')
   const url = new URL(CANVA_AUTH_URL)
@@ -24,43 +35,62 @@ function buildAuthorizeUrl({ state, scopes }) {
   url.searchParams.set('redirect_uri', redirectUri)
   url.searchParams.set('response_type', 'code')
   url.searchParams.set('state', state)
+  if (codeChallenge) {
+    url.searchParams.set('code_challenge_method', 's256')
+    url.searchParams.set('code_challenge', String(codeChallenge))
+  }
   if (Array.isArray(scopes) && scopes.length > 0) {
     url.searchParams.set('scope', scopes.join(' '))
   }
   return url.toString()
 }
 
-async function exchangeCodeForToken(code) {
+function basicAuthHeaderValue() {
   const clientId = requiredEnv('CANVA_CLIENT_ID')
   const clientSecret = requiredEnv('CANVA_CLIENT_SECRET')
+  const credentials = Buffer.from(
+    `${clientId}:${clientSecret}`,
+    'utf8',
+  ).toString('base64')
+  return `Basic ${credentials}`
+}
+
+async function exchangeCodeForToken(code, codeVerifier) {
   const redirectUri = requiredEnv('CANVA_REDIRECT_URI')
+  if (!codeVerifier) {
+    const err = new Error('Missing PKCE code_verifier')
+    err.code = 'missing_pkce'
+    throw err
+  }
 
   const body = new URLSearchParams()
   body.set('grant_type', 'authorization_code')
-  body.set('client_id', clientId)
-  body.set('client_secret', clientSecret)
+  // Canva requires PKCE for auth code exchange.
+  body.set('code_verifier', String(codeVerifier || ''))
   body.set('redirect_uri', redirectUri)
   body.set('code', code)
 
   const resp = await axios.post(CANVA_TOKEN_URL, body.toString(), {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: basicAuthHeaderValue(),
+      // Some OAuth providers require client_id even with Basic auth; harmless to include.
+    },
     timeout: 30000,
   })
   return resp.data
 }
 
 async function refreshAccessToken(refreshToken) {
-  const clientId = requiredEnv('CANVA_CLIENT_ID')
-  const clientSecret = requiredEnv('CANVA_CLIENT_SECRET')
-
   const body = new URLSearchParams()
   body.set('grant_type', 'refresh_token')
-  body.set('client_id', clientId)
-  body.set('client_secret', clientSecret)
   body.set('refresh_token', refreshToken)
 
   const resp = await axios.post(CANVA_TOKEN_URL, body.toString(), {
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: basicAuthHeaderValue(),
+    },
     timeout: 30000,
   })
   return resp.data
@@ -270,6 +300,7 @@ async function pollJob(fn, { intervalMs = 1500, timeoutMs = 90000 } = {}) {
 }
 
 module.exports = {
+  generatePkcePair,
   buildAuthorizeUrl,
   exchangeCodeForToken,
   upsertConnectionForUser,

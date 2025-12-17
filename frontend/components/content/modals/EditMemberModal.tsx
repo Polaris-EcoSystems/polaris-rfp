@@ -1,13 +1,30 @@
-import React, { useState, useEffect } from "react";
-import api from "../../../lib/api";
+import { useEffect, useState } from 'react'
+import api from '../../../lib/api'
+
+function ensureBulletText(value: string) {
+  const v = String(value || '')
+  if (!v) return ''
+  if (v.startsWith('• ')) return v
+  return '• ' + v
+}
+
+function defaultProfile() {
+  return {
+    id: `profile_${Date.now()}`,
+    label: 'Tailored bio',
+    projectTypes: [],
+    bio: '• ',
+    experience: '• ',
+  }
+}
 
 type EditMemberModalProps = {
-  open: boolean;
-  memberForm: any;
-  setMemberForm: (v: any) => void;
-  onSave: () => void;
-  onClose: () => void;
-};
+  open: boolean
+  memberForm: any
+  setMemberForm: (v: any) => void
+  onSave: () => void
+  onClose: () => void
+}
 
 export default function EditMemberModal({
   open,
@@ -16,30 +33,30 @@ export default function EditMemberModal({
   onSave,
   onClose,
 }: EditMemberModalProps) {
-  const [companies, setCompanies] = useState<any[]>([]);
-  const [loadingCompanies, setLoadingCompanies] = useState(false);
+  const [companies, setCompanies] = useState<any[]>([])
+  const [loadingCompanies, setLoadingCompanies] = useState(false)
 
   // Fetch companies when modal opens
   useEffect(() => {
     if (open) {
-      fetchCompanies();
+      fetchCompanies()
     }
-  }, [open]);
+  }, [open])
 
   const fetchCompanies = async () => {
     try {
-      setLoadingCompanies(true);
-      const response = await api.get("/api/content/companies");
-      setCompanies(response.data || []);
+      setLoadingCompanies(true)
+      const response = await api.get('/api/content/companies')
+      setCompanies(response.data || [])
     } catch (error) {
-      console.error("Error fetching companies:", error);
-      setCompanies([]);
+      console.error('Error fetching companies:', error)
+      setCompanies([])
     } finally {
-      setLoadingCompanies(false);
+      setLoadingCompanies(false)
     }
-  };
+  }
 
-  if (!open) return null;
+  if (!open) return null
 
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
@@ -91,7 +108,7 @@ export default function EditMemberModal({
               </label>
               <input
                 type="email"
-                value={memberForm.email || ""}
+                value={memberForm.email || ''}
                 onChange={(e) =>
                   setMemberForm({
                     ...memberForm,
@@ -108,7 +125,7 @@ export default function EditMemberModal({
                 Company
               </label>
               <select
-                value={memberForm.companyId || ""}
+                value={memberForm.companyId || ''}
                 onChange={(e) =>
                   setMemberForm({
                     ...memberForm,
@@ -122,7 +139,7 @@ export default function EditMemberModal({
                 {companies.map((company) => (
                   <option key={company.companyId} value={company.companyId}>
                     {company.name}
-                    {company.sharedInfo ? " 🔗" : ""}
+                    {company.sharedInfo ? ' 🔗' : ''}
                   </option>
                 ))}
               </select>
@@ -140,59 +157,86 @@ export default function EditMemberModal({
 
             <div>
               <label className="block text-sm font-medium text-gray-700">
+                Headshot URL
+              </label>
+              <input
+                type="url"
+                value={memberForm.headshotUrl || ''}
+                onChange={(e) =>
+                  setMemberForm({
+                    ...memberForm,
+                    headshotUrl: e.target.value,
+                  })
+                }
+                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2"
+                placeholder="https://..."
+              />
+              {memberForm.headshotUrl && (
+                <div className="mt-2 flex items-center gap-3">
+                  <img
+                    src={memberForm.headshotUrl}
+                    alt="Headshot preview"
+                    className="h-12 w-12 rounded-full object-cover border"
+                    onError={(e) => {
+                      ;(e.currentTarget as HTMLImageElement).style.display =
+                        'none'
+                    }}
+                  />
+                  <p className="text-xs text-gray-500">
+                    Used in team profiles and Canva headshot autofill.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
                 Professional Biography (Bullet Points)
               </label>
               <textarea
                 value={memberForm.biography}
                 onChange={(e) => {
-                  let value = e.target.value;
-
-                  // Ensure it starts with a bullet point if not empty
-                  if (value && !value.startsWith("• ")) {
-                    value = "• " + value;
-                  }
-
                   setMemberForm({
                     ...memberForm,
-                    biography: value,
-                  });
+                    biography: ensureBulletText(e.target.value),
+                  })
                 }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    const textarea = e.target as HTMLTextAreaElement;
-                    const cursorPosition = textarea.selectionStart;
-                    const currentValue = memberForm.biography || "";
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    const textarea = e.target as HTMLTextAreaElement
+                    const cursorPosition = textarea.selectionStart
+                    const currentValue = memberForm.biography || ''
 
                     // Insert new line with bullet point
                     const newValue =
                       currentValue.slice(0, cursorPosition) +
-                      "\n• " +
-                      currentValue.slice(cursorPosition);
+                      '\n• ' +
+                      currentValue.slice(cursorPosition)
 
                     setMemberForm({
                       ...memberForm,
                       biography: newValue,
-                    });
+                    })
 
                     // Set cursor position after the bullet point
                     setTimeout(() => {
                       textarea.selectionStart = textarea.selectionEnd =
-                        cursorPosition + 3;
-                    }, 0);
+                        cursorPosition + 3
+                    }, 0)
                   }
                 }}
                 onFocus={(e) => {
-                  const textarea = e.target as HTMLTextAreaElement;
+                  const textarea = e.target as HTMLTextAreaElement
                   // If empty, start with a bullet point
                   if (!memberForm.biography) {
                     setMemberForm({
                       ...memberForm,
-                      biography: "• ",
-                    });
+                      biography: '• ',
+                    })
                     setTimeout(() => {
-                      textarea.selectionStart = textarea.selectionEnd = 2;
-                    }, 0);
+                      textarea.selectionStart = textarea.selectionEnd = 2
+                    }, 0)
                   }
                 }}
                 rows={8}
@@ -202,6 +246,150 @@ export default function EditMemberModal({
               <p className="text-xs text-gray-500 mt-1">
                 Press Enter to automatically create a new bullet point
               </p>
+            </div>
+
+            <div className="border-t pt-4">
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-medium text-gray-700">
+                  Tailored bios & experience (by proposal type)
+                </label>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMemberForm({
+                      ...memberForm,
+                      bioProfiles: [
+                        ...(Array.isArray(memberForm.bioProfiles)
+                          ? memberForm.bioProfiles
+                          : []),
+                        defaultProfile(),
+                      ],
+                    })
+                  }
+                  className="px-3 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200"
+                >
+                  + Add tailored profile
+                </button>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                If a profile’s project types match the RFP’s projectType, we’ll
+                automatically use that bio/experience in proposals.
+              </p>
+
+              {(Array.isArray(memberForm.bioProfiles)
+                ? memberForm.bioProfiles
+                : []
+              ).length === 0 ? (
+                <p className="text-sm text-gray-500 mt-3">
+                  No tailored profiles yet.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-4">
+                  {(memberForm.bioProfiles || []).map((p: any, idx: number) => (
+                    <div key={p.id || idx} className="rounded border p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1">
+                          <label className="block text-xs font-medium text-gray-700">
+                            Label
+                          </label>
+                          <input
+                            type="text"
+                            value={p.label || ''}
+                            onChange={(e) => {
+                              const next = [...(memberForm.bioProfiles || [])]
+                              next[idx] = { ...p, label: e.target.value }
+                              setMemberForm({
+                                ...memberForm,
+                                bioProfiles: next,
+                              })
+                            }}
+                            className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                            placeholder="e.g., Software delivery bio"
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = [...(memberForm.bioProfiles || [])]
+                            next.splice(idx, 1)
+                            setMemberForm({ ...memberForm, bioProfiles: next })
+                          }}
+                          className="mt-6 inline-flex items-center px-2 py-2 text-xs font-medium text-red-600 bg-red-100 rounded hover:bg-red-200"
+                          title="Remove profile"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div className="mt-3">
+                        <label className="block text-xs font-medium text-gray-700">
+                          Project types (comma-separated)
+                        </label>
+                        <input
+                          type="text"
+                          value={
+                            Array.isArray(p.projectTypes)
+                              ? p.projectTypes.join(', ')
+                              : ''
+                          }
+                          onChange={(e) => {
+                            const raw = e.target.value
+                            const types = raw
+                              .split(',')
+                              .map((s) => s.trim())
+                              .filter(Boolean)
+                            const next = [...(memberForm.bioProfiles || [])]
+                            next[idx] = { ...p, projectTypes: types }
+                            setMemberForm({ ...memberForm, bioProfiles: next })
+                          }}
+                          className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                          placeholder="software_development, strategic_communications"
+                        />
+                      </div>
+
+                      <div className="mt-3">
+                        <label className="block text-xs font-medium text-gray-700">
+                          Tailored bio (bullet points)
+                        </label>
+                        <textarea
+                          rows={6}
+                          value={p.bio || ''}
+                          onChange={(e) => {
+                            const next = [...(memberForm.bioProfiles || [])]
+                            next[idx] = {
+                              ...p,
+                              bio: ensureBulletText(e.target.value),
+                            }
+                            setMemberForm({ ...memberForm, bioProfiles: next })
+                          }}
+                          className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 font-mono text-sm"
+                          placeholder="• ..."
+                        />
+                      </div>
+
+                      <div className="mt-3">
+                        <label className="block text-xs font-medium text-gray-700">
+                          Relevant experience (bullet points)
+                        </label>
+                        <textarea
+                          rows={6}
+                          value={p.experience || ''}
+                          onChange={(e) => {
+                            const next = [...(memberForm.bioProfiles || [])]
+                            next[idx] = {
+                              ...p,
+                              experience: ensureBulletText(e.target.value),
+                            }
+                            setMemberForm({ ...memberForm, bioProfiles: next })
+                          }}
+                          className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 font-mono text-sm"
+                          placeholder="• ..."
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -222,5 +410,5 @@ export default function EditMemberModal({
         </div>
       </div>
     </div>
-  );
+  )
 }

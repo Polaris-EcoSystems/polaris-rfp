@@ -2,6 +2,7 @@ const OpenAI = require('openai')
 const SharedSectionFormatters = require('./sharedSectionFormatters')
 const AIProposalGenerator = require('./aiProposalGenerator')
 const promptGuidelines = require('../utils/promptGuidelines')
+const { pickTeamMemberBio } = require('./teamMemberProfiles')
 
 class TemplateGenerator {
   // Lazy OpenAI initialization
@@ -23,7 +24,7 @@ class TemplateGenerator {
         id: member.memberId,
         name: member.nameWithCredentials,
         position: member.position,
-        expertise: member.biography,
+        expertise: pickTeamMemberBio(member, rfp?.projectType),
       }))
 
       const prompt = `Based on the following RFP requirements, select the most relevant team members from our content library. Return ONLY the IDs of the selected members as a JSON array (e.g., ["id1", "id2"]).\n\nRFP Information:\n- Title: ${
@@ -325,6 +326,7 @@ class TemplateGenerator {
                   SharedSectionFormatters.formatTeamMembersSection(
                     teamMembers,
                     selectedTeamIds,
+                    rfp?.projectType || null,
                   )
               } else if (libraryType === 'references') {
                 parsed[sectionTitle] =
@@ -391,6 +393,7 @@ class TemplateGenerator {
               content = SharedSectionFormatters.formatTeamMembersSection(
                 teamMembers,
                 selectedTeamIds,
+                rfp?.projectType || null,
               )
               selectedIds = selectedTeamIds
             } else if (libraryType === 'references') {
@@ -458,6 +461,7 @@ class TemplateGenerator {
               content = SharedSectionFormatters.formatTeamMembersSection(
                 teamMembers,
                 selectedTeamIds,
+                rfp?.projectType || null,
               )
               selectedIds = selectedTeamIds
             } else if (libraryType === 'references') {

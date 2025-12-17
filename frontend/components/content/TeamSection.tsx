@@ -115,9 +115,21 @@ export default function TeamSection({ ctx }: { ctx: any }) {
             {selectedMember ? (
               <div className="space-y-4">
                 <div className="text-center">
-                  <div className="flex-shrink-0 h-16 w-16 rounded-full bg-primary-100 flex items-center justify-center mx-auto mb-3">
-                    <UserGroupIcon className="h-8 w-8 text-primary-600" />
-                  </div>
+                  {selectedMember.headshotUrl ? (
+                    <img
+                      src={selectedMember.headshotUrl}
+                      alt="Headshot"
+                      className="h-16 w-16 rounded-full object-cover border mx-auto mb-3"
+                      onError={(e) => {
+                        ;(e.currentTarget as HTMLImageElement).style.display =
+                          'none'
+                      }}
+                    />
+                  ) : (
+                    <div className="flex-shrink-0 h-16 w-16 rounded-full bg-primary-100 flex items-center justify-center mx-auto mb-3">
+                      <UserGroupIcon className="h-8 w-8 text-primary-600" />
+                    </div>
+                  )}
                   <h4 className="font-medium text-gray-900">
                     {selectedMember.nameWithCredentials || selectedMember.name}
                   </h4>
@@ -150,7 +162,7 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                 {selectedMember.biography && (
                   <div>
                     <h5 className="text-sm font-medium text-gray-700 mb-2">
-                      Professional Biography
+                      Default Biography
                     </h5>
                     <div className="text-sm text-gray-600 leading-relaxed">
                       {selectedMember.biography
@@ -190,6 +202,54 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                     </div>
                   </div>
                 )}
+
+                {Array.isArray(selectedMember.bioProfiles) &&
+                  selectedMember.bioProfiles.length > 0 && (
+                    <div>
+                      <h5 className="text-sm font-medium text-gray-700 mb-2">
+                        Tailored Profiles
+                      </h5>
+                      <div className="space-y-3">
+                        {selectedMember.bioProfiles.map(
+                          (p: any, idx: number) => (
+                            <div
+                              key={p.id || idx}
+                              className="rounded border border-gray-200 p-3"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="text-sm font-medium text-gray-900">
+                                  {p.label || `Profile ${idx + 1}`}
+                                </div>
+                                <div className="flex flex-wrap gap-1 justify-end">
+                                  {(Array.isArray(p.projectTypes)
+                                    ? p.projectTypes
+                                    : []
+                                  ).map((t: string) => (
+                                    <span
+                                      key={t}
+                                      className="px-2 py-0.5 text-[11px] bg-gray-100 text-gray-700 rounded"
+                                    >
+                                      {t}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                              {p.bio && (
+                                <p className="text-xs text-gray-600 mt-2 line-clamp-4 whitespace-pre-wrap">
+                                  {String(p.bio).trim()}
+                                </p>
+                              )}
+                              {p.experience && (
+                                <p className="text-xs text-gray-600 mt-2 line-clamp-4 whitespace-pre-wrap">
+                                  {String(p.experience).trim()}
+                                </p>
+                              )}
+                            </div>
+                          ),
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                 {/* Legacy fields for backward compatibility */}
                 {selectedMember.experienceYears && (
