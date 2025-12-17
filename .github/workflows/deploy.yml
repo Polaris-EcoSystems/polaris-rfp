@@ -74,7 +74,6 @@ jobs:
               CustomDomainName=polariseco.com \
               CustomDomainPrefix=rfp \
               FrontendBaseUrl=https://rfp.polariseco.com \
-              CanvaClientId=${{ secrets.CANVA_CLIENT_ID }} \
               CanvaClientSecret=${{ secrets.CANVA_CLIENT_SECRET }} \
               CanvaRedirectUri=${{ secrets.CANVA_REDIRECT_URI }} \
               CanvaTokenEncKey=${{ secrets.CANVA_TOKEN_ENC_KEY }} \

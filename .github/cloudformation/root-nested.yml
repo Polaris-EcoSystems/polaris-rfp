@@ -77,6 +77,7 @@ Parameters:
 
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
+  UseProvidedCanvaClientId: !Not [!Equals [!Ref CanvaClientId, '']]
   UseProvidedDdbTableName: !Not [!Equals [!Ref DdbTableName, '']]
 
 Resources:
@@ -141,7 +142,10 @@ Resources:
         Environment: !Ref Environment
         CodeStarConnectionArn: !Ref CodeStarConnectionArn
         FrontendBaseUrl: !Ref FrontendBaseUrl
-        CanvaClientId: !Ref CanvaClientId
+        CanvaClientId: !If
+          - UseProvidedCanvaClientId
+          - !Ref CanvaClientId
+          - '{{resolve:secretsmanager:polaris-rfp/canva:SecretString:CANVA_CLIENT_ID}}'
         CanvaClientSecret: !Ref CanvaClientSecret
         CanvaRedirectUri: !Ref CanvaRedirectUri
         CanvaTokenEncKey: !Ref CanvaTokenEncKey
