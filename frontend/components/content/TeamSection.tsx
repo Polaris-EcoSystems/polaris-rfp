@@ -7,6 +7,7 @@ import {
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 
+
 export default function TeamSection({ ctx }: { ctx: any }) {
   const {
     team,
