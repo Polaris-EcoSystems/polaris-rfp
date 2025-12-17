@@ -99,7 +99,7 @@ Resources:
         - Source: '**'
           Target: '/index.html'
           Status: '200'
-      Platform: WEB_COMPUTE
+      Platform: WEB
 
   # Amplify Branch
   AmplifyBranch:
