@@ -78,6 +78,9 @@ Parameters:
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
   UseProvidedCanvaClientId: !Not [!Equals [!Ref CanvaClientId, '']]
+  UseProvidedCanvaClientSecret: !Not [!Equals [!Ref CanvaClientSecret, '']]
+  UseProvidedCanvaRedirectUri: !Not [!Equals [!Ref CanvaRedirectUri, '']]
+  UseProvidedCanvaTokenEncKey: !Not [!Equals [!Ref CanvaTokenEncKey, '']]
   UseProvidedDdbTableName: !Not [!Equals [!Ref DdbTableName, '']]
 
 Resources:
@@ -146,9 +149,18 @@ Resources:
           - UseProvidedCanvaClientId
           - !Ref CanvaClientId
           - '{{resolve:secretsmanager:polaris-rfp/canva:SecretString:CANVA_CLIENT_ID}}'
-        CanvaClientSecret: !Ref CanvaClientSecret
-        CanvaRedirectUri: !Ref CanvaRedirectUri
-        CanvaTokenEncKey: !Ref CanvaTokenEncKey
+        CanvaClientSecret: !If
+          - UseProvidedCanvaClientSecret
+          - !Ref CanvaClientSecret
+          - '{{resolve:secretsmanager:polaris-rfp/canva:SecretString:CANVA_CLIENT_SECRET}}'
+        CanvaRedirectUri: !If
+          - UseProvidedCanvaRedirectUri
+          - !Ref CanvaRedirectUri
+          - '{{resolve:secretsmanager:polaris-rfp/canva:SecretString:CANVA_REDIRECT_URI}}'
+        CanvaTokenEncKey: !If
+          - UseProvidedCanvaTokenEncKey
+          - !Ref CanvaTokenEncKey
+          - '{{resolve:secretsmanager:polaris-rfp/canva:SecretString:CANVA_TOKEN_ENC_KEY}}'
         DdbTableName: !Ref PolarisDataTable
         JwtSecret: !Ref JwtSecret
         JwtExpire: !Ref JwtExpire
