@@ -121,7 +121,7 @@ Resources:
 Outputs:
   AppRunnerServiceUrl:
     Description: 'App Runner Service URL'
-    Value: !GetAtt BackendAppRunnerService.ServiceUrl
+    Value: !Sub 'https://${BackendAppRunnerService.ServiceUrl}'
     Export:
       Name: !Sub '${AWS::StackName}-AppRunnerServiceUrl'
 
