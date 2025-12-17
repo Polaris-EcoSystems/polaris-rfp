@@ -4,14 +4,23 @@ const helmet = require('helmet')
 const morgan = require('morgan')
 require('dotenv').config()
 
-const rfpRoutes = require('./routes/rfp')
-const attachmentRoutes = require('./routes/attachments')
-const proposalRoutes = require('./routes/proposals')
-const templateRoutes = require('./routes/templates')
-const contentRoutes = require('./routes/content')
-const aiRoutes = require('./routes/ai')
-const authRoutes = require('./routes/auth')
-const canvaRoutes = require('./routes/canva')
+function safeRequire(label, p) {
+  try {
+    return require(p)
+  } catch (e) {
+    console.error(`❌ Failed to load ${label} (${p}):`, e?.message || e)
+    return null
+  }
+}
+
+const rfpRoutes = safeRequire('rfpRoutes', './routes/rfp')
+const attachmentRoutes = safeRequire('attachmentRoutes', './routes/attachments')
+const proposalRoutes = safeRequire('proposalRoutes', './routes/proposals')
+const templateRoutes = safeRequire('templateRoutes', './routes/templates')
+const contentRoutes = safeRequire('contentRoutes', './routes/content')
+const aiRoutes = safeRequire('aiRoutes', './routes/ai')
+const authRoutes = safeRequire('authRoutes', './routes/auth')
+const canvaRoutes = safeRequire('canvaRoutes', './routes/canva')
 
 const app = express()
 const PORT = process.env.PORT || 8080
@@ -90,15 +99,15 @@ try {
   console.error('❌ DynamoDB not configured:', e?.message || e)
 }
 
-// Routes
-app.use('/api/rfp', rfpRoutes)
-app.use('/api/rfp', attachmentRoutes)
-app.use('/api/proposals', proposalRoutes)
-app.use('/api/templates', templateRoutes)
-app.use('/api/content', contentRoutes)
-app.use('/api/ai', aiRoutes)
-app.use('/api/auth', authRoutes)
-app.use('/api/integrations/canva', canvaRoutes)
+// Routes (only mount if successfully loaded)
+if (rfpRoutes) app.use('/api/rfp', rfpRoutes)
+if (attachmentRoutes) app.use('/api/rfp', attachmentRoutes)
+if (proposalRoutes) app.use('/api/proposals', proposalRoutes)
+if (templateRoutes) app.use('/api/templates', templateRoutes)
+if (contentRoutes) app.use('/api/content', contentRoutes)
+if (aiRoutes) app.use('/api/ai', aiRoutes)
+if (authRoutes) app.use('/api/auth', authRoutes)
+if (canvaRoutes) app.use('/api/integrations/canva', canvaRoutes)
 
 // Health check
 app.get('/', (req, res) => {
