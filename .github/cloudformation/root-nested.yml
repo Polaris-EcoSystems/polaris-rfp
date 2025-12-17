@@ -181,8 +181,9 @@ Resources:
       Parameters:
         Environment: !Ref Environment
         VpcId: !GetAtt NetworkStack.Outputs.VpcId
-        PublicSubnetIds: !Split [',', !GetAtt NetworkStack.Outputs.PublicSubnetIds]
-        PrivateSubnetIds: !Split [',', !GetAtt NetworkStack.Outputs.PrivateSubnetIds]
+        # Nested stack parameters must be strings; list parameters accept comma-delimited strings.
+        PublicSubnetIds: !GetAtt NetworkStack.Outputs.PublicSubnetIds
+        PrivateSubnetIds: !GetAtt NetworkStack.Outputs.PrivateSubnetIds
         BackendApiDomainName: !Ref BackendApiDomainName
         Route53HostedZoneId: !Ref Route53HostedZoneId
         ImageUri: !Ref BackendImageUri
