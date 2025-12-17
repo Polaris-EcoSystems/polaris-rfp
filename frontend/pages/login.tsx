@@ -1,8 +1,8 @@
-import React, { useState } from "react";
-import { useRouter } from "next/router";
-import Link from "next/link";
-import { useAuth } from "../lib/auth";
-import { useToast } from "../components/ui/Toast";
+import Link from 'next/link'
+import { useRouter } from 'next/router'
+import React, { useState } from 'react'
+import { useToast } from '../components/ui/Toast'
+import { useAuth } from '../lib/auth'
 
 function EyeIcon(props: { className?: string }) {
   return (
@@ -27,7 +27,7 @@ function EyeIcon(props: { className?: string }) {
         strokeLinejoin="round"
       />
     </svg>
-  );
+  )
 }
 
 function EyeSlashIcon(props: { className?: string }) {
@@ -60,60 +60,66 @@ function EyeSlashIcon(props: { className?: string }) {
         strokeLinejoin="round"
       />
     </svg>
-  );
+  )
 }
 
 export default function LoginPage() {
-  const router = useRouter();
-  const { login } = useAuth();
-  const toast = useToast();
+  const router = useRouter()
+  const { login, user, loading: authLoading } = useAuth()
+  const toast = useToast()
 
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [remember, setRemember] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [remember, setRemember] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
   const [touched, setTouched] = useState<{
-    email?: boolean;
-    password?: boolean;
-  }>({});
+    email?: boolean
+    password?: boolean
+  }>({})
   const [errors, setErrors] = useState<{ email?: string; password?: string }>(
-    {}
-  );
+    {},
+  )
 
-  const from = typeof router.query.from === "string" ? router.query.from : "";
+  const from = typeof router.query.from === 'string' ? router.query.from : ''
+
+  React.useEffect(() => {
+    if (!authLoading && user) {
+      router.replace(from || '/')
+    }
+  }, [authLoading, user, router, from])
 
   const validate = () => {
-    const e: { email?: string; password?: string } = {};
-    if (!email) e.email = "Email is required";
-    else if (!/^\S+@\S+\.\S+$/.test(email)) e.email = "Invalid email";
-    if (!password) e.password = "Password is required";
-    setErrors(e);
-    return Object.keys(e).length === 0;
-  };
+    const e: { email?: string; password?: string } = {}
+    if (!email) e.email = 'Email is required'
+    else if (!/^\S+@\S+\.\S+$/.test(email)) e.email = 'Invalid email'
+    if (!password) e.password = 'Password is required'
+    setErrors(e)
+    return Object.keys(e).length === 0
+  }
 
-  const togglePassword = () => setShowPassword((s) => !s);
+  const togglePassword = () => setShowPassword((s) => !s)
 
   const handleSubmit = async (ev: React.FormEvent) => {
-    ev.preventDefault();
-    setTouched({ email: true, password: true });
-    if (!validate()) return;
-    setLoading(true);
+    ev.preventDefault()
+    setTouched({ email: true, password: true })
+    if (!validate()) return
+    setLoading(true)
     try {
-      const ok = await login(email, password);
+      const ok = await login(email, password, remember)
       if (ok) {
-        toast.success("Logged in");
-        router.push(from || "/");
+        toast.success('Logged in')
+        router.push(from || '/')
       } else {
-        toast.error("Invalid credentials");
+        toast.error('Invalid credentials')
       }
     } catch (err) {
-      console.error(err);
-      toast.error("Login failed");
+      console.error(err)
+      toast.error('Login failed')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
@@ -132,7 +138,7 @@ export default function LoginPage() {
                 Need an account?
               </span>
               <Link
-                href={from ? `/signup?from=${from}` : "/signup"}
+                href={from ? `/signup?from=${from}` : '/signup'}
                 className="text-sm text-blue-600 hover:text-blue-700 transition-colors"
               >
                 Sign up
@@ -151,10 +157,10 @@ export default function LoginPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 onBlur={() => setTouched((t) => ({ ...t, email: true }))}
                 className={
-                  "w-full h-11 px-4 py-2 text-gray-900 placeholder-gray-500 border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-colors " +
+                  'w-full h-11 px-4 py-2 text-gray-900 placeholder-gray-500 border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-colors ' +
                   (touched.email && errors.email
-                    ? "border-danger"
-                    : "border-gray-300")
+                    ? 'border-danger'
+                    : 'border-gray-300')
                 }
               />
             </div>
@@ -171,25 +177,25 @@ export default function LoginPage() {
                 Password
               </label>
               <Link
-                href={"/reset-password"}
-                className="text-sm text-primary hover:text-primary-dark transition-colors"
+                href={'/reset-password'}
+                className="text-sm text-primary-600 hover:text-primary-700 transition-colors"
               >
                 Forgot Password?
               </Link>
             </div>
             <div className="relative">
               <input
-                type={showPassword ? "text" : "password"}
+                type={showPassword ? 'text' : 'password'}
                 placeholder="Enter Password"
                 autoComplete="off"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onBlur={() => setTouched((t) => ({ ...t, password: true }))}
                 className={
-                  "w-full h-11 px-4 py-2 text-gray-900 placeholder-gray-500 border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-colors pr-11 " +
+                  'w-full h-11 px-4 py-2 text-gray-900 placeholder-gray-500 border rounded-lg focus:ring-2 focus:ring-primary/20 focus:border-primary outline-none transition-colors pr-11 ' +
                   (touched.password && errors.password
-                    ? "border-danger"
-                    : "border-gray-300")
+                    ? 'border-danger'
+                    : 'border-gray-300')
                 }
               />
               <button
@@ -221,7 +227,15 @@ export default function LoginPage() {
             {/* Custom checkmark for checked state */}
             {remember && (
               <span className="absolute left-1 top-1 pointer-events-none">
-                <svg className="w-2.5 h-2.5" viewBox="0 0 16 16" fill="none" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  className="w-2.5 h-2.5"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="black"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <polyline points="3.5 8.5 7 12 12.5 5.5" />
                 </svg>
               </span>
@@ -234,10 +248,10 @@ export default function LoginPage() {
             className="h-11 px-6 mt-2 text-white bg-blue-700 hover:bg-blue-900 rounded-lg transition-colors flex items-center justify-center disabled:opacity-70 disabled:cursor-not-allowed"
             disabled={loading}
           >
-            {loading ? "Please wait..." : "Log In"}
+            {loading ? 'Please wait...' : 'Log In'}
           </button>
         </form>
       </div>
     </div>
-  );
+  )
 }

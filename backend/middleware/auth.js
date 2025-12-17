@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken')
 const { getUserById } = require('../db/users')
+const { getJwtSecret } = require('../utils/jwtConfig')
 
 const authMiddleware = async (req, res, next) => {
   try {
@@ -11,10 +12,7 @@ const authMiddleware = async (req, res, next) => {
         .json({ error: 'Access denied. No token provided.' })
     }
 
-    const decoded = jwt.verify(
-      token,
-      process.env.JWT_SECRET || 'your-secret-key',
-    )
+    const decoded = jwt.verify(token, getJwtSecret())
     const user = await getUserById(decoded.userId)
 
     if (!user) {
@@ -41,3 +39,24 @@ const authMiddleware = async (req, res, next) => {
 
 // No admin middleware: app supports only regular user authentication
 module.exports = { authMiddleware }
+
+// --- Authorization helpers (RBAC) ---
+// Usage: router.get('/admin', authMiddleware, requireRole('admin'), handler)
+function requireRole(...allowed) {
+  const allow = new Set(
+    allowed
+      .flat()
+      .filter(Boolean)
+      .map((r) => String(r).toLowerCase()),
+  )
+
+  return (req, res, next) => {
+    const role = String(req.user?.role || '').toLowerCase()
+    if (allow.size === 0) return next()
+    if (!role) return res.status(403).json({ error: 'Forbidden' })
+    if (!allow.has(role)) return res.status(403).json({ error: 'Forbidden' })
+    return next()
+  }
+}
+
+module.exports.requireRole = requireRole

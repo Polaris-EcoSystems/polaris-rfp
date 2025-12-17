@@ -1,10 +1,11 @@
 import {
-  FolderIcon,
   EyeIcon,
+  FolderIcon,
   PencilIcon,
-  TrashIcon,
   StarIcon,
-} from "@heroicons/react/24/outline";
+  TrashIcon,
+} from '@heroicons/react/24/outline'
+import { useMemo, useState } from 'react'
 
 export default function ProjectsSection({ ctx }: { ctx: any }) {
   const {
@@ -23,7 +24,67 @@ export default function ProjectsSection({ ctx }: { ctx: any }) {
     editingProject,
     handleSaveProject,
     handleDeleteProject,
-  } = ctx;
+  } = ctx
+
+  const [search, setSearch] = useState('')
+  const [sortBy, setSortBy] = useState<'title' | 'client' | 'industry'>('title')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [page, setPage] = useState(1)
+  const pageSize = 20
+
+  const filteredSorted = useMemo(() => {
+    const q = String(search || '')
+      .trim()
+      .toLowerCase()
+    const list = Array.isArray(projects) ? projects : []
+
+    const filtered = q
+      ? list.filter((p: any) => {
+          const title = String(p?.title || '')
+            .toLowerCase()
+            .trim()
+          const client = String(p?.clientName || '')
+            .toLowerCase()
+            .trim()
+          const industry = String(p?.industry || '')
+            .toLowerCase()
+            .trim()
+          const duration = String(p?.duration || '')
+            .toLowerCase()
+            .trim()
+          return (
+            title.includes(q) ||
+            client.includes(q) ||
+            industry.includes(q) ||
+            duration.includes(q)
+          )
+        })
+      : list
+
+    const keyFn = (p: any) => {
+      if (sortBy === 'client') return String(p?.clientName || '')
+      if (sortBy === 'industry') return String(p?.industry || '')
+      return String(p?.title || '')
+    }
+
+    const dir = sortDir === 'desc' ? -1 : 1
+    const sorted = [...filtered].sort((a, b) => {
+      const av = keyFn(a).toLowerCase()
+      const bv = keyFn(b).toLowerCase()
+      if (av < bv) return -1 * dir
+      if (av > bv) return 1 * dir
+      return 0
+    })
+
+    return sorted
+  }, [projects, search, sortBy, sortDir])
+
+  const totalPages = Math.max(1, Math.ceil(filteredSorted.length / pageSize))
+  const currentPage = Math.min(Math.max(1, page), totalPages)
+  const paged = useMemo(() => {
+    const start = (currentPage - 1) * pageSize
+    return filteredSorted.slice(start, start + pageSize)
+  }, [filteredSorted, currentPage])
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -42,16 +103,58 @@ export default function ProjectsSection({ ctx }: { ctx: any }) {
                 + Add Project
               </button>
             </div>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex-1 sm:max-w-md">
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value)
+                    setPage(1)
+                  }}
+                  placeholder="Search by title, client, industry, duration…"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={sortBy}
+                  onChange={(e) => {
+                    setSortBy(e.target.value as any)
+                    setPage(1)
+                  }}
+                  className="border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                >
+                  <option value="title">Sort: Title</option>
+                  <option value="client">Sort: Client</option>
+                  <option value="industry">Sort: Industry</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+                    setPage(1)
+                  }}
+                  className="px-3 py-2 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50"
+                  title="Toggle sort direction"
+                >
+                  {sortDir === 'asc' ? '↑' : '↓'}
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 text-xs text-gray-500">
+              Showing {paged.length} of {filteredSorted.length} projects
+            </div>
           </div>
           <div className="divide-y divide-gray-200">
-            {projects.length > 0 ? (
-              projects.map((project: any, index: number) => (
+            {filteredSorted.length > 0 ? (
+              paged.map((project: any, index: number) => (
                 <div
-                  key={index}
+                  key={project._id || project.projectId || index}
                   className={`px-6 py-4 cursor-pointer hover:bg-gray-50 transition-colors ${
                     selectedProject === project
-                      ? "bg-primary-50 border-r-2 border-primary-500"
-                      : ""
+                      ? 'bg-primary-50 border-r-2 border-primary-500'
+                      : ''
                   }`}
                   onClick={() => setSelectedProject(project)}
                 >
@@ -75,8 +178,8 @@ export default function ProjectsSection({ ctx }: { ctx: any }) {
                     <div className="flex space-x-1">
                       <button
                         onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedProject(project);
+                          e.stopPropagation()
+                          setSelectedProject(project)
                         }}
                         className="inline-flex items-center px-2 py-1 text-xs font-medium text-primary-600 bg-primary-100 rounded hover:bg-primary-200"
                       >
@@ -85,8 +188,8 @@ export default function ProjectsSection({ ctx }: { ctx: any }) {
                       </button>
                       <button
                         onClick={(e) => {
-                          e.stopPropagation();
-                          handleEditProject(project);
+                          e.stopPropagation()
+                          handleEditProject(project)
                         }}
                         className="inline-flex items-center px-2 py-1 text-xs font-medium text-blue-600 bg-blue-100 rounded hover:bg-blue-200"
                       >
@@ -95,8 +198,8 @@ export default function ProjectsSection({ ctx }: { ctx: any }) {
                       </button>
                       <button
                         onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteProject(project);
+                          e.stopPropagation()
+                          handleDeleteProject(project)
                         }}
                         className="inline-flex items-center px-2 py-1 text-xs font-medium text-red-600 bg-red-100 rounded hover:bg-red-200"
                       >
@@ -108,10 +211,35 @@ export default function ProjectsSection({ ctx }: { ctx: any }) {
               ))
             ) : (
               <div className="px-6 py-4">
-                <p className="text-gray-500 text-sm">No projects found</p>
+                <p className="text-gray-500 text-sm">
+                  No projects found{search ? ' for this search' : ''}.
+                </p>
               </div>
             )}
           </div>
+          {totalPages > 1 && (
+            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="px-3 py-2 text-sm rounded border border-gray-300 bg-white disabled:opacity-50"
+              >
+                Prev
+              </button>
+              <div className="text-sm text-gray-600">
+                Page {currentPage} / {totalPages}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+                className="px-3 py-2 text-sm rounded border border-gray-300 bg-white disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -216,5 +344,5 @@ export default function ProjectsSection({ ctx }: { ctx: any }) {
 
       {/* Modals moved to page level */}
     </div>
-  );
+  )
 }

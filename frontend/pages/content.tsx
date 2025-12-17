@@ -6,6 +6,7 @@ import {
 } from '@heroicons/react/24/outline'
 import Head from 'next/head'
 import { useEffect, useState } from 'react'
+import AuthGuard from '../components/AuthGuard'
 import CompanySection from '../components/content/CompanySection'
 import AddMemberModal from '../components/content/modals/AddMemberModal'
 import AddProjectModal from '../components/content/modals/AddProjectModal'
@@ -44,6 +45,8 @@ export default function ContentLibrary() {
     companyId: null,
     biography: '',
     headshotUrl: '',
+    headshotS3Key: null,
+    headshotS3Uri: null,
     bioProfiles: [],
   })
   const [projects, setProjects] = useState<any[]>([])
@@ -184,6 +187,29 @@ export default function ContentLibrary() {
       toast.success('Company information updated successfully!')
     } catch (error) {
       console.error('Error updating company:', error)
+      const status = (error as any)?.response?.status
+      if (status === 409 && selectedCompany?.companyId) {
+        toast.error('This company was changed elsewhere. Reloading latest…')
+        try {
+          const latestResp = await contentApi.getCompanyById(
+            selectedCompany.companyId,
+          )
+          const latest = latestResp.data
+          setCompanies(
+            companies.map((c) =>
+              c.companyId === selectedCompany.companyId ? latest : c,
+            ),
+          )
+          setSelectedCompany(latest)
+          setCompanyForm({
+            ...latest,
+            companyName: latest?.name || latest?.companyName || '',
+          })
+        } catch (_e) {
+          // ignore
+        }
+        return
+      }
       toast.error('Failed to update company information')
     }
   }
@@ -286,6 +312,21 @@ export default function ContentLibrary() {
       toast.success('Team member updated successfully!')
     } catch (error) {
       console.error('Error updating member:', error)
+      const status = (error as any)?.response?.status
+      const memberId = editingMember?.memberId || memberForm.memberId
+      if (status === 409 && memberId) {
+        toast.error('This member was changed elsewhere. Reloading latest…')
+        try {
+          const latestResp = await contentApi.getTeamMember(memberId)
+          const latest = latestResp.data
+          setTeam(team.map((m) => (m.memberId === memberId ? latest : m)))
+          setSelectedMember(latest)
+          setMemberForm({ ...latest })
+        } catch (_e) {
+          // ignore
+        }
+        return
+      }
       toast.error('Failed to update team member')
     }
   }
@@ -299,6 +340,8 @@ export default function ContentLibrary() {
       companyId: null,
       biography: '',
       headshotUrl: '',
+      headshotS3Key: null,
+      headshotS3Uri: null,
       bioProfiles: [],
     })
     setShowAddMember(true)
@@ -315,6 +358,8 @@ export default function ContentLibrary() {
         companyId: null,
         biography: '',
         headshotUrl: '',
+        headshotS3Key: null,
+        headshotS3Uri: null,
         bioProfiles: [],
       })
       setShowAddMember(false)
@@ -408,6 +453,21 @@ export default function ContentLibrary() {
       toast.success('Project updated successfully!')
     } catch (error) {
       console.error('Error updating project:', error)
+      const status = (error as any)?.response?.status
+      const id = editingProject?._id || projectForm?._id || editingProject?.id
+      if (status === 409 && id) {
+        toast.error('This project was changed elsewhere. Reloading latest…')
+        try {
+          const latestResp = await contentApi.getProjectById(id)
+          const latest = latestResp.data
+          setProjects(projects.map((p) => (p._id === id ? latest : p)))
+          setSelectedProject(latest)
+          setProjectForm({ ...latest })
+        } catch (_e) {
+          // ignore
+        }
+        return
+      }
       toast.error('Failed to update project')
     }
   }
@@ -464,6 +524,22 @@ export default function ContentLibrary() {
       toast.success('Reference updated successfully!')
     } catch (error) {
       console.error('Error updating reference:', error)
+      const status = (error as any)?.response?.status
+      const id =
+        editingReference?._id || referenceForm?._id || editingReference?.id
+      if (status === 409 && id) {
+        toast.error('This reference was changed elsewhere. Reloading latest…')
+        try {
+          const latestResp = await contentApi.getReferenceById(id)
+          const latest = latestResp.data
+          setReferences(references.map((r) => (r._id === id ? latest : r)))
+          setSelectedReference(latest)
+          setReferenceForm({ ...latest })
+        } catch (_e) {
+          // ignore
+        }
+        return
+      }
       toast.error('Failed to update reference')
     }
   }
@@ -475,343 +551,355 @@ export default function ContentLibrary() {
 
   if (loading) {
     return (
-      <Layout>
-        <div className="flex items-center justify-center h-64">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
-        </div>
-      </Layout>
+      <AuthGuard>
+        <Layout>
+          <div className="flex items-center justify-center h-64">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+          </div>
+        </Layout>
+      </AuthGuard>
     )
   }
 
   return (
-    <Layout>
-      <Head>
-        <title>Content Library - RFP Proposal System</title>
-      </Head>
+    <AuthGuard>
+      <Layout>
+        <Head>
+          <title>Content Library - RFP Proposal System</title>
+        </Head>
 
-      <div>
-        <div className="md:flex md:items-center md:justify-between">
-          <div className="flex-1 min-w-0">
-            <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
-              Content Library
-            </h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Manage company information and team member profiles
-            </p>
+        <div>
+          <div className="md:flex md:items-center md:justify-between">
+            <div className="flex-1 min-w-0">
+              <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
+                Content Library
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Manage company information and team member profiles
+              </p>
+            </div>
           </div>
-        </div>
 
-        {/* Tab Navigation */}
-        <div className="mt-8">
-          <div className="border-b border-gray-200">
-            <nav className="-mb-px flex space-x-8">
-              <button
-                onClick={() => setActiveTab('company')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'company'
-                    ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <BuildingOfficeIcon className="h-4 w-4 mr-2 inline" />
-                Company Information
-              </button>
-              <button
-                onClick={() => setActiveTab('team')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'team'
-                    ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <UserGroupIcon className="h-4 w-4 mr-2 inline" />
-                Team Members ({team.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('projects')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'projects'
-                    ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <FolderIcon className="h-4 w-4 mr-2 inline" />
-                Past Projects ({projects.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('references')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'references'
-                    ? 'border-primary-500 text-primary-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                <ClipboardDocumentListIcon className="h-4 w-4 mr-2 inline" />
-                References ({references.length})
-              </button>
-            </nav>
+          {/* Tab Navigation */}
+          <div className="mt-8">
+            <div className="border-b border-gray-200">
+              <nav className="-mb-px flex space-x-8">
+                <button
+                  onClick={() => setActiveTab('company')}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'company'
+                      ? 'border-primary-500 text-primary-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <BuildingOfficeIcon className="h-4 w-4 mr-2 inline" />
+                  Company Information
+                </button>
+                <button
+                  onClick={() => setActiveTab('team')}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'team'
+                      ? 'border-primary-500 text-primary-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <UserGroupIcon className="h-4 w-4 mr-2 inline" />
+                  Team Members ({team.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('projects')}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'projects'
+                      ? 'border-primary-500 text-primary-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <FolderIcon className="h-4 w-4 mr-2 inline" />
+                  Past Projects ({projects.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('references')}
+                  className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                    activeTab === 'references'
+                      ? 'border-primary-500 text-primary-600'
+                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  <ClipboardDocumentListIcon className="h-4 w-4 mr-2 inline" />
+                  References ({references.length})
+                </button>
+              </nav>
+            </div>
           </div>
-        </div>
 
-        <div className="mt-8">
-          {activeTab === 'company' && (
-            <CompanySection
-              ctx={{
-                companies,
-                selectedCompany,
-                setSelectedCompany,
-                editingCompany,
-                companyForm,
-                setCompanyForm,
-                showAddCompany,
-                setShowAddCompany,
-                handleEditCompany,
-                handleSaveCompany,
-                handleCancelCompanyEdit,
-                handleAddCompany,
-                handleDeleteCompany,
-              }}
-            />
-          )}
+          <div className="mt-8">
+            {activeTab === 'company' && (
+              <CompanySection
+                ctx={{
+                  companies,
+                  selectedCompany,
+                  setSelectedCompany,
+                  editingCompany,
+                  companyForm,
+                  setCompanyForm,
+                  showAddCompany,
+                  setShowAddCompany,
+                  handleEditCompany,
+                  handleSaveCompany,
+                  handleCancelCompanyEdit,
+                  handleAddCompany,
+                  handleDeleteCompany,
+                }}
+              />
+            )}
 
-          {activeTab === 'team' && (
-            <TeamSection
-              ctx={{
-                team,
-                selectedMember,
-                setSelectedMember,
-                showAddMember,
-                setShowAddMember,
-                openAddMemberModal,
-                memberForm,
-                setMemberForm,
-                addArrayItem,
-                updateArrayItem,
-                removeArrayItem,
-                handleAddMember,
-                handleEditMember,
-                editingMember,
-                setEditingMember,
-                handleSaveMember,
-                handleDeleteMember,
-              }}
-            />
-          )}
+            {activeTab === 'team' && (
+              <TeamSection
+                ctx={{
+                  team,
+                  selectedMember,
+                  setSelectedMember,
+                  showAddMember,
+                  setShowAddMember,
+                  openAddMemberModal,
+                  memberForm,
+                  setMemberForm,
+                  addArrayItem,
+                  updateArrayItem,
+                  removeArrayItem,
+                  handleAddMember,
+                  handleEditMember,
+                  editingMember,
+                  setEditingMember,
+                  handleSaveMember,
+                  handleDeleteMember,
+                }}
+              />
+            )}
 
-          {activeTab === 'projects' && (
-            <ProjectsSection
-              ctx={{
-                projects,
-                selectedProject,
-                setSelectedProject,
-                showAddProject,
-                setShowAddProject,
-                projectForm,
-                setProjectForm,
-                addArrayItem,
-                updateArrayItem,
-                removeArrayItem,
-                handleAddProject,
-                handleEditProject,
-                editingProject,
-                setEditingProject,
-                handleSaveProject,
-                handleDeleteProject,
-              }}
-            />
-          )}
+            {activeTab === 'projects' && (
+              <ProjectsSection
+                ctx={{
+                  projects,
+                  selectedProject,
+                  setSelectedProject,
+                  showAddProject,
+                  setShowAddProject,
+                  projectForm,
+                  setProjectForm,
+                  addArrayItem,
+                  updateArrayItem,
+                  removeArrayItem,
+                  handleAddProject,
+                  handleEditProject,
+                  editingProject,
+                  setEditingProject,
+                  handleSaveProject,
+                  handleDeleteProject,
+                }}
+              />
+            )}
 
-          {activeTab === 'references' && (
-            <ReferencesSection
-              ctx={{
-                references,
-                selectedReference,
-                setSelectedReference,
-                handleViewReference,
-                showAddReference,
-                setShowAddReference,
-                referenceForm,
-                setReferenceForm,
-                addArrayItem,
-                updateArrayItem,
-                removeArrayItem,
-                handleAddReference,
-                handleEditReference,
-                editingReference,
-                setEditingReference,
-                handleSaveReference,
-                handleDeleteReference,
-              }}
-            />
-          )}
-        </div>
+            {activeTab === 'references' && (
+              <ReferencesSection
+                ctx={{
+                  references,
+                  selectedReference,
+                  setSelectedReference,
+                  handleViewReference,
+                  showAddReference,
+                  setShowAddReference,
+                  referenceForm,
+                  setReferenceForm,
+                  addArrayItem,
+                  updateArrayItem,
+                  removeArrayItem,
+                  handleAddReference,
+                  handleEditReference,
+                  editingReference,
+                  setEditingReference,
+                  handleSaveReference,
+                  handleDeleteReference,
+                }}
+              />
+            )}
+          </div>
 
-        <Modal
-          isOpen={showViewReference}
-          onClose={() => setShowViewReference(false)}
-          title="Reference Details"
-          size="md"
-          footer={
-            <button
-              className="px-4 py-2 rounded-lg text-gray-700 bg-gray-100 hover:bg-gray-200"
-              onClick={() => setShowViewReference(false)}
-            >
-              Close
-            </button>
-          }
-        >
-          {selectedReference ? (
-            <div className="space-y-4">
-              <div>
-                <div className="text-sm font-semibold text-gray-900">
-                  {selectedReference.organizationName}
+          <Modal
+            isOpen={showViewReference}
+            onClose={() => setShowViewReference(false)}
+            title="Reference Details"
+            size="md"
+            footer={
+              <button
+                className="px-4 py-2 rounded-lg text-gray-700 bg-gray-100 hover:bg-gray-200"
+                onClick={() => setShowViewReference(false)}
+              >
+                Close
+              </button>
+            }
+          >
+            {selectedReference ? (
+              <div className="space-y-4">
+                <div>
+                  <div className="text-sm font-semibold text-gray-900">
+                    {selectedReference.organizationName}
+                  </div>
+                  {selectedReference.timePeriod ? (
+                    <div className="text-xs text-gray-500">
+                      {selectedReference.timePeriod}
+                    </div>
+                  ) : null}
                 </div>
-                {selectedReference.timePeriod ? (
-                  <div className="text-xs text-gray-500">
-                    {selectedReference.timePeriod}
-                  </div>
-                ) : null}
-              </div>
 
-              <div className="space-y-1">
-                <div className="text-xs font-semibold text-gray-700">
-                  Contact
-                </div>
-                <div className="text-sm text-gray-800">
-                  {selectedReference.contactName}
-                </div>
-                {selectedReference.contactTitle ? (
-                  <div className="text-xs text-gray-600">
-                    {selectedReference.contactTitle}
-                  </div>
-                ) : null}
-                {selectedReference.additionalTitle ? (
-                  <div className="text-xs text-gray-500 italic">
-                    {selectedReference.additionalTitle}
-                  </div>
-                ) : null}
-                {selectedReference.contactEmail ? (
-                  <div className="text-xs text-gray-600">
-                    {selectedReference.contactEmail}
-                  </div>
-                ) : null}
-                {selectedReference.contactPhone ? (
-                  <div className="text-xs text-gray-600">
-                    {selectedReference.contactPhone}
-                  </div>
-                ) : null}
-              </div>
-
-              {selectedReference.scopeOfWork ? (
                 <div className="space-y-1">
                   <div className="text-xs font-semibold text-gray-700">
-                    Scope of Work
+                    Contact
                   </div>
-                  <div className="text-sm text-gray-700 whitespace-pre-wrap">
-                    {selectedReference.scopeOfWork}
+                  <div className="text-sm text-gray-800">
+                    {selectedReference.contactName}
                   </div>
+                  {selectedReference.contactTitle ? (
+                    <div className="text-xs text-gray-600">
+                      {selectedReference.contactTitle}
+                    </div>
+                  ) : null}
+                  {selectedReference.additionalTitle ? (
+                    <div className="text-xs text-gray-500 italic">
+                      {selectedReference.additionalTitle}
+                    </div>
+                  ) : null}
+                  {selectedReference.contactEmail ? (
+                    <div className="text-xs text-gray-600">
+                      {selectedReference.contactEmail}
+                    </div>
+                  ) : null}
+                  {selectedReference.contactPhone ? (
+                    <div className="text-xs text-gray-600">
+                      {selectedReference.contactPhone}
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="text-sm text-gray-600">No reference selected.</div>
-          )}
-        </Modal>
 
-        <AddMemberModal
-          open={showAddMember}
-          memberForm={memberForm}
-          setMemberForm={setMemberForm}
-          addArrayItem={addArrayItem}
-          updateArrayItem={updateArrayItem}
-          removeArrayItem={removeArrayItem}
-          onAdd={handleAddMember}
-          onClose={() => {
-            setShowAddMember(false)
-            setMemberForm({
-              nameWithCredentials: '',
-              position: '',
-              biography: '',
-            })
-          }}
-        />
+                {selectedReference.scopeOfWork ? (
+                  <div className="space-y-1">
+                    <div className="text-xs font-semibold text-gray-700">
+                      Scope of Work
+                    </div>
+                    <div className="text-sm text-gray-700 whitespace-pre-wrap">
+                      {selectedReference.scopeOfWork}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="text-sm text-gray-600">
+                No reference selected.
+              </div>
+            )}
+          </Modal>
 
-        <EditMemberModal
-          open={Boolean(editingMember)}
-          memberForm={memberForm}
-          setMemberForm={setMemberForm}
-          onSave={handleSaveMember}
-          onClose={() => setEditingMember(null)}
-        />
+          <AddMemberModal
+            open={showAddMember}
+            memberForm={memberForm}
+            setMemberForm={setMemberForm}
+            addArrayItem={addArrayItem}
+            updateArrayItem={updateArrayItem}
+            removeArrayItem={removeArrayItem}
+            onAdd={handleAddMember}
+            onClose={() => {
+              setShowAddMember(false)
+              setMemberForm({
+                nameWithCredentials: '',
+                position: '',
+                email: '',
+                companyId: null,
+                biography: '',
+                headshotUrl: '',
+                headshotS3Key: null,
+                headshotS3Uri: null,
+                bioProfiles: [],
+              })
+            }}
+          />
 
-        <AddProjectModal
-          open={showAddProject}
-          projectForm={projectForm}
-          setProjectForm={setProjectForm}
-          addArrayItem={addArrayItem}
-          updateArrayItem={updateArrayItem}
-          removeArrayItem={removeArrayItem}
-          onAdd={handleAddProject}
-          onClose={() => setShowAddProject(false)}
-        />
+          <EditMemberModal
+            open={Boolean(editingMember)}
+            memberForm={memberForm}
+            setMemberForm={setMemberForm}
+            onSave={handleSaveMember}
+            onClose={() => setEditingMember(null)}
+          />
 
-        <EditProjectModal
-          open={Boolean(editingProject)}
-          projectForm={projectForm}
-          setProjectForm={setProjectForm}
-          onSave={handleSaveProject}
-          onClose={() => setEditingProject(null)}
-        />
+          <AddProjectModal
+            open={showAddProject}
+            projectForm={projectForm}
+            setProjectForm={setProjectForm}
+            addArrayItem={addArrayItem}
+            updateArrayItem={updateArrayItem}
+            removeArrayItem={removeArrayItem}
+            onAdd={handleAddProject}
+            onClose={() => setShowAddProject(false)}
+          />
 
-        <AddReferenceModal
-          open={showAddReference}
-          referenceForm={referenceForm}
-          setReferenceForm={setReferenceForm}
-          addArrayItem={addArrayItem}
-          updateArrayItem={updateArrayItem}
-          removeArrayItem={removeArrayItem}
-          onAdd={handleAddReference}
-          onClose={() => setShowAddReference(false)}
-        />
+          <EditProjectModal
+            open={Boolean(editingProject)}
+            projectForm={projectForm}
+            setProjectForm={setProjectForm}
+            onSave={handleSaveProject}
+            onClose={() => setEditingProject(null)}
+          />
 
-        <EditReferenceModal
-          open={Boolean(editingReference)}
-          referenceForm={referenceForm}
-          setReferenceForm={setReferenceForm}
-          onSave={handleSaveReference}
-          onClose={() => setEditingReference(null)}
-        />
+          <AddReferenceModal
+            open={showAddReference}
+            referenceForm={referenceForm}
+            setReferenceForm={setReferenceForm}
+            addArrayItem={addArrayItem}
+            updateArrayItem={updateArrayItem}
+            removeArrayItem={removeArrayItem}
+            onAdd={handleAddReference}
+            onClose={() => setShowAddReference(false)}
+          />
 
-        <DeleteConfirmationModal
-          isOpen={showDeleteModal}
-          onClose={cancelDelete}
-          onConfirm={confirmDelete}
-          title={
-            deleteTarget
-              ? `Delete ${
-                  deleteTarget.type === 'company'
-                    ? 'Company'
-                    : deleteTarget.type === 'member'
-                    ? 'Team Member'
-                    : deleteTarget.type === 'project'
-                    ? 'Project'
-                    : 'Reference'
-                }`
-              : 'Delete Item'
-          }
-          message={
-            deleteTarget
-              ? `Are you sure you want to delete this ${deleteTarget.type}?`
-              : 'Are you sure you want to delete this item?'
-          }
-          itemName={
-            deleteTarget?.item?.name ||
-            deleteTarget?.item?.clientName ||
-            deleteTarget?.item?.title
-          }
-          isDeleting={isDeleting}
-        />
-      </div>
-    </Layout>
+          <EditReferenceModal
+            open={Boolean(editingReference)}
+            referenceForm={referenceForm}
+            setReferenceForm={setReferenceForm}
+            onSave={handleSaveReference}
+            onClose={() => setEditingReference(null)}
+          />
+
+          <DeleteConfirmationModal
+            isOpen={showDeleteModal}
+            onClose={cancelDelete}
+            onConfirm={confirmDelete}
+            title={
+              deleteTarget
+                ? `Delete ${
+                    deleteTarget.type === 'company'
+                      ? 'Company'
+                      : deleteTarget.type === 'member'
+                      ? 'Team Member'
+                      : deleteTarget.type === 'project'
+                      ? 'Project'
+                      : 'Reference'
+                  }`
+                : 'Delete Item'
+            }
+            message={
+              deleteTarget
+                ? `Are you sure you want to delete this ${deleteTarget.type}?`
+                : 'Are you sure you want to delete this item?'
+            }
+            itemName={
+              deleteTarget?.item?.name ||
+              deleteTarget?.item?.clientName ||
+              deleteTarget?.item?.title
+            }
+            isDeleting={isDeleting}
+          />
+        </div>
+      </Layout>
+    </AuthGuard>
   )
 }

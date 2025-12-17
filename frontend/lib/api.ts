@@ -47,6 +47,39 @@ api.interceptors.response.use(
       data: error.response?.data,
       message: error.message,
     })
+
+    // If the token is invalid/expired, clear it and bounce to login.
+    try {
+      const status = error.response?.status
+      const url = String(error.config?.url || '')
+      const isAuthEndpoint =
+        url.includes('/api/auth/login') ||
+        url.includes('/api/auth/signup') ||
+        url.includes('/api/auth/request-password-reset') ||
+        url.includes('/api/auth/reset-password')
+
+      if (status === 401 && !isAuthEndpoint && typeof window !== 'undefined') {
+        localStorage.removeItem('token')
+        sessionStorage.removeItem('token')
+        delete api.defaults.headers.common['Authorization']
+
+        const pathname = window.location.pathname || '/'
+        const search = window.location.search || ''
+        const isPublic =
+          pathname === '/login' ||
+          pathname === '/signup' ||
+          pathname === '/reset-password' ||
+          pathname.startsWith('/reset-password/')
+
+        if (!isPublic) {
+          const from = encodeURIComponent(`${pathname}${search}`)
+          window.location.href = `/login?from=${from}`
+        }
+      }
+    } catch (_e) {
+      // ignore
+    }
+
     return Promise.reject(error)
   },
 )
@@ -248,12 +281,18 @@ export const contentApi = {
     api.delete(`/api/content/companies/${companyId}`),
   getTeam: () => api.get('/api/content/team'),
   getTeamMember: (id: string) => api.get(`/api/content/team/${id}`),
+  presignTeamHeadshotUpload: (data: {
+    fileName: string
+    contentType: string
+    memberId?: string
+  }) => api.post(`/api/content/team/headshot/presign`, data),
   createTeamMember: (data: any) => api.post('/api/content/team', data),
   updateTeamMember: (memberId: string, data: any) =>
     api.put(`/api/content/team/${memberId}`, data),
   deleteTeamMember: (memberId: string) =>
     api.delete(`/api/content/team/${memberId}`),
   getProjects: () => api.get('/api/content/projects'),
+  getProjectById: (id: string) => api.get(`/api/content/projects/${id}`),
   createProject: (data: any) => api.post('/api/content/projects', data),
   updateProject: (id: string, data: any) =>
     api.put(`/api/content/projects/${id}`, data),
@@ -262,6 +301,7 @@ export const contentApi = {
     api.get('/api/content/references', {
       params: { project_type: projectType },
     }),
+  getReferenceById: (id: string) => api.get(`/api/content/references/${id}`),
   createReference: (data: any) => api.post('/api/content/references', data),
   updateReference: (id: string, data: any) =>
     api.put(`/api/content/references/${id}`, data),

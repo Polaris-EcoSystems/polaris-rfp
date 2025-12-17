@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react'
+import React, { createContext, useContext, useEffect, useState } from 'react'
 import api from './api'
 
 interface User {
@@ -8,20 +8,46 @@ interface User {
 
 interface AuthContextType {
   user: User | null
-  login: (username: string, password: string) => Promise<boolean>
-  setToken: (token: string) => Promise<void>
+  login: (
+    username: string,
+    password: string,
+    remember?: boolean,
+  ) => Promise<boolean>
+  setToken: (token: string, remember?: boolean) => Promise<void>
   logout: () => void
   loading: boolean
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
+function readStoredToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return localStorage.getItem('token') || sessionStorage.getItem('token')
+}
+
+function storeToken(token: string, remember: boolean) {
+  if (typeof window === 'undefined') return
+  if (remember) {
+    localStorage.setItem('token', token)
+    sessionStorage.removeItem('token')
+  } else {
+    sessionStorage.setItem('token', token)
+    localStorage.removeItem('token')
+  }
+}
+
+function clearStoredToken() {
+  if (typeof window === 'undefined') return
+  localStorage.removeItem('token')
+  sessionStorage.removeItem('token')
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
+    const token = readStoredToken()
     if (token) {
       api.defaults.headers.common['Authorization'] = `Bearer ${token}`
       fetchCurrentUser()
@@ -35,17 +61,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const response = await api.get(`/api/auth/me`)
       setUser(response.data)
     } catch (error) {
-      localStorage.removeItem('token')
+      clearStoredToken()
       delete api.defaults.headers.common['Authorization']
     } finally {
       setLoading(false)
     }
   }
 
-  const setToken = async (token: string) => {
+  const setToken = async (token: string, remember: boolean = true) => {
     try {
-  localStorage.setItem('token', token)
-  api.defaults.headers.common['Authorization'] = `Bearer ${token}`
+      storeToken(token, remember)
+      api.defaults.headers.common['Authorization'] = `Bearer ${token}`
       // fetch and set current user
       await fetchCurrentUser()
     } catch (err) {
@@ -53,17 +79,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const login = async (username: string, password: string): Promise<boolean> => {
+  const login = async (
+    username: string,
+    password: string,
+    remember: boolean = true,
+  ): Promise<boolean> => {
     try {
       const response = await api.post(`/api/auth/login`, {
         username,
-        password
+        password,
       })
-      
+
       const { access_token } = response.data
-      localStorage.setItem('token', access_token)
+      storeToken(access_token, remember)
       api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
-      
+
       await fetchCurrentUser()
       return true
     } catch (error) {
@@ -72,7 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const logout = () => {
-    localStorage.removeItem('token')
+    clearStoredToken()
     delete api.defaults.headers.common['Authorization']
     setUser(null)
   }

@@ -7,6 +7,7 @@ import {
   TrashIcon,
   UserGroupIcon,
 } from '@heroicons/react/24/outline'
+import { useMemo, useState } from 'react'
 
 export default function ReferencesSection({ ctx }: { ctx: any }) {
   const {
@@ -28,6 +29,66 @@ export default function ReferencesSection({ ctx }: { ctx: any }) {
     handleDeleteReference,
   } = ctx
 
+  const [search, setSearch] = useState('')
+  const [sortBy, setSortBy] = useState<'org' | 'contact' | 'time'>('org')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [page, setPage] = useState(1)
+  const pageSize = 20
+
+  const filteredSorted = useMemo(() => {
+    const q = String(search || '')
+      .trim()
+      .toLowerCase()
+    const list = Array.isArray(references) ? references : []
+
+    const filtered = q
+      ? list.filter((r: any) => {
+          const org = String(r?.organizationName || '')
+            .toLowerCase()
+            .trim()
+          const contact = String(r?.contactName || '')
+            .toLowerCase()
+            .trim()
+          const email = String(r?.contactEmail || '')
+            .toLowerCase()
+            .trim()
+          const time = String(r?.timePeriod || '')
+            .toLowerCase()
+            .trim()
+          return (
+            org.includes(q) ||
+            contact.includes(q) ||
+            email.includes(q) ||
+            time.includes(q)
+          )
+        })
+      : list
+
+    const keyFn = (r: any) => {
+      if (sortBy === 'contact') return String(r?.contactName || '')
+      if (sortBy === 'time') return String(r?.timePeriod || '')
+      return String(r?.organizationName || '')
+    }
+
+    const dir = sortDir === 'desc' ? -1 : 1
+    const sorted = [...filtered].sort((a, b) => {
+      const av = keyFn(a).toLowerCase()
+      const bv = keyFn(b).toLowerCase()
+      if (av < bv) return -1 * dir
+      if (av > bv) return 1 * dir
+      return 0
+    })
+
+    return sorted
+  }, [references, search, sortBy, sortDir])
+
+  const totalPages = Math.max(1, Math.ceil(filteredSorted.length / pageSize))
+  const currentPage = Math.min(Math.max(1, page), totalPages)
+  const paged = useMemo(() => {
+    const start = (currentPage - 1) * pageSize
+    return filteredSorted.slice(start, start + pageSize)
+  }, [filteredSorted, currentPage])
+
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
       {/* References List */}
@@ -45,12 +106,54 @@ export default function ReferencesSection({ ctx }: { ctx: any }) {
                 + Add Reference
               </button>
             </div>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex-1 sm:max-w-md">
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value)
+                    setPage(1)
+                  }}
+                  placeholder="Search by org, contact, email, time…"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={sortBy}
+                  onChange={(e) => {
+                    setSortBy(e.target.value as any)
+                    setPage(1)
+                  }}
+                  className="border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                >
+                  <option value="org">Sort: Organization</option>
+                  <option value="contact">Sort: Contact</option>
+                  <option value="time">Sort: Time period</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+                    setPage(1)
+                  }}
+                  className="px-3 py-2 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50"
+                  title="Toggle sort direction"
+                >
+                  {sortDir === 'asc' ? '↑' : '↓'}
+                </button>
+              </div>
+            </div>
+            <div className="mt-2 text-xs text-gray-500">
+              Showing {paged.length} of {filteredSorted.length} references
+            </div>
           </div>
           <div className="divide-y divide-gray-200">
-            {references.length > 0 ? (
-              references.map((reference: any, index: number) => (
+            {filteredSorted.length > 0 ? (
+              paged.map((reference: any, index: number) => (
                 <div
-                  key={index}
+                  key={reference._id || reference.referenceId || index}
                   className={`px-6 py-4 cursor-pointer hover:bg-gray-50 transition-colors ${
                     selectedReference === reference
                       ? 'bg-primary-50 border-r-2 border-primary-500'
@@ -115,10 +218,35 @@ export default function ReferencesSection({ ctx }: { ctx: any }) {
               ))
             ) : (
               <div className="px-6 py-4">
-                <p className="text-gray-500 text-sm">No references found</p>
+                <p className="text-gray-500 text-sm">
+                  No references found{search ? ' for this search' : ''}.
+                </p>
               </div>
             )}
           </div>
+          {totalPages > 1 && (
+            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1}
+                className="px-3 py-2 text-sm rounded border border-gray-300 bg-white disabled:opacity-50"
+              >
+                Prev
+              </button>
+              <div className="text-sm text-gray-600">
+                Page {currentPage} / {totalPages}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages}
+                className="px-3 py-2 text-sm rounded border border-gray-300 bg-white disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

@@ -1,10 +1,17 @@
-import '../styles/globals.css'
-import Head from 'next/head'
 import type { AppProps } from 'next/app'
+import Head from 'next/head'
+import { useRouter } from 'next/router'
+import AuthGuard from '../components/AuthGuard'
 import { ToastProvider } from '../components/ui/Toast'
 import { AuthProvider } from '../lib/auth'
+import '../styles/globals.css'
 
 export default function App({ Component, pageProps }: AppProps) {
+  const router = useRouter()
+
+  const publicRoutes = new Set(['/login', '/signup', '/reset-password'])
+  const isPublicRoute = publicRoutes.has(router.pathname)
+
   return (
     <>
       <Head>
@@ -15,7 +22,13 @@ export default function App({ Component, pageProps }: AppProps) {
       <ToastProvider>
         <AuthProvider>
           <div className="min-h-screen bg-gray-50">
-            <Component {...pageProps} />
+            {isPublicRoute ? (
+              <Component {...pageProps} />
+            ) : (
+              <AuthGuard>
+                <Component {...pageProps} />
+              </AuthGuard>
+            )}
           </div>
         </AuthProvider>
       </ToastProvider>

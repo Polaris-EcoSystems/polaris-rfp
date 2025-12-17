@@ -21,9 +21,16 @@ const contentRoutes = safeRequire('contentRoutes', './routes/content')
 const aiRoutes = safeRequire('aiRoutes', './routes/ai')
 const authRoutes = safeRequire('authRoutes', './routes/auth')
 const canvaRoutes = safeRequire('canvaRoutes', './routes/canva')
+const { getJwtSecret } = require('./utils/jwtConfig')
+const { authMiddleware } = require('./middleware/auth')
 
 const app = express()
 const PORT = process.env.PORT || 8080
+
+// Fail fast if JWT is misconfigured in production.
+if (process.env.NODE_ENV === 'production') {
+  getJwtSecret()
+}
 
 // CORS allowlist
 // - Local dev
@@ -100,14 +107,15 @@ try {
 }
 
 // Routes (only mount if successfully loaded)
-if (rfpRoutes) app.use('/api/rfp', rfpRoutes)
-if (attachmentRoutes) app.use('/api/rfp', attachmentRoutes)
-if (proposalRoutes) app.use('/api/proposals', proposalRoutes)
-if (templateRoutes) app.use('/api/templates', templateRoutes)
-if (contentRoutes) app.use('/api/content', contentRoutes)
-if (aiRoutes) app.use('/api/ai', aiRoutes)
+// Protect all app data routes by default; keep /api/auth public.
+if (rfpRoutes) app.use('/api/rfp', authMiddleware, rfpRoutes)
+if (attachmentRoutes) app.use('/api/rfp', authMiddleware, attachmentRoutes)
+if (proposalRoutes) app.use('/api/proposals', authMiddleware, proposalRoutes)
+if (templateRoutes) app.use('/api/templates', authMiddleware, templateRoutes)
+if (contentRoutes) app.use('/api/content', authMiddleware, contentRoutes)
+if (aiRoutes) app.use('/api/ai', authMiddleware, aiRoutes)
 if (authRoutes) app.use('/api/auth', authRoutes)
-if (canvaRoutes) app.use('/api/integrations/canva', canvaRoutes)
+if (canvaRoutes) app.use('/api/integrations/canva', authMiddleware, canvaRoutes)
 
 // Health check
 app.get('/', (req, res) => {

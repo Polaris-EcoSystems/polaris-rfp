@@ -1,10 +1,8 @@
 const crypto = require('crypto')
+const { getJwtSecret } = require('./jwtConfig')
 
 function getKey() {
-  const raw =
-    process.env.CANVA_TOKEN_ENC_KEY ||
-    process.env.JWT_SECRET ||
-    'your-secret-key'
+  const raw = process.env.CANVA_TOKEN_ENC_KEY || getJwtSecret()
   // 32-byte key for AES-256-GCM
   return crypto.createHash('sha256').update(String(raw)).digest()
 }

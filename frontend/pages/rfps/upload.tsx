@@ -1,10 +1,15 @@
-import { useState } from 'react'
-import { useRouter } from 'next/router'
+import {
+  CloudArrowUpIcon,
+  DocumentIcon,
+  DocumentTextIcon,
+  LinkIcon,
+} from '@heroicons/react/24/outline'
 import Head from 'next/head'
+import { useRouter } from 'next/router'
+import { useState } from 'react'
+import { useDropzone } from 'react-dropzone'
 import Layout from '../../components/Layout'
 import { rfpApi } from '../../lib/api'
-import { useDropzone } from 'react-dropzone'
-import { CloudArrowUpIcon, DocumentIcon, LinkIcon, DocumentTextIcon } from '@heroicons/react/24/outline'
 
 export default function UploadRFP() {
   const [uploading, setUploading] = useState(false)
@@ -17,7 +22,10 @@ export default function UploadRFP() {
     const file = acceptedFiles[0]
     if (!file) return
 
-    if (!file.name.endsWith('.pdf')) {
+    const isPdf =
+      file.type === 'application/pdf' ||
+      file.name.toLowerCase().endsWith('.pdf')
+    if (!isPdf) {
       setError('Please upload a PDF file')
       return
     }
@@ -38,7 +46,7 @@ export default function UploadRFP() {
 
   const handleUrlAnalysis = async (e: React.FormEvent) => {
     e.preventDefault()
-    
+
     if (!url.trim()) {
       setError('Please enter a URL')
       return
@@ -75,9 +83,11 @@ export default function UploadRFP() {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
-      'application/pdf': ['.pdf']
+      'application/pdf': ['.pdf', '.PDF'],
+      // Some browsers/providers use a non-standard MIME for PDFs
+      'application/x-pdf': ['.pdf', '.PDF'],
     },
-    maxFiles: 1
+    maxFiles: 1,
   })
 
   return (
@@ -93,7 +103,8 @@ export default function UploadRFP() {
               Add RFP Document
             </h2>
             <p className="mt-1 text-sm text-gray-500">
-              Upload a PDF file or provide a URL to automatically analyze requirements and generate a proposal
+              Upload a PDF file or provide a URL to automatically analyze
+              requirements and generate a proposal
             </p>
           </div>
         </div>
@@ -163,7 +174,9 @@ export default function UploadRFP() {
                     )}
                   </label>
                 </div>
-                <p className="text-xs text-gray-500">PDF files only, up to 10MB</p>
+                <p className="text-xs text-gray-500">
+                  PDF files only, up to 10MB
+                </p>
               </div>
             </div>
           )}
@@ -172,7 +185,10 @@ export default function UploadRFP() {
           {activeTab === 'url' && (
             <form onSubmit={handleUrlAnalysis} className="space-y-4">
               <div>
-                <label htmlFor="rfp-url" className="block text-sm font-medium text-gray-700">
+                <label
+                  htmlFor="rfp-url"
+                  className="block text-sm font-medium text-gray-700"
+                >
                   RFP Document URL
                 </label>
                 <div className="mt-1 relative">
@@ -190,10 +206,11 @@ export default function UploadRFP() {
                   </div>
                 </div>
                 <p className="mt-2 text-sm text-gray-500">
-                  Provide a direct link to an RFP document (PDF) or webpage containing RFP information. Supports any web URL.
+                  Provide a direct link to an RFP document (PDF) or webpage
+                  containing RFP information. Supports any web URL.
                 </p>
               </div>
-              
+
               <div className="flex justify-end">
                 <button
                   type="submit"

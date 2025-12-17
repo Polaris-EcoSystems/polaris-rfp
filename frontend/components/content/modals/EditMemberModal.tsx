@@ -35,6 +35,11 @@ export default function EditMemberModal({
 }: EditMemberModalProps) {
   const [companies, setCompanies] = useState<any[]>([])
   const [loadingCompanies, setLoadingCompanies] = useState(false)
+  const [headshotUploading, setHeadshotUploading] = useState(false)
+  const [headshotUploadError, setHeadshotUploadError] = useState<string | null>(
+    null,
+  )
+  const [headshotPreviewUrl, setHeadshotPreviewUrl] = useState<string>('')
 
   // Fetch companies when modal opens
   useEffect(() => {
@@ -53,6 +58,72 @@ export default function EditMemberModal({
       setCompanies([])
     } finally {
       setLoadingCompanies(false)
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (headshotPreviewUrl) URL.revokeObjectURL(headshotPreviewUrl)
+    }
+  }, [headshotPreviewUrl])
+
+  const uploadHeadshotFile = async (file: File) => {
+    if (!file) return
+    setHeadshotUploadError(null)
+    setHeadshotUploading(true)
+
+    // Client-side safety checks
+    const maxBytes = 5 * 1024 * 1024 // 5MB
+    const isImage = file.type?.startsWith('image/')
+    if (!isImage) {
+      setHeadshotUploading(false)
+      setHeadshotUploadError('Please choose an image file (jpg/png/webp).')
+      return
+    }
+    if (file.size > maxBytes) {
+      setHeadshotUploading(false)
+      setHeadshotUploadError('Image is too large. Max size is 5MB.')
+      return
+    }
+
+    const localPreview = URL.createObjectURL(file)
+    setHeadshotPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return localPreview
+    })
+
+    try {
+      const contentType = file.type || 'application/octet-stream'
+      const resp = await api.post('/api/content/team/headshot/presign', {
+        fileName: file.name,
+        contentType,
+        memberId: memberForm?.memberId || undefined,
+      })
+      const { putUrl, key, s3Uri } = resp.data || {}
+      if (!putUrl || !key) throw new Error('Upload URL missing from response')
+
+      const putResp = await fetch(String(putUrl), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': contentType,
+        },
+        body: file,
+      })
+
+      if (!putResp.ok) {
+        throw new Error(`S3 upload failed (${putResp.status})`)
+      }
+
+      setMemberForm((prev: any) => ({
+        ...prev,
+        headshotS3Key: String(key),
+        headshotS3Uri: s3Uri ? String(s3Uri) : prev?.headshotS3Uri,
+      }))
+    } catch (e: any) {
+      console.error('Headshot upload error:', e)
+      setHeadshotUploadError(e?.message || 'Failed to upload headshot')
+    } finally {
+      setHeadshotUploading(false)
     }
   }
 
@@ -157,7 +228,74 @@ export default function EditMemberModal({
 
             <div>
               <label className="block text-sm font-medium text-gray-700">
-                Headshot URL
+                Headshot
+              </label>
+
+              <div className="mt-1 flex items-center gap-3">
+                <input
+                  type="file"
+                  accept="image/*"
+                  disabled={headshotUploading}
+                  onChange={(e) => {
+                    const f = e.currentTarget.files?.[0]
+                    if (f) uploadHeadshotFile(f)
+                    // allow re-selecting the same file
+                    e.currentTarget.value = ''
+                  }}
+                  className="block w-full text-sm"
+                />
+                {memberForm?.headshotS3Key && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMemberForm((prev: any) => ({
+                        ...prev,
+                        headshotS3Key: null,
+                        headshotS3Uri: null,
+                      }))
+                      setHeadshotPreviewUrl((prev) => {
+                        if (prev) URL.revokeObjectURL(prev)
+                        return ''
+                      })
+                    }}
+                    className="px-3 py-2 text-xs rounded bg-gray-100 hover:bg-gray-200"
+                    disabled={headshotUploading}
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+
+              {(headshotPreviewUrl || memberForm?.headshotUrl) && (
+                <div className="mt-2 flex items-center gap-3">
+                  <img
+                    src={headshotPreviewUrl || memberForm.headshotUrl}
+                    alt="Headshot preview"
+                    className="h-12 w-12 rounded-full object-cover border"
+                    onError={(e) => {
+                      ;(e.currentTarget as HTMLImageElement).style.display =
+                        'none'
+                    }}
+                  />
+                  <div className="text-xs text-gray-500">
+                    <div>
+                      {headshotUploading
+                        ? 'Uploading…'
+                        : memberForm?.headshotS3Key
+                        ? 'Uploaded. Click “Save Changes” to persist.'
+                        : 'Upload an image or paste a URL below.'}
+                    </div>
+                    {headshotUploadError && (
+                      <div className="text-red-600 mt-1">
+                        {headshotUploadError}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <label className="block text-xs font-medium text-gray-600 mt-3">
+                Headshot URL (optional)
               </label>
               <input
                 type="url"
@@ -171,22 +309,6 @@ export default function EditMemberModal({
                 className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2"
                 placeholder="https://..."
               />
-              {memberForm.headshotUrl && (
-                <div className="mt-2 flex items-center gap-3">
-                  <img
-                    src={memberForm.headshotUrl}
-                    alt="Headshot preview"
-                    className="h-12 w-12 rounded-full object-cover border"
-                    onError={(e) => {
-                      ;(e.currentTarget as HTMLImageElement).style.display =
-                        'none'
-                    }}
-                  />
-                  <p className="text-xs text-gray-500">
-                    Used in team profiles and Canva headshot autofill.
-                  </p>
-                </div>
-              )}
             </div>
 
             <div>

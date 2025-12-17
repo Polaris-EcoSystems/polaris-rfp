@@ -137,6 +137,11 @@ async function getProjectReferencesByIds(referenceIds) {
   return all.filter((r) => set.has(String(r._id || r.referenceId)))
 }
 
+async function getProjectReferenceById(referenceId) {
+  const { Item } = await get({ Key: projectRefKey(referenceId) })
+  return normalize(Item, { idField: 'referenceId' })
+}
+
 async function upsertProjectReference(ref) {
   const referenceId = ref.referenceId || newId('ref')
   const now = nowIso()
@@ -219,6 +224,7 @@ module.exports = {
   // references
   listProjectReferences,
   getProjectReferencesByIds,
+  getProjectReferenceById,
   upsertProjectReference,
   deleteProjectReference,
   // past projects

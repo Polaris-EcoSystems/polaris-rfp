@@ -1,6 +1,8 @@
 const bcrypt = require('bcryptjs')
 const jwt = require('jsonwebtoken')
-const { get, transactWrite, update, getTableName } = require('./ddb')
+const crypto = require('crypto')
+const { get, put, transactWrite, update, getTableName } = require('./ddb')
+const { getJwtSecret, getJwtExpire } = require('../utils/jwtConfig')
 const {
   nowIso,
   normalizeEmail,
@@ -17,11 +19,11 @@ function newId() {
 }
 
 function jwtSecret() {
-  return process.env.JWT_SECRET || 'your-secret-key'
+  return getJwtSecret()
 }
 
 function jwtExpire() {
-  return process.env.JWT_EXPIRE || '24h'
+  return getJwtExpire()
 }
 
 async function getUserById(userId) {
@@ -173,9 +175,122 @@ async function verifyLogin({ usernameOrEmail, password }) {
   }
 }
 
+function sha256Hex(input) {
+  return crypto.createHash('sha256').update(String(input)).digest('hex')
+}
+
+function resetTokenKey(tokenHash) {
+  return { pk: `RESET#${String(tokenHash)}`, sk: 'TOKEN' }
+}
+
+async function requestPasswordReset({ email }) {
+  const emailLower = normalizeEmail(email)
+  if (!emailLower) return { ok: true }
+
+  const userId = await getUserIdByUsernameOrEmail(emailLower)
+  if (!userId) return { ok: true }
+
+  const user = await getUserById(userId)
+  if (!user || user.isActive === false) return { ok: true }
+
+  const token = crypto.randomBytes(32).toString('base64url')
+  const tokenHash = sha256Hex(token)
+  const createdAt = nowIso()
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString() // 30m
+
+  // Store token as a separate item so we can look it up by token hash.
+  await put({
+    Item: {
+      ...resetTokenKey(tokenHash),
+      entityType: 'PasswordResetToken',
+      tokenHash,
+      userId,
+      createdAt,
+      expiresAt,
+    },
+  })
+
+  // Best-effort: attach metadata to user profile for auditing.
+  try {
+    await update({
+      Key: userProfileKey(userId),
+      UpdateExpression:
+        'SET passwordResetRequestedAt = :t, passwordResetExpiresAt = :e, updatedAt = :u',
+      ExpressionAttributeValues: {
+        ':t': createdAt,
+        ':e': expiresAt,
+        ':u': nowIso(),
+      },
+    })
+  } catch {}
+
+  return { ok: true, token, expiresAt }
+}
+
+async function resetPasswordWithToken({ token, newPassword }) {
+  const rawToken = String(token || '').trim()
+  if (!rawToken) {
+    const err = new Error('Invalid or expired reset token')
+    err.code = 'invalid_token'
+    throw err
+  }
+
+  const tokenHash = sha256Hex(rawToken)
+  const tokenKey = resetTokenKey(tokenHash)
+  const { Item } = await get({ Key: tokenKey })
+  const rec = Item || null
+  const now = nowIso()
+
+  if (!rec || rec.expiresAt <= now || rec.usedAt) {
+    const err = new Error('Invalid or expired reset token')
+    err.code = 'invalid_token'
+    throw err
+  }
+
+  const userId = rec.userId
+  const passwordHash = await bcrypt.hash(String(newPassword), 12)
+
+  // Use a transaction so a token can only be used once.
+  await transactWrite({
+    TransactItems: [
+      {
+        Update: {
+          TableName: getTableName(),
+          Key: tokenKey,
+          UpdateExpression: 'SET usedAt = :u',
+          ConditionExpression:
+            'attribute_not_exists(usedAt) AND expiresAt > :u',
+          ExpressionAttributeValues: { ':u': now },
+        },
+      },
+      {
+        Update: {
+          TableName: getTableName(),
+          Key: userProfileKey(userId),
+          UpdateExpression:
+            'SET passwordHash = :p, passwordResetCompletedAt = :u, updatedAt = :u REMOVE passwordResetExpiresAt',
+          ExpressionAttributeValues: { ':p': passwordHash, ':u': now },
+        },
+      },
+    ],
+  })
+
+  // Return the same login behavior as signup/login (issue a new JWT).
+  const user = await getUserById(userId)
+  const jwtToken = jwt.sign(
+    { userId, username: user?.username || '' },
+    jwtSecret(),
+    { expiresIn: jwtExpire() },
+  )
+
+  return { ok: true, token: jwtToken }
+}
+
 module.exports = {
   getUserById,
   getUserIdByUsernameOrEmail,
   createUser,
   verifyLogin,
+  requestPasswordReset,
+  resetPasswordWithToken,
 }

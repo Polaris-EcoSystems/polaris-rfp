@@ -43,6 +43,22 @@ Parameters:
     Description: Frontend base URL for backend CORS + OAuth (use custom domain URL when available)
     Default: 'https://rfp.polariseco.com'
 
+  EnableBackendApiCustomDomain:
+    Type: String
+    Description: Whether to use a custom domain for the backend API (App Runner)
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  BackendApiCustomDomainName:
+    Type: String
+    Description: Backend API custom domain name
+    Default: 'api.rfp.polariseco.com'
+
+  Route53HostedZoneName:
+    Type: String
+    Description: Route53 hosted zone name (trailing dot), e.g. polariseco.com.
+    Default: 'polariseco.com.'
+
   CanvaClientId:
     Type: String
     Default: ''
@@ -77,6 +93,7 @@ Parameters:
 
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
+  UseBackendApiCustomDomain: !Equals [!Ref EnableBackendApiCustomDomain, 'true']
   UseProvidedCanvaClientId: !Not [!Equals [!Ref CanvaClientId, '']]
   UseProvidedCanvaClientSecret: !Not [!Equals [!Ref CanvaClientSecret, '']]
   UseProvidedCanvaRedirectUri: !Not [!Equals [!Ref CanvaRedirectUri, '']]
@@ -118,6 +135,47 @@ Resources:
           Projection:
             ProjectionType: ALL
 
+  PolarisAssetsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub 'polaris-rfp-assets-${Environment}-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          # Clean up orphan uploads (uploads done before a member is saved)
+          - Id: ExpireUnassignedTeamUploads
+            Status: Enabled
+            Prefix: team/unassigned/
+            ExpirationInDays: 7
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - HEAD
+            AllowedHeaders:
+              - '*'
+            ExposedHeaders:
+              - ETag
+            MaxAge: 3000
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
   # Shared App Runner instance role (requested: full DynamoDB + S3 perms)
   AppRunnerInstanceRole:
     Type: AWS::IAM::Role
@@ -131,9 +189,29 @@ Resources:
               Service: tasks.apprunner.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonS3FullAccess
         - arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess
         - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Policies:
+        - PolicyName: PolarisAssetsS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AssetsBucketList
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - !GetAtt PolarisAssetsBucket.Arn
+              - Sid: AssetsObjectRW
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:CopyObject
+                Resource:
+                  - !Sub '${PolarisAssetsBucket.Arn}/*'
 
   BackendStack:
     Type: AWS::CloudFormation::Stack
@@ -145,6 +223,9 @@ Resources:
         Environment: !Ref Environment
         CodeStarConnectionArn: !Ref CodeStarConnectionArn
         FrontendBaseUrl: !Ref FrontendBaseUrl
+        EnableApiCustomDomain: !Ref EnableBackendApiCustomDomain
+        ApiCustomDomainName: !Ref BackendApiCustomDomainName
+        Route53HostedZoneName: !Ref Route53HostedZoneName
         CanvaClientId: !If
           - UseProvidedCanvaClientId
           - !Ref CanvaClientId
@@ -162,6 +243,7 @@ Resources:
           - !Ref CanvaTokenEncKey
           - '{{resolve:secretsmanager:polaris-rfp/canva:SecretString:CANVA_TOKEN_ENC_KEY}}'
         DdbTableName: !Ref PolarisDataTable
+        AssetsBucketName: !Ref PolarisAssetsBucket
         JwtSecret: !Ref JwtSecret
         JwtExpire: !Ref JwtExpire
         AppRunnerInstanceRoleArn: !GetAtt AppRunnerInstanceRole.Arn
@@ -175,7 +257,10 @@ Resources:
         BranchName: !Ref BranchName
         Environment: !Ref Environment
         GitHubToken: !Ref GitHubToken
-        BackendUrl: !GetAtt BackendStack.Outputs.AppRunnerServiceUrl
+        BackendUrl: !If
+          - UseBackendApiCustomDomain
+          - !Sub 'https://${BackendApiCustomDomainName}'
+          - !GetAtt BackendStack.Outputs.AppRunnerServiceUrl
         EnableCustomDomain: !Ref EnableCustomDomain
         CustomDomainName: !Ref CustomDomainName
         CustomDomainPrefix: !Ref CustomDomainPrefix
@@ -185,9 +270,16 @@ Outputs:
     Description: DynamoDB table name
     Value: !Ref PolarisDataTable
 
+  AssetsBucketName:
+    Description: S3 bucket name for uploaded assets (team headshots, etc.)
+    Value: !Ref PolarisAssetsBucket
+
   BackendUrl:
     Description: App Runner backend URL
-    Value: !GetAtt BackendStack.Outputs.AppRunnerServiceUrl
+    Value: !If
+      - UseBackendApiCustomDomain
+      - !Sub 'https://${BackendApiCustomDomainName}'
+      - !GetAtt BackendStack.Outputs.AppRunnerServiceUrl
 
   BackendArn:
     Description: App Runner backend ARN

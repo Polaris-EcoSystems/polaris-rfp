@@ -22,10 +22,7 @@ const {
 } = require('../services/canvaProposalMapper')
 
 const router = express.Router()
-
-function getJwtSecret() {
-  return process.env.JWT_SECRET || 'your-secret-key'
-}
+const { getJwtSecret } = require('../utils/jwtConfig')
 
 function getFrontendBaseUrl() {
   return (
