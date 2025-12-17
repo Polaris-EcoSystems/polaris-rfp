@@ -1,5 +1,6 @@
 const mongoose = require('mongoose')
 
+
 // Cache of an autofilled Canva design for a given proposal/company/template.
 // We reuse this design for export/open-in-Canva until the proposal changes.
 const canvaProposalDesignSchema = new mongoose.Schema(
