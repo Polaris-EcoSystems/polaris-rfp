@@ -1,5 +1,4 @@
 const express = require('express')
-const mongoose = require('mongoose')
 const cors = require('cors')
 const helmet = require('helmet')
 const morgan = require('morgan')
@@ -82,28 +81,13 @@ app.use(morgan('combined'))
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 
-// MongoDB connection with graceful fallback
-const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URL
-
-if (MONGODB_URI) {
-  mongoose
-    .connect(MONGODB_URI)
-    .then(() => {
-      console.log('🚀 Connected to MongoDB successfully')
-      console.log('💾 Mode: Full MongoDB persistence')
-    })
-    .catch((err) => {
-      console.error(
-        '⚠️ MongoDB connection failed, continuing without database:',
-        err.message,
-      )
-      console.log(
-        '💾 Mode: Running without MongoDB (some features may be limited)',
-      )
-    })
-} else {
-  console.log('⚠️ No MongoDB URI provided, running without database')
-  console.log('💾 Mode: Running without MongoDB (some features may be limited)')
+// DynamoDB (required)
+try {
+  // will throw if not configured
+  require('./db/ddb').getTableName()
+  console.log('✅ DynamoDB configured via DDB_TABLE_NAME')
+} catch (e) {
+  console.error('❌ DynamoDB not configured:', e?.message || e)
 }
 
 // Routes
@@ -124,8 +108,7 @@ app.get('/', (req, res) => {
     status: 'running',
     port: PORT,
     environment: process.env.NODE_ENV || 'development',
-    mongodb:
-      mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    dynamodb: process.env.DDB_TABLE_NAME ? 'configured' : 'missing',
     endpoints: [
       'GET /api/rfp',
       'POST /api/rfp',
@@ -135,6 +118,8 @@ app.get('/', (req, res) => {
       'POST /api/templates',
       'GET /api/content',
       'POST /api/ai',
+      'POST /api/auth/signup',
+      'POST /api/auth/login',
     ],
   })
 })

@@ -1,8 +1,7 @@
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
-const User = require('../models/User');
 const { authMiddleware } = require('../middleware/auth');
+const { createUser, verifyLogin } = require('../db/users');
 
 const router = express.Router();
 
@@ -19,32 +18,13 @@ router.post('/login', [
 
     const { username, password } = req.body;
 
-    // Find user
-    const user = await User.findOne({ 
-      $or: [{ username }, { email: username }] 
-    });
-
-    if (!user || !await user.comparePassword(password)) {
+    const result = await verifyLogin({ usernameOrEmail: username, password });
+    if (!result) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    if (!user.isActive) {
-      return res.status(401).json({ error: 'Account is inactive' });
-    }
-
-    // Update last login
-    user.lastLogin = new Date();
-    await user.save();
-
-    // Generate token
-    const token = jwt.sign(
-      { userId: user._id, username: user.username },
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: process.env.JWT_EXPIRE || '24h' }
-    );
-
     res.json({
-      access_token: token,
+      access_token: result.token,
       token_type: 'bearer',
       expires_in: process.env.JWT_EXPIRE || '24h'
     });
@@ -80,45 +60,23 @@ router.post('/signup', [
     }
 
     const { username, email, password,  } = req.body;
-
-    // Check if user already exists
-    const existingUser = await User.findOne({
-      $or: [{ username }, { email }]
-    });
-
-    if (existingUser) {
-      return res.status(400).json({ error: 'User already exists' });
-    }
-
-    // Create user
-    const user = new User({
-      username,
-      email,
-      password,
-      role: 'user'
-    });
-
-    await user.save();
-
-    // Generate token for the new user (same format as login)
-    const token = jwt.sign(
-      { userId: user._id, username: user.username },
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: process.env.JWT_EXPIRE || '24h' }
-    );
+    const created = await createUser({ username, email, password });
 
     res.status(201).json({
       message: 'User created successfully',
-      access_token: token,
+      access_token: created.token,
       token_type: 'bearer',
       expires_in: process.env.JWT_EXPIRE || '24h',
       user: {
-        username: user.username,
-        email: user.email,
+        username: created.user.username,
+        email: created.user.email,
       }
     });
   } catch (error) {
     console.error('Registration error:', error);
+    if (error && error.code === 'user_exists') {
+      return res.status(400).json({ error: 'User already exists' });
+    }
     res.status(500).json({ error: 'Registration failed' });
   }
 });

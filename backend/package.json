@@ -9,6 +9,8 @@
     "test": "jest"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.621.0",
+    "@aws-sdk/lib-dynamodb": "^3.621.0",
     "axios": "^1.11.0",
     "bcryptjs": "^2.4.3",
     "cheerio": "^1.1.0",
@@ -21,7 +23,6 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "mammoth": "^1.11.0",
-    "mongoose": "^8.0.0",
     "morgan": "^1.10.0",
     "multer": "^1.4.5-lts.1",
     "officegen": "^0.6.5",
