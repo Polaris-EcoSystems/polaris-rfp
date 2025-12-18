@@ -47,6 +47,63 @@ def admin_set_password(*, user_pool_id: str, email: str, new_password: str) -> N
     )
 
 
+def admin_create_user(
+    *,
+    user_pool_id: str,
+    email: str,
+    preferred_username: str | None = None,
+) -> dict[str, Any]:
+    # AdminCreateUser requires a TemporaryPassword even if we suppress messages.
+    import secrets
+    import string
+
+    alphabet = string.ascii_letters + string.digits
+    tmp = "".join(secrets.choice(alphabet) for _ in range(24)) + "Aa1"
+
+    attrs = [{"Name": "email", "Value": email}]
+    if preferred_username:
+        attrs.append({"Name": "preferred_username", "Value": preferred_username})
+
+    return client().admin_create_user(
+        UserPoolId=user_pool_id,
+        Username=email,
+        TemporaryPassword=tmp,
+        MessageAction="SUPPRESS",
+        UserAttributes=attrs,
+    )
+
+
+def initiate_custom_auth(
+    *,
+    email: str,
+    client_metadata: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """
+    Starts Cognito CUSTOM_AUTH flow (used for magic-link sign in).
+    ClientMetadata is forwarded to Lambda triggers.
+    """
+    return client().initiate_auth(
+        AuthFlow="CUSTOM_AUTH",
+        ClientId=settings.cognito_client_id,
+        AuthParameters={"USERNAME": email},
+        ClientMetadata=client_metadata or {},
+    )
+
+
+def respond_to_custom_challenge(
+    *,
+    session: str,
+    email: str,
+    answer: str,
+) -> dict[str, Any]:
+    return client().respond_to_auth_challenge(
+        ClientId=settings.cognito_client_id,
+        ChallengeName="CUSTOM_CHALLENGE",
+        Session=session,
+        ChallengeResponses={"USERNAME": email, "ANSWER": answer},
+    )
+
+
 def describe_user_pool(*, user_pool_id: str) -> dict[str, Any]:
     """
     Returns the user pool metadata including the attribute schema.

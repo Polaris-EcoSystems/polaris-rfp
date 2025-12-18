@@ -8,11 +8,15 @@ interface User {
 
 interface AuthContextType {
   user: User | null
-  login: (
-    username: string,
-    password: string,
-    remember?: boolean,
+  requestMagicLink: (
+    email: string,
+    opts?: { username?: string; returnTo?: string },
   ) => Promise<boolean>
+  verifyMagicLink: (
+    magicId: string,
+    code: string,
+    remember?: boolean,
+  ) => Promise<{ ok: boolean; returnTo?: string }>
   setToken: (token: string, remember?: boolean) => Promise<void>
   logout: () => void
   loading: boolean
@@ -80,24 +84,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const login = async (
-    username: string,
-    password: string,
-    remember: boolean = true,
+    email: string,
+    opts?: { username?: string; returnTo?: string },
   ): Promise<boolean> => {
     try {
-      const response = await api.post(`/api/auth/login`, {
-        username,
-        password,
+      await api.post(`/api/auth/magic-link/request`, {
+        email,
+        username: opts?.username,
+        returnTo: opts?.returnTo,
       })
-
-      const { access_token } = response.data
-      storeToken(access_token, remember)
-      api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`
-
-      await fetchCurrentUser()
       return true
-    } catch (error) {
+    } catch (_e) {
       return false
+    }
+  }
+
+  const verifyMagicLink = async (
+    magicId: string,
+    code: string,
+    remember: boolean = true,
+  ): Promise<{ ok: boolean; returnTo?: string }> => {
+    try {
+      const resp = await api.post(`/api/auth/magic-link/verify`, {
+        magicId,
+        code,
+      })
+      const token = resp.data?.access_token
+      const returnTo = resp.data?.returnTo
+      if (!token) return { ok: false }
+      await setToken(token, remember)
+      return { ok: true, returnTo }
+    } catch (_e) {
+      return { ok: false }
     }
   }
 
@@ -108,7 +126,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, login, setToken, logout, loading }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        requestMagicLink: login,
+        verifyMagicLink,
+        setToken,
+        logout,
+        loading,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   )

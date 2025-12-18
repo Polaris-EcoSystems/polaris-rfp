@@ -347,6 +347,18 @@ export const profileApi = {
       `/api/profile/attributes/${encodeURIComponent(name)}`,
     ),
 }
+
+export const magicLinkApi = {
+  request: (data: { email: string; username?: string; returnTo?: string }) =>
+    api.post('/api/auth/magic-link/request', data),
+  verify: (data: { magicId: string; code: string }) =>
+    api.post<{
+      access_token: string
+      token_type: string
+      expires_in: string
+      returnTo?: string
+    }>('/api/auth/magic-link/verify', data),
+}
 export const proposalApiPdf = {
   generate: (data: {
     rfpId: string

@@ -7,7 +7,177 @@ Parameters:
     Default: production
     AllowedValues: ['development', 'staging', 'production']
 
+  FrontendBaseUrl:
+    Type: String
+    Description: Base URL for the Next.js frontend (magic link target)
+    Default: 'https://rfp.polariseco.com'
+
+  MagicLinkFromEmail:
+    Type: String
+    Description: SES-verified From address used for magic links (must be verified in SES)
+    Default: 'no-reply@polariseco.com'
+
 Resources:
+  MagicLinkSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'polaris-rfp-magic-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      SSESpecification:
+        SSEEnabled: true
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
+  CognitoMagicLinkLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'polaris-cognito-magic-${Environment}-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SendMagicLinkEmail
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: SesSend
+                Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+
+  DefineAuthChallengeFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'polaris-define-auth-${Environment}'
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt CognitoMagicLinkLambdaRole.Arn
+      Timeout: 10
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              session = event.get("request", {}).get("session") or []
+              if len(session) == 0:
+                  event["response"]["challengeName"] = "CUSTOM_CHALLENGE"
+                  event["response"]["issueTokens"] = False
+                  event["response"]["failAuthentication"] = False
+                  return event
+
+              last = session[-1]
+              if last.get("challengeName") == "CUSTOM_CHALLENGE" and last.get("challengeResult") is True:
+                  event["response"]["issueTokens"] = True
+                  event["response"]["failAuthentication"] = False
+                  return event
+
+              if len(session) >= 3:
+                  event["response"]["issueTokens"] = False
+                  event["response"]["failAuthentication"] = True
+                  return event
+
+              event["response"]["challengeName"] = "CUSTOM_CHALLENGE"
+              event["response"]["issueTokens"] = False
+              event["response"]["failAuthentication"] = False
+              return event
+
+  CreateAuthChallengeFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'polaris-create-auth-${Environment}'
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt CognitoMagicLinkLambdaRole.Arn
+      Timeout: 15
+      Environment:
+        Variables:
+          FRONTEND_BASE_URL: !Ref FrontendBaseUrl
+          FROM_EMAIL: !Ref MagicLinkFromEmail
+      Code:
+        ZipFile: |
+          import os
+          import secrets
+          import boto3
+          import urllib.parse
+
+          ses = boto3.client("ses")
+
+          def _send_email(to_email: str, subject: str, body_text: str):
+              ses.send_email(
+                  Source=os.environ["FROM_EMAIL"],
+                  Destination={"ToAddresses": [to_email]},
+                  Message={
+                      "Subject": {"Data": subject, "Charset": "UTF-8"},
+                      "Body": {"Text": {"Data": body_text, "Charset": "UTF-8"}},
+                  },
+              )
+
+          def handler(event, context):
+              req = event.get("request", {})
+              user_attrs = req.get("userAttributes") or {}
+              email = user_attrs.get("email") or ""
+
+              if req.get("challengeName") != "CUSTOM_CHALLENGE":
+                  return event
+
+              code = f"{secrets.randbelow(1000000):06d}"
+              meta = req.get("clientMetadata") or {}
+              magic_id = meta.get("magicId") or ""
+              return_to = meta.get("returnTo") or "/"
+              base = (meta.get("frontendBaseUrl") or os.environ.get("FRONTEND_BASE_URL") or "").rstrip("/")
+
+              rt = urllib.parse.quote(str(return_to), safe="")
+              link = f"{base}/magic?mid={magic_id}&code={code}&returnTo={rt}"
+
+              if email:
+                  try:
+                      _send_email(
+                          email,
+                          "Your sign-in link",
+                          f"Click to sign in:\\n\\n{link}\\n\\nThis link expires in 10 minutes.\\n",
+                      )
+                  except Exception:
+                      # If SES is not configured, do not crash auth flow.
+                      pass
+
+              event["response"]["publicChallengeParameters"] = {"magicId": magic_id}
+              event["response"]["privateChallengeParameters"] = {"answer": code}
+              event["response"]["challengeMetadata"] = "MAGIC_LINK"
+              return event
+
+  VerifyAuthChallengeFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'polaris-verify-auth-${Environment}'
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt CognitoMagicLinkLambdaRole.Arn
+      Timeout: 10
+      Code:
+        ZipFile: |
+          def handler(event, context):
+              expected = (event.get("request", {}).get("privateChallengeParameters") or {}).get("answer") or ""
+              provided = (event.get("request", {}).get("challengeAnswer") or "") or ""
+              event["response"]["answerCorrect"] = str(provided).strip() == str(expected).strip()
+              return event
+
   UserPool:
     Type: AWS::Cognito::UserPool
     Properties:
@@ -37,6 +207,10 @@ Resources:
           AttributeDataType: String
           Required: false
           Mutable: true
+      LambdaConfig:
+        DefineAuthChallenge: !GetAtt DefineAuthChallengeFn.Arn
+        CreateAuthChallenge: !GetAtt CreateAuthChallengeFn.Arn
+        VerifyAuthChallengeResponse: !GetAtt VerifyAuthChallengeFn.Arn
 
   UserPoolClient:
     Type: AWS::Cognito::UserPoolClient
@@ -46,11 +220,34 @@ Resources:
       GenerateSecret: false
       PreventUserExistenceErrors: ENABLED
       ExplicitAuthFlows:
-        - ALLOW_USER_PASSWORD_AUTH
-        - ALLOW_USER_SRP_AUTH
+        - ALLOW_CUSTOM_AUTH
         - ALLOW_REFRESH_TOKEN_AUTH
       SupportedIdentityProviders:
         - COGNITO
+
+  DefineAuthChallengePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DefineAuthChallengeFn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  CreateAuthChallengePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CreateAuthChallengeFn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
+
+  VerifyAuthChallengePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref VerifyAuthChallengeFn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt UserPool.Arn
 
 Outputs:
   UserPoolId:
@@ -64,3 +261,7 @@ Outputs:
   UserPoolClientId:
     Description: Cognito User Pool App Client ID
     Value: !Ref UserPoolClient
+
+  MagicLinkSessionsTableName:
+    Description: DynamoDB table name used for storing magic-link sessions (backend-side)
+    Value: !Ref MagicLinkSessionsTable

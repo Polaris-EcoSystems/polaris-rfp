@@ -38,6 +38,11 @@ Parameters:
     Description: Frontend base URL for backend CORS + OAuth (use custom domain URL when available)
     Default: 'https://rfp.polariseco.com'
 
+  MagicLinkFromEmail:
+    Type: String
+    Description: SES-verified From address used for Cognito magic links
+    Default: 'no-reply@polariseco.com'
+
   # Backend (ECS + ALB)
   BackendApiDomainName:
     Type: String
@@ -100,6 +105,8 @@ Resources:
       TemplateURL: auth-cognito.yml
       Parameters:
         Environment: !Ref Environment
+        FrontendBaseUrl: !Ref FrontendBaseUrl
+        MagicLinkFromEmail: !Ref MagicLinkFromEmail
 
   PolarisJwtSecret:
     Type: AWS::SecretsManager::Secret
@@ -210,6 +217,7 @@ Resources:
         CognitoUserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
         CognitoClientId: !GetAtt AuthStack.Outputs.UserPoolClientId
         CognitoRegion: !Ref AWS::Region
+        MagicLinkSessionsTableName: !GetAtt AuthStack.Outputs.MagicLinkSessionsTableName
         CanvaClientId: !If
           - UseProvidedCanvaClientId
           - !Ref CanvaClientId

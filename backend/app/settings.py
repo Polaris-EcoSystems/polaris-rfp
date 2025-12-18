@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     )
     cognito_region: str = Field(default="us-east-1", validation_alias="COGNITO_REGION")
 
+    # Auth (Magic link)
+    magic_link_table_name: str | None = Field(
+        default=None, validation_alias="MAGIC_LINK_TABLE_NAME"
+    )
+
     # Misc integrations
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
 

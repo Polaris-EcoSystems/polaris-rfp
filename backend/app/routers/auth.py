@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
+import base64
+import os
+
 from pydantic import BaseModel, EmailStr, Field
 
 from ..services import cognito_idp
+from ..services.magic_links_repo import (
+    delete_magic_session,
+    get_magic_session,
+    put_magic_session,
+)
 from ..services.password_reset import consume_password_reset, create_password_reset
 from ..settings import settings
 
@@ -28,51 +36,124 @@ class ResetRequest(BaseModel):
 
 @router.post("/login")
 def login(body: LoginRequest):
-    if not settings.cognito_client_id or not settings.cognito_user_pool_id:
-        raise HTTPException(status_code=500, detail="Cognito is not configured")
-
-    email = body.username.strip()
-    try:
-        resp = cognito_idp.initiate_auth(email=email, password=body.password)
-        auth = resp.get("AuthenticationResult") or {}
-        # Use IdToken as the bearer token to validate user identity (/me needs email claim).
-        id_token = auth.get("IdToken")
-        if not id_token:
-            raise RuntimeError("No IdToken returned")
-        return {"access_token": id_token, "token_type": "bearer", "expires_in": "24h"}
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+    # Password login is deprecated in favor of magic-link auth.
+    raise HTTPException(status_code=400, detail="Use magic link authentication")
 
 
 @router.post("/signup", status_code=201)
 def signup(body: SignupRequest):
+    # Password signup is deprecated in favor of magic-link auth.
+    raise HTTPException(status_code=400, detail="Use magic link authentication")
+
+
+class MagicLinkRequest(BaseModel):
+    email: EmailStr
+    username: str | None = None
+    returnTo: str | None = None
+
+
+@router.post("/magic-link/request")
+def request_magic_link(body: MagicLinkRequest):
     if not settings.cognito_client_id or not settings.cognito_user_pool_id:
         raise HTTPException(status_code=500, detail="Cognito is not configured")
+    if not settings.magic_link_table_name:
+        raise HTTPException(status_code=500, detail="Magic link is not configured")
 
     email = str(body.email).strip().lower()
+    preferred_username = str(body.username).strip() if body.username else None
+    return_to = str(body.returnTo or "/").strip() or "/"
+
+    # Create a short opaque id used to look up the Cognito Session server-side.
+    magic_id = base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
+
+    # Ensure the user exists (create on first login = signup + login)
     try:
-        cognito_idp.sign_up(
+        cognito_idp.admin_get_user(user_pool_id=settings.cognito_user_pool_id, username=email)
+    except Exception:
+        try:
+            cognito_idp.admin_create_user(
+                user_pool_id=settings.cognito_user_pool_id,
+                email=email,
+                preferred_username=preferred_username,
+            )
+        except Exception:
+            # Enumeration-safe: still return ok
+            return {"ok": True}
+
+    # Start custom auth; triggers will email the link.
+    try:
+        resp = cognito_idp.initiate_custom_auth(
             email=email,
-            password=body.password,
-            preferred_username=body.username.strip(),
+            client_metadata={
+                "magicId": magic_id,
+                "returnTo": return_to,
+                "frontendBaseUrl": settings.frontend_base_url,
+            },
         )
-        # Compatibility: auto-confirm + auto-login so the UI behavior matches legacy Node.
-        cognito_idp.admin_confirm_sign_up(user_pool_id=settings.cognito_user_pool_id, email=email)
-        login_resp = cognito_idp.initiate_auth(email=email, password=body.password)
-        auth = login_resp.get("AuthenticationResult") or {}
+        session = str(resp.get("Session") or "")
+        if not session:
+            # Still return ok; user can retry
+            return {"ok": True}
+
+        put_magic_session(
+            magic_id=magic_id,
+            email=email,
+            session=session,
+            return_to=return_to,
+            ttl_seconds=600,
+        )
+        return {"ok": True}
+    except Exception:
+        # Enumeration-safe
+        return {"ok": True}
+
+
+class MagicLinkVerify(BaseModel):
+    magicId: str = Field(..., min_length=8)
+    code: str = Field(..., min_length=4)
+
+
+@router.post("/magic-link/verify")
+def verify_magic_link(body: MagicLinkVerify):
+    if not settings.cognito_client_id or not settings.cognito_user_pool_id:
+        raise HTTPException(status_code=500, detail="Cognito is not configured")
+    if not settings.magic_link_table_name:
+        raise HTTPException(status_code=500, detail="Magic link is not configured")
+
+    magic_id = str(body.magicId).strip()
+    code = str(body.code).strip()
+
+    sess = get_magic_session(magic_id=magic_id)
+    if not sess:
+        raise HTTPException(status_code=400, detail="Invalid or expired magic link")
+
+    email = str(sess.get("email") or "").strip().lower()
+    session = str(sess.get("session") or "")
+    return_to = str(sess.get("returnTo") or "/")
+    if not email or not session:
+        delete_magic_session(magic_id=magic_id)
+        raise HTTPException(status_code=400, detail="Invalid or expired magic link")
+
+    try:
+        resp = cognito_idp.respond_to_custom_challenge(
+            session=session,
+            email=email,
+            answer=code,
+        )
+        auth = resp.get("AuthenticationResult") or {}
         id_token = auth.get("IdToken")
         if not id_token:
             raise RuntimeError("No IdToken returned")
+        delete_magic_session(magic_id=magic_id)
         return {
-            "message": "User created successfully",
             "access_token": id_token,
             "token_type": "bearer",
             "expires_in": "24h",
-            "user": {"username": body.username.strip(), "email": email},
+            "returnTo": return_to,
         }
-    except Exception as e:
-        # Keep legacy error shape
-        raise HTTPException(status_code=400, detail="User already exists")
+    except Exception:
+        # Don't leak if code incorrect; keep short
+        raise HTTPException(status_code=400, detail="Invalid or expired magic link")
 
 
 @router.post("/request-password-reset")

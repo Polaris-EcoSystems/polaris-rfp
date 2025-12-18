@@ -26,6 +26,9 @@ COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
 COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
 COGNITO_REGION=us-east-1
 
+# Magic link (required for passwordless login)
+MAGIC_LINK_TABLE_NAME=polaris-rfp-magic-production
+
 # S3 assets bucket (headshots, etc.)
 ASSETS_BUCKET_NAME=your-assets-bucket-name
 

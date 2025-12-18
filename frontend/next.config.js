@@ -4,9 +4,7 @@ const nextConfig = {
   // Produce a self-contained server bundle for Amplify Hosting (WEB_COMPUTE).
   output: 'standalone',
   env: {
-    API_BASE_URL:
-      process.env.API_BASE_URL ||
-      'https://api.rfp.polariseco.com',
+    API_BASE_URL: process.env.API_BASE_URL || 'https://api.rfp.polariseco.com',
     NEXT_PUBLIC_API_BASE_URL:
       process.env.NEXT_PUBLIC_API_BASE_URL ||
       process.env.API_BASE_URL ||
@@ -19,9 +17,7 @@ const nextConfig = {
   },
   // Environment variables for build time
   publicRuntimeConfig: {
-    API_BASE_URL:
-      process.env.API_BASE_URL ||
-      'https://api.rfp.polariseco.com',
+    API_BASE_URL: process.env.API_BASE_URL || 'https://api.rfp.polariseco.com',
     NEXT_PUBLIC_API_BASE_URL:
       process.env.NEXT_PUBLIC_API_BASE_URL ||
       process.env.API_BASE_URL ||
