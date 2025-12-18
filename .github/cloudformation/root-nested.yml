@@ -89,6 +89,16 @@ Parameters:
     Type: String
     Default: '24h'
 
+  OpenAiApiKeySecretArn:
+    Type: String
+    Description: Secrets Manager secret ARN for OPENAI_API_KEY
+    Default: ''
+
+  OpenAiApiKeySecretJsonKey:
+    Type: String
+    Description: Optional JSON key name if the OpenAI secret is stored as JSON (e.g. OPENAI_API_KEY)
+    Default: ''
+
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
   UseProvidedCanvaClientId: !Not [!Equals [!Ref CanvaClientId, '']]
@@ -113,7 +123,6 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      Name: !Sub 'polaris-rfp/jwt-${Environment}'
       Description: !Sub 'JWT secret for Polaris backend (${Environment})'
       GenerateSecretString:
         PasswordLength: 64
@@ -244,6 +253,8 @@ Resources:
           - ''
         JwtSecretArn: !Ref PolarisJwtSecret
         JwtExpire: !Ref JwtExpire
+        OpenAiApiKeySecretArn: !Ref OpenAiApiKeySecretArn
+        OpenAiApiKeySecretJsonKey: !Ref OpenAiApiKeySecretJsonKey
 
   FrontendStack:
     Type: AWS::CloudFormation::Stack
