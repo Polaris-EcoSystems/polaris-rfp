@@ -15,6 +15,7 @@ export default function MagicLinkPage() {
     if (!router.isReady) return
 
     const mid = typeof router.query.mid === 'string' ? router.query.mid : ''
+    const email = typeof router.query.email === 'string' ? router.query.email : ''
     const code = typeof router.query.code === 'string' ? router.query.code : ''
     const returnTo =
       typeof router.query.returnTo === 'string' ? router.query.returnTo : ''
@@ -22,13 +23,13 @@ export default function MagicLinkPage() {
     const run = async () => {
       setLoading(true)
       try {
-        if (!mid || !code) {
+        if ((!mid && !email) || !code) {
           toast.error('Invalid magic link')
           router.replace('/login')
           return
         }
 
-        const res = await verifyMagicLink(mid, code, true)
+        const res = await verifyMagicLink(mid || email, code, true)
         if (!res.ok) {
           toast.error('Magic link expired or invalid')
           router.replace('/login')

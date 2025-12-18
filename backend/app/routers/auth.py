@@ -9,8 +9,11 @@ from pydantic import BaseModel, EmailStr, Field
 from ..services import cognito_idp
 from ..services.magic_links_repo import (
     delete_magic_session,
+    delete_magic_session_for_email,
     get_magic_session,
+    get_latest_magic_session_for_email,
     put_magic_session,
+    put_magic_session_for_email,
 )
 from ..services.password_reset import consume_password_reset, create_password_reset
 from ..settings import settings
@@ -132,6 +135,12 @@ def request_magic_link(body: MagicLinkRequest):
             return_to=return_to,
             ttl_seconds=600,
         )
+        put_magic_session_for_email(
+            email=email,
+            session=session,
+            return_to=return_to,
+            ttl_seconds=600,
+        )
         return {"ok": True}
     except Exception as e:
         print("magic-link: initiate_custom_auth failed:", repr(e))
@@ -140,7 +149,10 @@ def request_magic_link(body: MagicLinkRequest):
 
 
 class MagicLinkVerify(BaseModel):
-    magicId: str = Field(..., min_length=8)
+    # Legacy: when mid is present on the link
+    magicId: str | None = None
+    # Preferred: email is present on the link
+    email: EmailStr | None = None
     code: str = Field(..., min_length=4)
 
 
@@ -151,18 +163,33 @@ def verify_magic_link(body: MagicLinkVerify):
     if not settings.magic_link_table_name:
         raise HTTPException(status_code=500, detail="Magic link is not configured")
 
-    magic_id = str(body.magicId).strip()
+    magic_id = str(body.magicId or "").strip()
     code = str(body.code).strip()
 
-    sess = get_magic_session(magic_id=magic_id)
-    if not sess:
+    sess = None
+    email = None
+    sk = None
+
+    # Prefer email-based lookup (works even if Cognito triggers can't include magicId)
+    if body.email:
+        email = str(body.email).strip().lower()
+        sess = get_latest_magic_session_for_email(email=email)
+        if sess:
+            sk = str(sess.get("sk") or "")
+    elif magic_id:
+        sess = get_magic_session(magic_id=magic_id)
+        email = str((sess or {}).get("email") or "").strip().lower() if sess else None
+
+    if not sess or not email:
         raise HTTPException(status_code=400, detail="Invalid or expired magic link")
 
-    email = str(sess.get("email") or "").strip().lower()
     session = str(sess.get("session") or "")
     return_to = str(sess.get("returnTo") or "/")
     if not email or not session:
-        delete_magic_session(magic_id=magic_id)
+        if sk:
+            delete_magic_session_for_email(email=email, sk=sk)
+        elif magic_id:
+            delete_magic_session(magic_id=magic_id)
         raise HTTPException(status_code=400, detail="Invalid or expired magic link")
 
     try:
@@ -175,7 +202,10 @@ def verify_magic_link(body: MagicLinkVerify):
         id_token = auth.get("IdToken")
         if not id_token:
             raise RuntimeError("No IdToken returned")
-        delete_magic_session(magic_id=magic_id)
+        if sk:
+            delete_magic_session_for_email(email=email, sk=sk)
+        elif magic_id:
+            delete_magic_session(magic_id=magic_id)
         return {
             "access_token": id_token,
             "token_type": "bearer",

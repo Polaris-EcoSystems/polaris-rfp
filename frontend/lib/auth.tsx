@@ -1,3 +1,5 @@
+'use client'
+
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import api from './api'
 
@@ -100,15 +102,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   const verifyMagicLink = async (
-    magicId: string,
+    magicIdOrEmail: string,
     code: string,
     remember: boolean = true,
   ): Promise<{ ok: boolean; returnTo?: string }> => {
     try {
-      const resp = await api.post(`/api/auth/magic-link/verify`, {
-        magicId,
-        code,
-      })
+      const val = String(magicIdOrEmail || '').trim()
+      const payload: any = { code }
+      if (val.includes('@')) payload.email = val
+      else payload.magicId = val
+
+      const resp = await api.post(`/api/auth/magic-link/verify`, payload)
       const token = resp.data?.access_token
       const returnTo = resp.data?.returnTo
       if (!token) return { ok: false }
