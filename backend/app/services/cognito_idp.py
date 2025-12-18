@@ -47,6 +47,20 @@ def admin_set_password(*, user_pool_id: str, email: str, new_password: str) -> N
     )
 
 
+def generate_password() -> str:
+    """
+    Generates a strong password that satisfies common Cognito password policies.
+    Used internally for behind-the-scenes user creation/confirmation.
+    """
+    import secrets
+    import string
+
+    alphabet = string.ascii_letters + string.digits
+    # Ensure we include at least one lower, one upper, and one number.
+    core = "".join(secrets.choice(alphabet) for _ in range(24))
+    return core + "Aa1"
+
+
 def admin_create_user(
     *,
     user_pool_id: str,
@@ -54,11 +68,7 @@ def admin_create_user(
     preferred_username: str | None = None,
 ) -> dict[str, Any]:
     # AdminCreateUser requires a TemporaryPassword even if we suppress messages.
-    import secrets
-    import string
-
-    alphabet = string.ascii_letters + string.digits
-    tmp = "".join(secrets.choice(alphabet) for _ in range(24)) + "Aa1"
+    tmp = generate_password()
 
     attrs = [{"Name": "email", "Value": email}]
     if preferred_username:

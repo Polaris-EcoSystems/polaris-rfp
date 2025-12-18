@@ -68,16 +68,36 @@ def request_magic_link(body: MagicLinkRequest):
 
     # Ensure the user exists (create on first login = signup + login)
     try:
-        cognito_idp.admin_get_user(user_pool_id=settings.cognito_user_pool_id, username=email)
+        u = cognito_idp.admin_get_user(
+            user_pool_id=settings.cognito_user_pool_id, username=email
+        )
+        status = str(u.get("UserStatus") or "")
+        # Users created via AdminCreateUser can be stuck in FORCE_CHANGE_PASSWORD, which blocks auth flows.
+        if status == "FORCE_CHANGE_PASSWORD":
+            try:
+                cognito_idp.admin_set_password(
+                    user_pool_id=settings.cognito_user_pool_id,
+                    email=email,
+                    new_password=cognito_idp.generate_password(),
+                )
+            except Exception as e:
+                print("magic-link: failed to convert FORCE_CHANGE_PASSWORD user:", repr(e))
     except Exception:
+        # Create a confirmed user without a user-visible password.
+        # We sign up with a random password and admin-confirm.
         try:
-            cognito_idp.admin_create_user(
-                user_pool_id=settings.cognito_user_pool_id,
+            pw = cognito_idp.generate_password()
+            cognito_idp.sign_up(
                 email=email,
+                password=pw,
                 preferred_username=preferred_username,
             )
-        except Exception:
-            # Enumeration-safe: still return ok
+            cognito_idp.admin_confirm_sign_up(
+                user_pool_id=settings.cognito_user_pool_id, email=email
+            )
+        except Exception as e:
+            # Enumeration-safe: still return ok (but log for operators)
+            print("magic-link: user create/confirm failed:", repr(e))
             return {"ok": True}
 
     # Start custom auth; triggers will email the link.
@@ -93,6 +113,7 @@ def request_magic_link(body: MagicLinkRequest):
         session = str(resp.get("Session") or "")
         if not session:
             # Still return ok; user can retry
+            print("magic-link: initiate_custom_auth returned no Session")
             return {"ok": True}
 
         put_magic_session(
@@ -103,7 +124,8 @@ def request_magic_link(body: MagicLinkRequest):
             ttl_seconds=600,
         )
         return {"ok": True}
-    except Exception:
+    except Exception as e:
+        print("magic-link: initiate_custom_auth failed:", repr(e))
         # Enumeration-safe
         return {"ok": True}
 
