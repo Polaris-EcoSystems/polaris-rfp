@@ -47,9 +47,13 @@ def create_app() -> FastAPI:
     async def _auth_middleware(request, call_next):
         try:
             await require_auth(request)
-        except StarletteHTTPException as exc:
+        except Exception as exc:
+            # auth middleware should never crash the app; always respond.
+            status_code = getattr(exc, "status_code", 500)
+            detail = getattr(exc, "detail", "Unauthorized")
             return ORJSONResponse(
-                status_code=exc.status_code, content={"error": exc.detail}
+                status_code=int(status_code),
+                content={"error": detail if isinstance(detail, str) else "Unauthorized"},
             )
         return await call_next(request)
 

@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     cognito_client_id: str | None = Field(
         default=None, validation_alias="COGNITO_CLIENT_ID"
     )
+    cognito_region: str = Field(default="us-east-1", validation_alias="COGNITO_REGION")
 
     # Misc integrations
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
