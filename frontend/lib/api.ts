@@ -1,4 +1,9 @@
-import axios from 'axios'
+import axios, {
+  type AxiosError,
+  type AxiosInstance,
+  type AxiosResponse,
+  type InternalAxiosRequestConfig,
+} from 'axios'
 
 function normalizeApiBaseUrl(input: string): string {
   const raw = String(input || '').trim()
@@ -21,14 +26,36 @@ const API_BASE_URL = normalizeApiBaseUrl(
     'https://api.rfp.polariseco.com',
 )
 
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 300000, // 5 minute timeout for PDF generation
-})
+// Ensure we only ever have ONE axios instance, even if the module is imported via
+// different path aliases (e.g. "@/lib/api" vs "../lib/api") in different bundles.
+const _g = globalThis as typeof globalThis & {
+  __polaris_api_client?: AxiosInstance
+}
+const api: AxiosInstance =
+  _g.__polaris_api_client ??
+  axios.create({
+    baseURL: API_BASE_URL,
+    timeout: 300000, // 5 minute timeout for PDF generation
+  })
+_g.__polaris_api_client = api
+
+// Extra safety: if we’re running in the browser over HTTPS, never keep an http:// baseURL.
+try {
+  if (
+    typeof window !== 'undefined' &&
+    window.location?.protocol === 'https:' &&
+    typeof api.defaults.baseURL === 'string' &&
+    api.defaults.baseURL.startsWith('http://')
+  ) {
+    api.defaults.baseURL = api.defaults.baseURL.replace(/^http:\/\//, 'https://')
+  }
+} catch (_e) {
+  // ignore
+}
 
 // Add request interceptor for debugging
 api.interceptors.request.use(
-  (config) => {
+  (config: InternalAxiosRequestConfig) => {
     // Hard guard against Mixed Content in production:
     // if the page is https:// but the configured baseURL is http://, browsers will block.
     try {
@@ -62,7 +89,7 @@ api.interceptors.request.use(
     }
     return config
   },
-  (error) => {
+  (error: AxiosError | any) => {
     console.error('Request error:', error)
     return Promise.reject(error)
   },
@@ -70,14 +97,14 @@ api.interceptors.request.use(
 
 // Add response interceptor for debugging
 api.interceptors.response.use(
-  (response) => {
+  (response: AxiosResponse) => {
     console.log(
       `Response received from ${response.config.url}:`,
       response.status,
     )
     return response
   },
-  (error) => {
+  (error: AxiosError | any) => {
     console.error('Response error:', {
       url: error.config?.url,
       status: error.response?.status,
