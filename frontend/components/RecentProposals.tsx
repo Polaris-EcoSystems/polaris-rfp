@@ -1,19 +1,21 @@
-import Link from 'next/link'
-import Card, { CardHeader, CardBody } from './ui/Card'
-import Button from './ui/Button'
-import Badge from './ui/Badge'
-import { Proposal } from '../lib/api'
 import {
-  RocketLaunchIcon,
+  CalendarDaysIcon,
   EyeIcon,
-  CalendarDaysIcon
+  RocketLaunchIcon,
 } from '@heroicons/react/24/outline'
+import Link from 'next/link'
+import { Proposal } from '../lib/api'
+import Badge from './ui/Badge'
+import Button from './ui/Button'
+import Card, { CardBody, CardHeader } from './ui/Card'
 
 type RecentProposalsProps = {
   recentProposals: Proposal[]
 }
 
-export default function RecentProposals({ recentProposals }: RecentProposalsProps) {
+export default function RecentProposals({
+  recentProposals,
+}: RecentProposalsProps) {
   const getStatusVariant = (status: string) => {
     switch (status) {
       case 'draft':
@@ -36,8 +38,12 @@ export default function RecentProposals({ recentProposals }: RecentProposalsProp
               <RocketLaunchIcon className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h3 className="text-xl font-semibold text-gray-900">Recent Proposals</h3>
-              <p className="text-sm text-gray-600">Latest proposal submissions</p>
+              <h3 className="text-xl font-semibold text-gray-900">
+                Recent Proposals
+              </h3>
+              <p className="text-sm text-gray-600">
+                Latest proposal submissions
+              </p>
             </div>
           </div>
           <Button
@@ -70,7 +76,10 @@ export default function RecentProposals({ recentProposals }: RecentProposalsProp
                     {proposal.title}
                   </Link>
                   <div className="flex items-center space-x-4 mt-1">
-                    <Badge variant={getStatusVariant(proposal.status)} size="sm">
+                    <Badge
+                      variant={getStatusVariant(proposal.status)}
+                      size="sm"
+                    >
                       {proposal.status}
                     </Badge>
                     <div className="flex items-center text-xs text-gray-500">
@@ -85,8 +94,12 @@ export default function RecentProposals({ recentProposals }: RecentProposalsProp
         ) : (
           <div className="text-center py-8">
             <RocketLaunchIcon className="mx-auto h-12 w-12 text-gray-300 mb-4" />
-            <p className="text-gray-600 font-medium">No proposals created yet</p>
-            <p className="text-gray-500 text-sm mt-1">Create your first proposal from an RFP</p>
+            <p className="text-gray-600 font-medium">
+              No proposals created yet
+            </p>
+            <p className="text-gray-500 text-sm mt-1">
+              Create your first proposal from an RFP
+            </p>
             <Button
               as={Link}
               href="/proposals"

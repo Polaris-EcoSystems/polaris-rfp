@@ -116,16 +116,20 @@ Resources:
           import secrets
           import boto3
           import urllib.parse
+          import html as _html
 
           ses = boto3.client("ses")
 
-          def _send_email(to_email: str, subject: str, body_text: str):
+          def _send_email(to_email: str, subject: str, body_text: str, body_html: str):
               return ses.send_email(
                   Source=os.environ["FROM_EMAIL"],
                   Destination={"ToAddresses": [to_email]},
                   Message={
                       "Subject": {"Data": subject, "Charset": "UTF-8"},
-                      "Body": {"Text": {"Data": body_text, "Charset": "UTF-8"}},
+                      "Body": {
+                          "Text": {"Data": body_text, "Charset": "UTF-8"},
+                          "Html": {"Data": body_html, "Charset": "UTF-8"},
+                      },
                   },
               )
 
@@ -144,12 +148,17 @@ Resources:
               return_to = meta.get("returnTo") or "/"
               base = (meta.get("frontendBaseUrl") or os.environ.get("FRONTEND_BASE_URL") or "").rstrip("/")
 
-              rt = urllib.parse.quote(str(return_to), safe="")
+              # We intentionally do NOT include `returnTo` in the link query string.
+              # The backend stores returnTo server-side and returns it on verify.
               # Note: ClientMetadata is not reliably available in this trigger,
               # so we include email in the link and have the backend look up the
               # latest pending Cognito Session for that email.
-              em = urllib.parse.quote(str(email), safe="")
-              link = f"{base}/magic?email={em}&code={code}&returnTo={rt}"
+              em = urllib.parse.quote(str(email).strip().lower(), safe="")
+              mid = urllib.parse.quote(str(magic_id), safe="") if magic_id else ""
+              qs = f"email={em}&code={code}"
+              if mid:
+                  qs = f"mid={mid}&" + qs
+              link = f"{base}/magic?{qs}"
 
               # Debug logging (do not log the full email or code)
               try:
@@ -163,10 +172,77 @@ Resources:
 
               if email:
                   try:
+                      safe_link = _html.escape(link, quote=True)
+                      safe_email = _html.escape(str(email).strip().lower(), quote=True)
+
+                      body_text = (
+                          "Sign in to Polaris RFP\n\n"
+                          f"Click to sign in:\n{link}\n\n"
+                          "This link expires in 10 minutes.\n"
+                          "If you didn't request this email, you can safely ignore it.\n"
+                      )
+
+                      body_html = f"""\
+          <!doctype html>
+          <html>
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <title>Sign in to Polaris RFP</title>
+            </head>
+            <body style="margin:0;padding:0;background:#f6f7fb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;color:#111827;">
+              <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f6f7fb;padding:24px 0;">
+                <tr>
+                  <td align="center">
+                    <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="width:600px;max-width:100%;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,0.06);">
+                      <tr>
+                        <td style="padding:24px 24px 8px 24px;">
+                          <div style="font-size:18px;font-weight:700;line-height:1.25;">Sign in to Polaris RFP</div>
+                          <div style="margin-top:8px;font-size:14px;line-height:1.5;color:#374151;">
+                            We received a request to sign in as <strong>{safe_email}</strong>.
+                          </div>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td align="center" style="padding:16px 24px 8px 24px;">
+                          <a href="{safe_link}"
+                             style="display:inline-block;background:#111827;color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-size:14px;font-weight:600;">
+                            Sign in
+                          </a>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding:8px 24px 24px 24px;">
+                          <div style="font-size:12px;line-height:1.5;color:#6b7280;">
+                            This link expires in 10 minutes.
+                          </div>
+                          <div style="margin-top:12px;font-size:12px;line-height:1.5;color:#6b7280;">
+                            If the button doesn't work, copy and paste this link into your browser:
+                          </div>
+                          <div style="margin-top:8px;font-size:12px;line-height:1.5;word-break:break-all;">
+                            <a href="{safe_link}" style="color:#2563eb;text-decoration:underline;">{safe_link}</a>
+                          </div>
+                          <div style="margin-top:16px;font-size:12px;line-height:1.5;color:#6b7280;">
+                            If you didn't request this email, you can safely ignore it.
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
+                    <div style="margin-top:12px;font-size:11px;line-height:1.5;color:#9ca3af;">
+                      Sent by Polaris RFP
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </body>
+          </html>
+                      """
+
                       resp = _send_email(
                           email,
-                          "Your sign-in link",
-                          f"Click to sign in:\\n\\n{link}\\n\\nThis link expires in 10 minutes.\\n",
+                          "Sign in to Polaris RFP",
+                          body_text,
+                          body_html,
                       )
                       try:
                           print("SES send_email ok")

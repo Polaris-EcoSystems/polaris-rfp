@@ -1,3 +1,5 @@
+'use client'
+
 import {
   Bars3Icon,
   BellIcon,
@@ -11,7 +13,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline'
 import Link from 'next/link'
-import { useRouter } from 'next/router'
+import { usePathname, useRouter } from 'next/navigation'
 import { ReactNode, useEffect, useRef, useState } from 'react'
 import api, { extractList, rfpApi, type RFP } from '../lib/api'
 import { useAuth } from '../lib/auth'
@@ -40,6 +42,7 @@ export default function Layout({ children }: LayoutProps) {
   >([])
   const [notificationsLoading, setNotificationsLoading] = useState(false)
   const router = useRouter()
+  const pathname = usePathname()
   const { user, logout } = useAuth()
   const topMenuRef = useRef<HTMLDivElement | null>(null)
   const footerMenuRef = useRef<HTMLDivElement | null>(null)
@@ -191,49 +194,55 @@ export default function Layout({ children }: LayoutProps) {
       name: 'Dashboard',
       href: '/',
       icon: FolderIcon,
-      current: router.pathname === '/',
+      current: pathname === '/',
     },
     {
       name: 'RFPs',
       href: '/rfps',
       icon: DocumentTextIcon,
-      current: router.pathname.startsWith('/rfps'),
+      current: pathname.startsWith('/rfps'),
     },
     {
       name: 'Finder',
       href: '/finder',
       icon: DocumentTextIcon,
-      current: router.pathname === '/finder',
+      current: pathname === '/finder',
+    },
+    {
+      name: 'LinkedIn Finder',
+      href: '/linkedin-finder',
+      icon: UserGroupIcon,
+      current: pathname === '/linkedin-finder',
     },
     {
       name: 'Proposals',
       href: '/proposals',
       icon: DocumentTextIcon,
-      current: router.pathname.startsWith('/proposals'),
+      current: pathname.startsWith('/proposals'),
     },
     {
       name: 'Templates',
       href: '/templates',
       icon: CogIcon,
-      current: router.pathname.startsWith('/templates'),
+      current: pathname.startsWith('/templates'),
     },
     {
       name: 'Content Library',
       href: '/content',
       icon: UserGroupIcon,
-      current: router.pathname === '/content',
+      current: pathname === '/content',
     },
     {
       name: 'Profile',
       href: '/profile',
       icon: UserCircleIcon,
-      current: router.pathname === '/profile',
+      current: pathname === '/profile',
     },
     {
       name: 'Integrations',
       href: '/integrations/canva',
       icon: CogIcon,
-      current: router.pathname.startsWith('/integrations'),
+      current: pathname.startsWith('/integrations'),
     },
     // { name: 'Google Drive', href: '/googledrive', icon: CloudIcon, current: router.pathname === '/googledrive' },
   ]

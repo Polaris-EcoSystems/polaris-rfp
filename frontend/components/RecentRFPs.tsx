@@ -1,14 +1,14 @@
-import Link from 'next/link'
-import Card, { CardHeader, CardBody } from './ui/Card'
-import Button from './ui/Button'
-import Badge from './ui/Badge'
-import { RFP } from '../lib/api'
 import {
+  BuildingOfficeIcon,
   DocumentTextIcon,
   EyeIcon,
-  BuildingOfficeIcon,
-  PlusIcon
+  PlusIcon,
 } from '@heroicons/react/24/outline'
+import Link from 'next/link'
+import { RFP } from '../lib/api'
+import Badge from './ui/Badge'
+import Button from './ui/Button'
+import Card, { CardBody, CardHeader } from './ui/Card'
 
 type RecentRFPsProps = {
   recentRFPs: RFP[]
@@ -24,7 +24,9 @@ export default function RecentRFPs({ recentRFPs }: RecentRFPsProps) {
               <DocumentTextIcon className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h3 className="text-xl font-semibold text-gray-900">Recent RFPs</h3>
+              <h3 className="text-xl font-semibold text-gray-900">
+                Recent RFPs
+              </h3>
               <p className="text-sm text-gray-600">Latest uploaded requests</p>
             </div>
           </div>
@@ -79,7 +81,9 @@ export default function RecentRFPs({ recentRFPs }: RecentRFPsProps) {
           <div className="text-center py-8">
             <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-300 mb-4" />
             <p className="text-gray-600 font-medium">No RFPs uploaded yet</p>
-            <p className="text-gray-500 text-sm mt-1">Upload your first RFP to get started</p>
+            <p className="text-gray-500 text-sm mt-1">
+              Upload your first RFP to get started
+            </p>
             <Button
               as={Link}
               href="/rfps/upload"

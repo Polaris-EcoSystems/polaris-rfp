@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 
 from ..services.ai_section_titles import generate_section_titles
 from ..services.rfp_analyzer import analyze_rfp
@@ -14,6 +14,7 @@ from ..services.rfps_repo import (
     list_rfps,
     update_rfp,
 )
+from ..services.attachments_repo import list_attachments
 
 router = APIRouter(tags=["rfp"])
 
@@ -30,6 +31,12 @@ def analyze_url(body: dict):
         )
         return saved
     except HTTPException:
+        raise
+    except RuntimeError as e:
+        # Common user-facing errors should be 4xx, not 500s.
+        msg = str(e) or "Failed to analyze URL"
+        if "No extractable text" in msg:
+            raise HTTPException(status_code=422, detail={"error": "Unable to extract text from URL", "message": msg})
         raise
     except Exception as e:
         raise HTTPException(
@@ -77,6 +84,17 @@ async def upload(file: UploadFile = File(...)):
             source_file_size=len(data),
         )
         return saved
+    except RuntimeError as e:
+        msg = str(e) or "Failed to analyze PDF"
+        if "No extractable text" in msg:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "Unable to extract text from PDF",
+                    "message": "This PDF appears to contain no selectable text (scanned image). Please upload a text-based PDF or use Analyze URL for an HTML RFP page.",
+                },
+            )
+        raise HTTPException(status_code=500, detail={"error": "Failed to process RFP", "message": msg})
     except Exception as e:
         raise HTTPException(status_code=500, detail={"error": "Failed to process RFP", "message": str(e)})
 
@@ -111,6 +129,14 @@ def get_one(id: str):
         rfp = get_rfp_by_id(id)
         if not rfp:
             raise HTTPException(status_code=404, detail="RFP not found")
+        # Frontend expects attachments embedded on the RFP record.
+        try:
+            rfp = dict(rfp)
+            rfp["attachments"] = list_attachments(id)
+        except Exception:
+            # If attachments table/layout isn't configured, keep RFP readable.
+            rfp = dict(rfp)
+            rfp["attachments"] = []
         return rfp
     except HTTPException:
         raise
@@ -143,7 +169,15 @@ def update_one(id: str, body: dict):
         updated = update_rfp(id, body or {})
         if not updated:
             raise HTTPException(status_code=404, detail="RFP not found")
-        return updated
+        # Keep compatibility with frontend expecting embedded attachments.
+        try:
+            out = dict(updated)
+            out["attachments"] = list_attachments(id)
+            return out
+        except Exception:
+            out = dict(updated)
+            out["attachments"] = []
+            return out
     except HTTPException:
         raise
     except Exception:
@@ -166,3 +200,62 @@ def delete_one(id: str):
         return {"message": "RFP deleted successfully"}
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to delete RFP")
+
+
+@router.post("/{id}/buyer-profiles/remove")
+def remove_buyer_profiles(id: str, body: dict = Body(...)):
+    """
+    Remove saved buyer profiles from an RFP.
+
+    Body:
+      - selected: string[] (profileUrl/profileId tokens)
+      - clear: boolean (if true, clears all buyerProfiles)
+    """
+    rfp = get_rfp_by_id(id)
+    if not rfp:
+        raise HTTPException(status_code=404, detail="RFP not found")
+
+    clear = bool((body or {}).get("clear"))
+    existing = (rfp or {}).get("buyerProfiles")
+    existing_list: list[dict[str, Any]] = (
+        existing if isinstance(existing, list) else []
+    )
+
+    if clear:
+        updated = update_rfp(id, {"buyerProfiles": []})
+        return {"success": True, "removed": len(existing_list), "rfp": updated}
+
+    selected_in = (body or {}).get("selected")
+    if not isinstance(selected_in, list):
+        raise HTTPException(status_code=400, detail="selected[] is required (or set clear=true)")
+
+    selected = [str(x or "").strip().lower() for x in selected_in]
+    selected = [x for x in selected if x]
+    if not selected:
+        raise HTTPException(status_code=400, detail="selected[] is required (or set clear=true)")
+
+    selected_set = set(selected)
+
+    def token(p: dict[str, Any]) -> set[str]:
+        toks: set[str] = set()
+        pu = str(p.get("profileUrl") or "").strip().lower()
+        pid = str(p.get("profileId") or "").strip().lower()
+        if pu:
+            toks.add(pu)
+        if pid:
+            toks.add(pid)
+        return toks
+
+    kept: list[dict[str, Any]] = []
+    removed = 0
+    for p in existing_list:
+        if not isinstance(p, dict):
+            continue
+        toks = token(p)
+        if toks and any(t in selected_set for t in toks):
+            removed += 1
+            continue
+        kept.append(p)
+
+    updated = update_rfp(id, {"buyerProfiles": kept})
+    return {"success": True, "removed": removed, "remaining": len(kept), "rfp": updated}

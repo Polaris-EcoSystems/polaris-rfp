@@ -171,7 +171,8 @@ async def upload_attachments(
             "message": f"{len(attachments)} file(s) uploaded successfully",
             "attachments": [
                 {
-                    "id": att.get("id"),
+                    "_id": att.get("_id") or att.get("id"),
+                    "id": att.get("id") or att.get("_id"),
                     "fileName": att.get("fileName"),
                     "originalName": att.get("originalName"),
                     "fileSize": att.get("fileSize"),
@@ -210,13 +211,15 @@ def get_attachments(id: str):
         return {
             "attachments": [
                 {
-                    "id": att.get("id"),
+                    "_id": att.get("_id") or att.get("id"),
+                    "id": att.get("id") or att.get("_id"),
                     "originalName": att.get("originalName"),
                     "fileSize": att.get("fileSize"),
                     "fileType": att.get("fileType"),
                     "mimeType": att.get("mimeType"),
                     "uploadedAt": att.get("uploadedAt"),
                     "description": att.get("description"),
+                    "fileName": att.get("fileName"),
                 }
                 for att in attachments
             ]

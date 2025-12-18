@@ -25,6 +25,8 @@ def normalize_attachment(item: dict[str, Any] | None) -> dict[str, Any] | None:
     if not item:
         return None
     out = dict(item)
+    # Frontend legacy shape expects `_id`; keep `id` too.
+    out["_id"] = item.get("attachmentId")
     out["id"] = item.get("attachmentId")
     for k in ("pk", "sk", "entityType", "attachmentId"):
         out.pop(k, None)

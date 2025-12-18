@@ -1,12 +1,12 @@
-import { useState } from "react";
-import { SparklesIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import { SparklesIcon, XMarkIcon } from '@heroicons/react/24/outline'
+import { useState } from 'react'
 
 interface AIModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onApply: (prompt: string) => void;
-  selectedText?: string;
-  isLoading?: boolean;
+  isOpen: boolean
+  onClose: () => void
+  onApply: (prompt: string) => void
+  selectedText?: string
+  isLoading?: boolean
 }
 
 export default function AIModal({
@@ -16,21 +16,21 @@ export default function AIModal({
   selectedText,
   isLoading = false,
 }: AIModalProps) {
-  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiPrompt, setAiPrompt] = useState('')
 
   const handleApply = () => {
     if (aiPrompt.trim()) {
-      onApply(aiPrompt);
-      setAiPrompt("");
+      onApply(aiPrompt)
+      setAiPrompt('')
     }
-  };
+  }
 
   const handleClose = () => {
-    setAiPrompt("");
-    onClose();
-  };
+    setAiPrompt('')
+    onClose()
+  }
 
-  if (!isOpen) return null;
+  if (!isOpen) return null
 
   return (
     <div
@@ -57,7 +57,7 @@ export default function AIModal({
         {selectedText && (
           <div className="mb-3 p-2 bg-gray-50 rounded text-xs">
             <p className="text-gray-600 mb-1 font-medium">Selected text:</p>
-            <p className="text-gray-700 italic">"{selectedText}"</p>
+            <p className="text-gray-700 italic">&quot;{selectedText}&quot;</p>
           </div>
         )}
 
@@ -103,5 +103,5 @@ export default function AIModal({
         </div>
       </div>
     </div>
-  );
+  )
 }

@@ -21,6 +21,27 @@ from ..settings import settings
 router = APIRouter(tags=["auth"])
 
 
+def _sanitize_return_to(raw: str | None) -> str:
+    """
+    Keep returnTo as a safe in-app path.
+    - Must be a relative path starting with "/"
+    - Reject absolute / protocol-relative URLs
+    """
+    val = str(raw or "/").strip() or "/"
+    # single-line only (avoid header injection / log junk)
+    val = val.splitlines()[0].strip() or "/"
+
+    low = val.lower()
+    if "://" in low or low.startswith("//"):
+        return "/"
+    if not val.startswith("/"):
+        return "/"
+    # Prevent pathological lengths
+    if len(val) > 2048:
+        return "/"
+    return val
+
+
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=6)
@@ -64,7 +85,7 @@ def request_magic_link(body: MagicLinkRequest):
 
     email = str(body.email).strip().lower()
     preferred_username = str(body.username).strip() if body.username else None
-    return_to = str(body.returnTo or "/").strip() or "/"
+    return_to = _sanitize_return_to(body.returnTo)
 
     # Create a short opaque id used to look up the Cognito Session server-side.
     magic_id = base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")

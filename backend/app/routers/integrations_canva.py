@@ -35,10 +35,16 @@ router = APIRouter(tags=["integrations_canva"])
 
 def _user_id_from_request(request: Request) -> str:
     u = getattr(request.state, "user", None)
+    # request.state.user is set by auth middleware and is a VerifiedUser (Cognito JWT).
+    # Use the stable Cognito subject as the user identifier for per-user records.
+    sub = getattr(u, "sub", None)
+    if sub:
+        return str(sub)
+    # Legacy compatibility (older auth middleware)
     user_id = getattr(u, "user_id", None)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return str(user_id)
+    if user_id:
+        return str(user_id)
+    raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def _frontend_base_url() -> str:

@@ -1,5 +1,6 @@
+import Image from 'next/image'
 import { useEffect, useState } from 'react'
-import api from '../../../lib/api'
+import api from '@/lib/api'
 
 function ensureBulletText(value: string) {
   const v = String(value || '')
@@ -268,14 +269,13 @@ export default function EditMemberModal({
 
               {(headshotPreviewUrl || memberForm?.headshotUrl) && (
                 <div className="mt-2 flex items-center gap-3">
-                  <img
+                  <Image
                     src={headshotPreviewUrl || memberForm.headshotUrl}
                     alt="Headshot preview"
+                    width={48}
+                    height={48}
+                    unoptimized
                     className="h-12 w-12 rounded-full object-cover border"
-                    onError={(e) => {
-                      ;(e.currentTarget as HTMLImageElement).style.display =
-                        'none'
-                    }}
                   />
                   <div className="text-xs text-gray-500">
                     <div>

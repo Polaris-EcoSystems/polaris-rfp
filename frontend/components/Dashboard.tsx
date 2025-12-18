@@ -90,7 +90,7 @@ export default function Dashboard() {
             Dashboard
           </h1>
           <p className="text-lg text-gray-600">
-            Welcome back! Here's what's happening with your proposals.
+            Welcome back! Here&apos;s what&apos;s happening with your proposals.
           </p>
         </div>
 

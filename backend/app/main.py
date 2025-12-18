@@ -8,7 +8,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .errors import http_404_handler, http_500_handler
 from .middleware.auth import require_auth
-from .middleware.cors import build_allowed_origins
+from .middleware.cors import build_allowed_origin_regex, build_allowed_origins
 from .routers.health import router as health_router
 from .routers.auth import router as auth_router
 from .routers.content import router as content_router
@@ -19,6 +19,7 @@ from .routers.templates import router as templates_router
 from .routers.ai import router as ai_router
 from .routers.integrations_canva import router as canva_router
 from .routers.profile import router as profile_router
+from .routers.finder import router as finder_router
 from .settings import settings
 
 
@@ -34,9 +35,11 @@ def create_app() -> FastAPI:
         frontend_url=settings.frontend_url,
         frontend_urls=settings.frontend_urls,
     )
+    # Use CORSMiddleware with both explicit allowlist AND wildcard regex support.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
+        allow_origin_regex=build_allowed_origin_regex(),
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
@@ -75,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_router, prefix="/api/ai")
     app.include_router(canva_router, prefix="/api/integrations/canva")
     app.include_router(profile_router, prefix="/api/profile")
+    app.include_router(finder_router, prefix="/api/finder")
 
     return app
 

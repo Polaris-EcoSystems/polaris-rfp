@@ -4,6 +4,7 @@ import {
   TrashIcon,
   UserGroupIcon,
 } from '@heroicons/react/24/outline'
+import Image from 'next/image'
 import { useMemo, useState } from 'react'
 
 export default function TeamSection({ ctx }: { ctx: any }) {
@@ -253,14 +254,13 @@ export default function TeamSection({ ctx }: { ctx: any }) {
               <div className="space-y-4">
                 <div className="text-center">
                   {selectedMember.headshotUrl ? (
-                    <img
+                    <Image
                       src={selectedMember.headshotUrl}
                       alt="Headshot"
+                      width={64}
+                      height={64}
+                      unoptimized
                       className="h-16 w-16 rounded-full object-cover border mx-auto mb-3"
-                      onError={(e) => {
-                        ;(e.currentTarget as HTMLImageElement).style.display =
-                          'none'
-                      }}
                     />
                   ) : (
                     <div className="flex-shrink-0 h-16 w-16 rounded-full bg-primary-100 flex items-center justify-center mx-auto mb-3">

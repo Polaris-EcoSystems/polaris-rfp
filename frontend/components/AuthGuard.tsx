@@ -1,8 +1,16 @@
-import React, { ReactNode, useEffect } from 'react'
-import { useRouter } from 'next/router'
+'use client'
+
+import { useRouter } from 'next/navigation'
+import { ReactNode, useEffect } from 'react'
 import { useAuth } from '../lib/auth'
 
-export default function AuthGuard({ children, redirectTo = '/login' }: { children: ReactNode; redirectTo?: string }) {
+export default function AuthGuard({
+  children,
+  redirectTo = '/login',
+}: {
+  children: ReactNode
+  redirectTo?: string
+}) {
   const { user, loading } = useAuth()
   const router = useRouter()
 

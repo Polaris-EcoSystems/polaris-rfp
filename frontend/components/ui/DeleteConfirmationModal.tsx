@@ -1,13 +1,13 @@
-import { XMarkIcon, ExclamationTriangleIcon } from "@heroicons/react/24/outline";
+import { ExclamationTriangleIcon, XMarkIcon } from '@heroicons/react/24/outline'
 
 interface DeleteConfirmationModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  title: string;
-  message: string;
-  itemName?: string;
-  isDeleting?: boolean;
+  isOpen: boolean
+  onClose: () => void
+  onConfirm: () => void
+  title: string
+  message: string
+  itemName?: string
+  isDeleting?: boolean
 }
 
 export default function DeleteConfirmationModal({
@@ -19,7 +19,7 @@ export default function DeleteConfirmationModal({
   itemName,
   isDeleting = false,
 }: DeleteConfirmationModalProps) {
-  if (!isOpen) return null;
+  if (!isOpen) return null
 
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 z-[9999] flex items-center justify-center p-4">
@@ -46,12 +46,10 @@ export default function DeleteConfirmationModal({
 
           {/* Content */}
           <div className="mb-6">
-            <p className="text-sm text-gray-600">
-              {message}
-            </p>
+            <p className="text-sm text-gray-600">{message}</p>
             {itemName && (
               <p className="text-sm font-medium text-gray-900 mt-2">
-                "{itemName}"
+                &quot;{itemName}&quot;
               </p>
             )}
             <p className="text-sm text-red-600 mt-2">
@@ -86,5 +84,5 @@ export default function DeleteConfirmationModal({
         </div>
       </div>
     </div>
-  );
+  )
 }

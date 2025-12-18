@@ -194,6 +194,10 @@ export const rfpApi = {
     api.post(`/api/rfp/${id}/upload-attachments`, data),
   deleteAttachment: (rfpId: string, attachmentId: string) =>
     api.delete(`/api/rfp/${rfpId}/attachments/${attachmentId}`),
+  removeBuyerProfiles: (
+    rfpId: string,
+    data: { selected?: string[]; clear?: boolean },
+  ) => api.post(`/api/rfp/${rfpId}/buyer-profiles/remove`, data),
 }
 
 // Proposal API calls
@@ -336,6 +340,41 @@ export const aiApi = {
     context?: string
     contentType?: string
   }) => api.post('/api/ai/generate-content', data),
+}
+
+// Finder (LinkedIn) API calls
+export const finderApi = {
+  getStorageStateStatus: () =>
+    api.get<{ connected: boolean }>(
+      '/api/finder/linkedin/storage-state/status',
+    ),
+  validateSession: () => api.get('/api/finder/linkedin/session/validate'),
+  uploadStorageState: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post('/api/finder/linkedin/storage-state', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
+  startRun: (data: {
+    rfpId: string
+    companyName?: string
+    companyLinkedInUrl?: string
+    maxPeople?: number
+    targetTitles?: string[]
+  }) => api.post('/api/finder/runs', data),
+  getRun: (runId: string) => api.get(`/api/finder/runs/${runId}`),
+  listProfiles: (runId: string, limit: number = 200) =>
+    api.get(`/api/finder/runs/${runId}/profiles`, { params: { limit } }),
+  saveTopToRfp: (
+    runId: string,
+    data: {
+      rfpId: string
+      topN?: number
+      mode?: 'merge' | 'overwrite'
+      selected?: string[]
+    },
+  ) => api.post(`/api/finder/runs/${runId}/save-to-rfp`, data),
 }
 
 export const profileApi = {
