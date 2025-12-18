@@ -15,7 +15,7 @@ Parameters:
   MagicLinkFromEmail:
     Type: String
     Description: SES-verified From address used for magic links (must be verified in SES)
-    Default: 'no-reply@polariseco.com'
+    Default: 'support@righteousgambit.com'
 
 Resources:
   MagicLinkSessionsTable:
@@ -153,9 +153,9 @@ Resources:
                           "Your sign-in link",
                           f"Click to sign in:\\n\\n{link}\\n\\nThis link expires in 10 minutes.\\n",
                       )
-                  except Exception:
-                      # If SES is not configured, do not crash auth flow.
-                      pass
+                  except Exception as e:
+                      # Don't break auth, but do log for debugging.
+                      print("SES send_email failed:", repr(e))
 
               event["response"]["publicChallengeParameters"] = {"magicId": magic_id}
               event["response"]["privateChallengeParameters"] = {"answer": code}

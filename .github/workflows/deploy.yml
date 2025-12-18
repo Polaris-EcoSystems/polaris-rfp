@@ -111,6 +111,7 @@ jobs:
               CustomDomainName=polariseco.com \
               CustomDomainPrefix=rfp \
               FrontendBaseUrl=https://rfp.polariseco.com \
+              MagicLinkFromEmail=support@righteousgambit.com \
               BackendApiDomainName=api.rfp.polariseco.com \
               Route53HostedZoneId=$ROUTE53_HOSTED_ZONE_ID \
               BackendImageUri=$BACKEND_IMAGE_URI \
@@ -118,6 +119,8 @@ jobs:
               CanvaRedirectUri=${{ secrets.CANVA_REDIRECT_URI }} \
               CanvaTokenEncKey=${{ secrets.CANVA_TOKEN_ENC_KEY }} \
               JwtSecret=${{ secrets.JWT_SECRET }} \
+              OpenAiApiKeySecretArn=arn:aws:secretsmanager:us-east-1:211125621822:secret:openai-TbIvAk \
+              OpenAiApiKeySecretJsonKey=openai_api_key \
             --region ${{ env.AWS_REGION }}
 
       - name: Get Amplify App ID

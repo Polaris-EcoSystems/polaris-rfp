@@ -41,7 +41,7 @@ Parameters:
   MagicLinkFromEmail:
     Type: String
     Description: SES-verified From address used for Cognito magic links
-    Default: 'no-reply@polariseco.com'
+    Default: 'support@righteousgambit.com'
 
   # Backend (ECS + ALB)
   BackendApiDomainName:
