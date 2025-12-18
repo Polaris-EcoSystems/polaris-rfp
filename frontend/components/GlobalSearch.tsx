@@ -1,75 +1,77 @@
-import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/router";
-import { proposalApi, rfpApi, type Proposal, type RFP } from "../lib/api";
+'use client'
+
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import { useEffect, useRef, useState } from 'react'
+import { proposalApi, rfpApi, type Proposal, type RFP } from '../lib/api'
 
 export default function GlobalSearch() {
-  const router = useRouter();
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [rfpResults, setRfpResults] = useState<RFP[]>([]);
-  const [proposalResults, setProposalResults] = useState<Proposal[]>([]);
-  const searchContainerRef = useRef<HTMLDivElement | null>(null);
-  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const pathname = usePathname()
+  const [searchQuery, setSearchQuery] = useState('')
+  const [isSearching, setIsSearching] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [rfpResults, setRfpResults] = useState<RFP[]>([])
+  const [proposalResults, setProposalResults] = useState<Proposal[]>([])
+  const searchContainerRef = useRef<HTMLDivElement | null>(null)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (debounceRef.current) clearTimeout(debounceRef.current)
     if (!searchQuery) {
-      setRfpResults([]);
-      setProposalResults([]);
-      setIsSearching(false);
-      return;
+      setRfpResults([])
+      setProposalResults([])
+      setIsSearching(false)
+      return
     }
 
-    setIsSearching(true);
+    setIsSearching(true)
     debounceRef.current = setTimeout(async () => {
       try {
         const [rfpsResp, proposalsResp] = await Promise.all([
           rfpApi.list(),
           proposalApi.list(),
-        ]);
+        ])
 
         const rfps = Array.isArray((rfpsResp as any).data?.data)
           ? (rfpsResp as any).data.data
           : Array.isArray((rfpsResp as any).data)
           ? (rfpsResp as any).data
-          : [];
+          : []
 
         const proposals = Array.isArray((proposalsResp as any).data?.data)
           ? (proposalsResp as any).data.data
           : Array.isArray((proposalsResp as any).data)
           ? (proposalsResp as any).data
-          : [];
+          : []
 
-        const q = searchQuery.toLowerCase();
+        const q = searchQuery.toLowerCase()
         const rfpsFiltered = rfps.filter(
           (r: RFP) =>
-            (r.title || "").toLowerCase().includes(q) ||
-            (r.clientName || "").toLowerCase().includes(q) ||
-            (r.projectType || "").toLowerCase().includes(q)
-        );
+            (r.title || '').toLowerCase().includes(q) ||
+            (r.clientName || '').toLowerCase().includes(q) ||
+            (r.projectType || '').toLowerCase().includes(q),
+        )
         const proposalsFiltered = proposals.filter(
           (p: Proposal) =>
-            (p.title || "").toLowerCase().includes(q) ||
-            (p.status || "").toLowerCase().includes(q)
-        );
+            (p.title || '').toLowerCase().includes(q) ||
+            (p.status || '').toLowerCase().includes(q),
+        )
 
-        setRfpResults(rfpsFiltered);
-        setProposalResults(proposalsFiltered);
+        setRfpResults(rfpsFiltered)
+        setProposalResults(proposalsFiltered)
       } catch (e) {
-        console.error("Global search failed", e);
-        setRfpResults([]);
-        setProposalResults([]);
+        console.error('Global search failed', e)
+        setRfpResults([])
+        setProposalResults([])
       } finally {
-        setIsSearching(false);
+        setIsSearching(false)
       }
-    }, 300);
+    }, 300)
 
     return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [searchQuery]);
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [searchQuery])
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -77,20 +79,17 @@ export default function GlobalSearch() {
         searchContainerRef.current &&
         !searchContainerRef.current.contains(e.target as Node)
       ) {
-        setSearchOpen(false);
+        setSearchOpen(false)
       }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   useEffect(() => {
-    const handleRoute = () => setSearchOpen(false);
-    router.events.on("routeChangeStart", handleRoute);
-    return () => {
-      router.events.off("routeChangeStart", handleRoute);
-    };
-  }, [router.events]);
+    // Close dropdown when navigation happens (App Router).
+    setSearchOpen(false)
+  }, [pathname])
 
   return (
     <div className="relative">
@@ -99,12 +98,12 @@ export default function GlobalSearch() {
         placeholder="Search proposals, RFPs..."
         value={searchQuery}
         onChange={(e) => {
-          const val = e.target.value;
-          setSearchQuery(val);
-          setSearchOpen(!!val);
+          const val = e.target.value
+          setSearchQuery(val)
+          setSearchOpen(!!val)
         }}
         onFocus={() => {
-          if (searchQuery) setSearchOpen(true);
+          if (searchQuery) setSearchOpen(true)
         }}
         className="w-64 pl-4 pr-10 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50 transition-all duration-200"
       />
@@ -196,5 +195,5 @@ export default function GlobalSearch() {
         </div>
       )}
     </div>
-  );
+  )
 }
