@@ -37,5 +37,16 @@ class Settings(BaseSettings):
     # Misc integrations
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
 
+    # Canva Connect (integration)
+    canva_client_id: str | None = Field(default=None, validation_alias="CANVA_CLIENT_ID")
+    canva_client_secret: str | None = Field(
+        default=None, validation_alias="CANVA_CLIENT_SECRET"
+    )
+    canva_redirect_uri: str | None = Field(default=None, validation_alias="CANVA_REDIRECT_URI")
+    canva_token_enc_key: str | None = Field(default=None, validation_alias="CANVA_TOKEN_ENC_KEY")
+
+    # Legacy JWT secret still used for signed state in integrations (optional)
+    jwt_secret: str | None = Field(default=None, validation_alias="JWT_SECRET")
+
 
 settings = Settings()  # singleton

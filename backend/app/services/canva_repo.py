@@ -50,6 +50,87 @@ def upsert_connection_for_user(user_id: str, fields: dict[str, Any]) -> dict[str
     return _normalize(item) or {}
 
 
+def upsert_pkce_for_user(user_id: str, pkce_id: str, fields: dict[str, Any]) -> dict[str, Any]:
+    now = now_iso()
+    item: dict[str, Any] = {
+        "pk": f"USER#{user_id}",
+        "sk": f"CANVA#PKCE#{pkce_id}",
+        "entityType": "CanvaPkce",
+        "userId": str(user_id),
+        "pkceId": str(pkce_id),
+        "codeVerifierEnc": fields.get("codeVerifierEnc"),
+        "expiresAt": fields.get("expiresAt"),
+        "createdAt": now,
+        "updatedAt": now,
+        "gsi1pk": type_pk("CANVA_PKCE"),
+        "gsi1sk": f"{now}#{user_id}#{pkce_id}",
+    }
+    table().put_item(Item=item)
+    return _normalize(item) or {}
+
+
+def get_pkce_for_user(user_id: str, pkce_id: str) -> dict[str, Any] | None:
+    resp = table().get_item(Key={"pk": f"USER#{user_id}", "sk": f"CANVA#PKCE#{pkce_id}"})
+    return _normalize(resp.get("Item"))
+
+
+def delete_pkce_for_user(user_id: str, pkce_id: str) -> None:
+    table().delete_item(Key={"pk": f"USER#{user_id}", "sk": f"CANVA#PKCE#{pkce_id}"})
+
+
+# --- Proposal design cache (for create-design + export reuse) ---
+
+
+def upsert_proposal_design_cache(
+    *,
+    proposal_id: str,
+    company_id: str,
+    brand_template_id: str,
+    design_id: str,
+    design_url: str | None,
+    meta: dict[str, Any] | None,
+) -> dict[str, Any]:
+    now = now_iso()
+    item: dict[str, Any] = {
+        "pk": f"PROPOSAL#{proposal_id}",
+        "sk": f"CANVA#DESIGN#{company_id}#{brand_template_id}",
+        "entityType": "CanvaProposalDesign",
+        "proposalId": str(proposal_id),
+        "companyId": str(company_id),
+        "brandTemplateId": str(brand_template_id),
+        "designId": str(design_id),
+        "designUrl": str(design_url) if design_url else None,
+        "meta": meta if isinstance(meta, dict) else {},
+        "updatedAt": now,
+        "gsi1pk": type_pk("CANVA_PROPOSAL_DESIGN"),
+        "gsi1sk": f"{now}#{proposal_id}#{company_id}#{brand_template_id}",
+    }
+    table().put_item(Item=item)
+    return _normalize(item) or {}
+
+
+def get_proposal_design_cache(
+    *, proposal_id: str, company_id: str, brand_template_id: str
+) -> dict[str, Any] | None:
+    resp = table().get_item(
+        Key={
+            "pk": f"PROPOSAL#{proposal_id}",
+            "sk": f"CANVA#DESIGN#{company_id}#{brand_template_id}",
+        }
+    )
+    return _normalize(resp.get("Item"))
+
+
+def delete_proposal_design_cache(
+    *, proposal_id: str, company_id: str, brand_template_id: str
+) -> None:
+    table().delete_item(
+        Key={
+            "pk": f"PROPOSAL#{proposal_id}",
+            "sk": f"CANVA#DESIGN#{company_id}#{brand_template_id}",
+        }
+    )
+
 def get_connection_for_user(user_id: str) -> dict[str, Any] | None:
     resp = table().get_item(Key=_connection_key(user_id))
     return _normalize(resp.get("Item"))
@@ -79,6 +160,11 @@ def upsert_company_mapping(company_id: str, brand_template_id: str, field_mappin
     }
     table().put_item(Item=item)
     return _normalize(item) or {}
+
+
+def get_company_mapping(company_id: str) -> dict[str, Any] | None:
+    resp = table().get_item(Key=_company_mapping_key(company_id))
+    return _normalize(resp.get("Item"))
 
 
 def list_company_mappings(limit: int = 200) -> list[dict[str, Any]]:
