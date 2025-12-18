@@ -233,4 +233,3 @@ Outputs:
   PrivateRouteTable2Id:
     Description: Private route table 2 ID
     Value: !Ref PrivateRouteTable2
-

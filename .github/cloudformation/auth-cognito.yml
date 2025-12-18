@@ -64,4 +64,3 @@ Outputs:
   UserPoolClientId:
     Description: Cognito User Pool App Client ID
     Value: !Ref UserPoolClient
-

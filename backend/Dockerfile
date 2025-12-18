@@ -1,32 +1,31 @@
-# Use Node.js 22 Alpine image
-FROM node:22-alpine
+# Python + FastAPI backend image (ECS)
+FROM python:3.11-slim-bookworm
 
-# Set working directory
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# System deps for common python wheels (lxml, pillow/reportlab)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
-RUN npm ci --only=production && npm cache clean --force
+COPY requirements.txt /app/requirements.txt
+RUN python -m pip install --upgrade pip && python -m pip install -r /app/requirements.txt
 
-# Copy source code
-COPY . .
+COPY app /app/app
 
 # Create non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001
+RUN useradd -m -u 1001 appuser
+USER appuser
 
-# Change ownership of the app directory
-RUN chown -R nodejs:nodejs /app
-USER nodejs
-
-# Expose port
 EXPOSE 8080
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:8080/', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })"
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=2).read(); print('ok')"
 
-# Start the application
-CMD ["npm", "start"]
+# Gunicorn + Uvicorn worker for production (use ECS-provided PORT)
+CMD ["sh", "-c", "gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-2} -b 0.0.0.0:${PORT:-8080} app.main:app"]
