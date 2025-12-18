@@ -116,6 +116,15 @@ def request_magic_link(body: MagicLinkRequest):
             print("magic-link: initiate_custom_auth returned no Session")
             return {"ok": True}
 
+        try:
+            dom = email.split("@", 1)[1] if "@" in email else ""
+            print(
+                "magic-link: initiated",
+                {"emailDomain": dom, "magicIdPrefix": magic_id[:6], "hasSession": True},
+            )
+        except Exception:
+            pass
+
         put_magic_session(
             magic_id=magic_id,
             email=email,
