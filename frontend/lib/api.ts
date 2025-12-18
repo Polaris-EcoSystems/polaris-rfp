@@ -3,7 +3,13 @@ import axios from 'axios'
 function normalizeApiBaseUrl(input: string): string {
   const raw = String(input || '').trim()
   if (!raw) return ''
-  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+  // Avoid Mixed Content in production. If someone configured http:// for a non-localhost
+  // API, upgrade to https://.
+  if (raw.startsWith('http://')) {
+    if (raw.includes('localhost') || raw.includes('127.0.0.1')) return raw
+    return raw.replace(/^http:\/\//, 'https://')
+  }
+  if (raw.startsWith('https://')) return raw
   // If a hostname was provided (common for App Runner ServiceUrl), default to https.
   if (raw.includes('localhost')) return `http://${raw}`
   return `https://${raw}`
