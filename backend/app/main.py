@@ -12,6 +12,14 @@ from .middleware.cors import build_allowed_origin_regex, build_allowed_origins
 from .middleware.request_context import RequestContextMiddleware
 from .observability.logging import configure_logging, get_logger
 from .problem_details import problem_response
+from .db.dynamodb.errors import (
+    DdbConflict,
+    DdbError,
+    DdbNotFound,
+    DdbThrottled,
+    DdbUnavailable,
+    DdbValidation,
+ )
 from .routers.health import router as health_router
 from .routers.auth import router as auth_router
 from .routers.content import router as content_router
@@ -67,6 +75,7 @@ def create_app() -> FastAPI:
     # Error handlers
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
+    app.add_exception_handler(DdbError, _ddb_error_handler)
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
     # Routes
@@ -83,6 +92,47 @@ def create_app() -> FastAPI:
     app.include_router(finder_router, prefix="/api/finder")
 
     return app
+
+
+def _ddb_error_handler(request, exc: DdbError):
+    # Map storage-layer errors to stable HTTP semantics.
+    status_code = 500
+    title = "Storage Error"
+
+    if isinstance(exc, DdbValidation):
+        status_code = 400
+        title = "Bad Request"
+    elif isinstance(exc, DdbNotFound):
+        status_code = 404
+        title = "Not Found"
+    elif isinstance(exc, DdbConflict):
+        status_code = 409
+        title = "Conflict"
+    elif isinstance(exc, (DdbThrottled, DdbUnavailable)):
+        status_code = 503
+        title = "Service Unavailable"
+
+    extensions: dict | None = None
+    try:
+        extensions = {
+            "operation": exc.operation,
+            "table": exc.table_name,
+            "key": exc.key,
+            "awsRequestId": exc.aws_request_id,
+            "retryable": bool(getattr(exc, "retryable", False)),
+        }
+        extensions = {k: v for k, v in extensions.items() if v is not None}
+    except Exception:
+        extensions = None
+
+    # In production, problem_response already suppresses 5xx detail.
+    return problem_response(
+        request=request,
+        status_code=status_code,
+        title=title,
+        detail=str(exc) if isinstance(getattr(exc, "message", None), str) else None,
+        extensions=extensions,
+    )
 
 
 def _http_exception_handler(request, exc: StarletteHTTPException):

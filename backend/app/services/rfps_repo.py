@@ -6,7 +6,7 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from .ddb import table
+from ..db.dynamodb.table import get_main_table
 from .rfp_logic import check_disqualification, compute_date_sanity, compute_fit_score
 
 
@@ -71,48 +71,63 @@ def create_rfp_from_analysis(*, analysis: dict[str, Any], source_file_name: str,
         **_rfp_type_item(rfp_id, created_at),
     }
 
-    table().put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
+    get_main_table().put_item(item=item, condition_expression="attribute_not_exists(pk)")
     return normalize_rfp_for_api(item) or {}
 
 
 def get_rfp_by_id(rfp_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=rfp_key(rfp_id))
-    return normalize_rfp_for_api(resp.get("Item"))
+    item = get_main_table().get_item(key=rfp_key(rfp_id))
+    return normalize_rfp_for_api(item)
 
 
-def list_rfps(page: int = 1, limit: int = 20) -> dict[str, Any]:
+def list_rfps(page: int = 1, limit: int = 20, next_token: str | None = None) -> dict[str, Any]:
+    """List RFPs via cursor pagination.
+
+    - Primary pagination mechanism is `next_token` (opaque encrypted cursor).
+    - `page` is kept for backward compatibility but is implemented by advancing
+      the cursor `page-1` times, which can be expensive.
+    """
     p = max(1, int(page or 1))
     lim = max(1, min(200, int(limit or 20)))
-    desired = p * lim
 
-    items: list[dict[str, Any]] = []
-    last_key = None
+    t = get_main_table()
+    token = next_token
 
-    while len(items) < desired:
-        resp = table().query(
-            IndexName="GSI1",
-            KeyConditionExpression=Key("gsi1pk").eq(type_pk("RFP")),
-            ScanIndexForward=False,
-            Limit=min(200, desired - len(items)),
-            ExclusiveStartKey=last_key,
-        )
-        batch = resp.get("Items") or []
-        items.extend(batch)
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key or not batch:
-            break
+    # Back-compat: if a caller requests a deeper \"page\" without providing a token,
+    # advance the cursor `page-1` times.
+    if not token and p > 1:
+        for _ in range(1, p):
+            pg = t.query_page(
+                index_name="GSI1",
+                key_condition_expression=Key("gsi1pk").eq(type_pk("RFP")),
+                scan_index_forward=False,
+                limit=lim,
+                next_token=token,
+            )
+            token = pg.next_token
+            if not token:
+                break
 
-    total = len(items)
-    slice_items = items[(p - 1) * lim : p * lim]
+    page_resp = t.query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq(type_pk("RFP")),
+        scan_index_forward=False,
+        limit=lim,
+        next_token=token,
+    )
+
+    data: list[dict[str, Any]] = []
+    for it in page_resp.items:
+        norm = normalize_rfp_for_api(it)
+        if norm:
+            data.append(norm)
 
     return {
-        "data": [normalize_rfp_for_api(it) for it in slice_items if normalize_rfp_for_api(it)],
-        "pagination": {
-            "page": p,
-            "limit": lim,
-            "total": total,
-            "pages": max(1, (total + lim - 1) // lim),
-        },
+        "data": data,
+        "nextToken": page_resp.next_token,
+        # Keep a small pagination object for legacy callers. Totals are not computed
+        # in cursor mode (would require extra scans/queries).
+        "pagination": {"page": p, "limit": lim},
     }
 
 
@@ -156,28 +171,38 @@ def update_rfp(rfp_id: str, updates_obj: dict[str, Any]) -> dict[str, Any] | Non
 
     expr_parts.append("updatedAt = :u")
 
-    resp = table().update_item(
-        Key=rfp_key(rfp_id),
-        UpdateExpression="SET " + ", ".join(expr_parts),
-        ExpressionAttributeNames=expr_names if expr_names else None,
-        ExpressionAttributeValues=expr_values,
-        ReturnValues="ALL_NEW",
+    updated = get_main_table().update_item(
+        key=rfp_key(rfp_id),
+        update_expression="SET " + ", ".join(expr_parts),
+        expression_attribute_names=expr_names if expr_names else None,
+        expression_attribute_values=expr_values,
+        return_values="ALL_NEW",
     )
 
-    return normalize_rfp_for_api(resp.get("Attributes"))
+    return normalize_rfp_for_api(updated)
 
 
 def delete_rfp(rfp_id: str) -> None:
-    table().delete_item(Key=rfp_key(rfp_id))
+    get_main_table().delete_item(key=rfp_key(rfp_id))
 
 
 def list_rfp_proposal_summaries(rfp_id: str) -> list[dict[str, Any]]:
-    resp = table().query(
-        KeyConditionExpression=Key("pk").eq(f"RFP#{rfp_id}") & Key("sk").begins_with("PROPOSAL#"),
-        ScanIndexForward=False,
-    )
+    t = get_main_table()
+    items: list[dict[str, Any]] = []
+    tok: str | None = None
+    while True:
+        pg = t.query_page(
+            key_condition_expression=Key("pk").eq(f"RFP#{rfp_id}")
+            & Key("sk").begins_with("PROPOSAL#"),
+            scan_index_forward=False,
+            limit=200,
+            next_token=tok,
+        )
+        items.extend(pg.items)
+        tok = pg.next_token
+        if not tok or not pg.items:
+            break
 
-    items = resp.get("Items") or []
     out: list[dict[str, Any]] = []
     for it in items:
         o = dict(it)

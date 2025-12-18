@@ -6,7 +6,7 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from .ddb import table
+from ..db.dynamodb.table import get_main_table
 
 
 def now_iso() -> str:
@@ -87,8 +87,6 @@ def create_proposal(
         **proposal_type_item(proposal_id, updated_at),
     }
 
-    table().put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
-
     link = {
         **proposal_rfp_link_key(rfp_id, proposal_id),
         "entityType": "RfpProposalLink",
@@ -102,53 +100,74 @@ def create_proposal(
         "createdAt": created_at,
         "updatedAt": updated_at,
     }
-    table().put_item(Item=link)
+
+    # Transactional create: ensure both the proposal and the link item are created
+    # atomically, and never overwrite an existing item.
+    t = get_main_table()
+    t.transact_write(
+        puts=[
+            t.tx_put(
+                item=item,
+                condition_expression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+            ),
+            t.tx_put(
+                item=link,
+                condition_expression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+            ),
+        ]
+    )
 
     return normalize_proposal_for_api(item, include_sections=True) or {}
 
 
 def get_proposal_by_id(proposal_id: str, include_sections: bool = True) -> dict[str, Any] | None:
-    resp = table().get_item(Key=proposal_key(proposal_id))
-    return normalize_proposal_for_api(resp.get("Item"), include_sections=include_sections)
+    item = get_main_table().get_item(key=proposal_key(proposal_id))
+    return normalize_proposal_for_api(item, include_sections=include_sections)
 
 
-def list_proposals(page: int = 1, limit: int = 20) -> dict[str, Any]:
+def list_proposals(page: int = 1, limit: int = 20, next_token: str | None = None) -> dict[str, Any]:
+    """List proposals via cursor pagination.
+
+    - Primary pagination mechanism is `next_token`.
+    - `page` is supported for backward compatibility by advancing the cursor.
+    """
     p = max(1, int(page or 1))
     lim = max(1, min(200, int(limit or 20)))
-    desired = p * lim
 
-    items: list[dict[str, Any]] = []
-    last_key = None
+    t = get_main_table()
+    token = next_token
 
-    while len(items) < desired:
-        resp = table().query(
-            IndexName="GSI1",
-            KeyConditionExpression=Key("gsi1pk").eq(type_pk("PROPOSAL")),
-            ScanIndexForward=False,
-            Limit=min(200, desired - len(items)),
-            ExclusiveStartKey=last_key,
-        )
-        batch = resp.get("Items") or []
-        items.extend(batch)
-        last_key = resp.get("LastEvaluatedKey")
-        if not last_key or not batch:
-            break
+    if not token and p > 1:
+        for _ in range(1, p):
+            pg = t.query_page(
+                index_name="GSI1",
+                key_condition_expression=Key("gsi1pk").eq(type_pk("PROPOSAL")),
+                scan_index_forward=False,
+                limit=lim,
+                next_token=token,
+            )
+            token = pg.next_token
+            if not token:
+                break
 
-    total = len(items)
-    slice_items = items[(p - 1) * lim : p * lim]
+    page_resp = t.query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq(type_pk("PROPOSAL")),
+        scan_index_forward=False,
+        limit=lim,
+        next_token=token,
+    )
+
+    data: list[dict[str, Any]] = []
+    for it in page_resp.items:
+        norm = normalize_proposal_for_api(it, include_sections=False)
+        if norm:
+            data.append(norm)
 
     return {
-        "data": [
-            normalize_proposal_for_api(it, include_sections=False)
-            for it in slice_items
-            if normalize_proposal_for_api(it, include_sections=False)
-        ],
-        "pagination": {
-            "page": p,
-            "limit": lim,
-            "total": total,
-            "pages": max(1, (total + lim - 1) // lim),
-        },
+        "data": data,
+        "nextToken": page_resp.next_token,
+        "pagination": {"page": p, "limit": lim},
     }
 
 
@@ -184,21 +203,19 @@ def update_proposal(proposal_id: str, updates_obj: dict[str, Any]) -> dict[str, 
     expr_parts.append("updatedAt = :u")
     expr_parts.append("gsi1sk = :g")
 
-    resp = table().update_item(
-        Key=proposal_key(proposal_id),
-        UpdateExpression="SET " + ", ".join(expr_parts),
-        ExpressionAttributeNames=expr_names if expr_names else None,
-        ExpressionAttributeValues=expr_values,
-        ReturnValues="ALL_NEW",
+    updated = get_main_table().update_item(
+        key=proposal_key(proposal_id),
+        update_expression="SET " + ", ".join(expr_parts),
+        expression_attribute_names=expr_names if expr_names else None,
+        expression_attribute_values=expr_values,
+        return_values="ALL_NEW",
     )
-
-    updated = resp.get("Attributes")
 
     # best-effort update link item
     if updated and updated.get("rfpId"):
         try:
-            table().put_item(
-                Item={
+            get_main_table().put_item(
+                item={
                     **proposal_rfp_link_key(updated["rfpId"], proposal_id),
                     "entityType": "RfpProposalLink",
                     "proposalId": proposal_id,
@@ -220,18 +237,17 @@ def update_proposal(proposal_id: str, updates_obj: dict[str, Any]) -> dict[str, 
 
 def update_proposal_review(proposal_id: str, review_patch: dict[str, Any]) -> dict[str, Any] | None:
     now = now_iso()
-    resp = table().update_item(
-        Key=proposal_key(proposal_id),
-        UpdateExpression="SET review = :r, updatedAt = :u, gsi1sk = :g",
-        ExpressionAttributeValues={":r": review_patch, ":u": now, ":g": f"{now}#{proposal_id}"},
-        ReturnValues="ALL_NEW",
+    updated = get_main_table().update_item(
+        key=proposal_key(proposal_id),
+        update_expression="SET review = :r, updatedAt = :u, gsi1sk = :g",
+        expression_attribute_names=None,
+        expression_attribute_values={":r": review_patch, ":u": now, ":g": f"{now}#{proposal_id}"},
+        return_values="ALL_NEW",
     )
-
-    updated = resp.get("Attributes")
     if updated and updated.get("rfpId"):
         try:
-            table().put_item(
-                Item={
+            get_main_table().put_item(
+                item={
                     **proposal_rfp_link_key(updated["rfpId"], proposal_id),
                     "entityType": "RfpProposalLink",
                     "proposalId": proposal_id,
@@ -253,21 +269,31 @@ def update_proposal_review(proposal_id: str, review_patch: dict[str, Any]) -> di
 
 def delete_proposal(proposal_id: str) -> None:
     existing = get_proposal_by_id(proposal_id, include_sections=False)
-    table().delete_item(Key=proposal_key(proposal_id))
+    get_main_table().delete_item(key=proposal_key(proposal_id))
     if existing and existing.get("rfpId"):
         try:
-            table().delete_item(Key=proposal_rfp_link_key(existing["rfpId"], proposal_id))
+            get_main_table().delete_item(key=proposal_rfp_link_key(existing["rfpId"], proposal_id))
         except Exception:
             pass
 
 
 def list_proposals_by_rfp(rfp_id: str) -> list[dict[str, Any]]:
-    resp = table().query(
-        KeyConditionExpression=Key("pk").eq(f"RFP#{rfp_id}") & Key("sk").begins_with("PROPOSAL#"),
-        ScanIndexForward=False,
-    )
+    t = get_main_table()
+    items: list[dict[str, Any]] = []
+    tok: str | None = None
+    while True:
+        pg = t.query_page(
+            key_condition_expression=Key("pk").eq(f"RFP#{rfp_id}")
+            & Key("sk").begins_with("PROPOSAL#"),
+            scan_index_forward=False,
+            limit=200,
+            next_token=tok,
+        )
+        items.extend(pg.items)
+        tok = pg.next_token
+        if not tok or not pg.items:
+            break
 
-    items = resp.get("Items") or []
     out: list[dict[str, Any]] = []
     for it in items:
         o = dict(it)

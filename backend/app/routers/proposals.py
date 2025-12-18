@@ -364,9 +364,9 @@ def generate_sections(id: str):
 
 
 @router.get("/")
-def list_all(request: Request, page: int = 1, limit: int = 20):
+def list_all(request: Request, page: int = 1, limit: int = 20, nextToken: str | None = None):
     try:
-        return list_proposals(page=page, limit=limit)
+        return list_proposals(page=page, limit=limit, next_token=nextToken)
     except Exception as e:
         rid = getattr(getattr(request, "state", None), "request_id", None)
         user = getattr(getattr(request, "state", None), "user", None)

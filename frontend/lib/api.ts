@@ -238,6 +238,17 @@ export function extractList<T = any>(resp: any): T[] {
   return []
 }
 
+export function extractNextToken(resp: any): string | null {
+  const payload = resp?.data ?? resp
+  const tok = payload?.nextToken ?? payload?.data?.nextToken
+  return typeof tok === 'string' && tok ? tok : null
+}
+
+export type CursorListParams = {
+  limit?: number
+  nextToken?: string
+}
+
 // RFP API calls
 export const rfpApi = {
   upload: (file: File) => {
@@ -250,7 +261,13 @@ export const rfpApi = {
   },
   analyzeUrls: (urls: string[]) => api.post('/api/rfp/analyze-urls', { urls }),
   // Backend routes are defined with a trailing slash; avoid 307 redirects.
-  list: () => api.get<{ data: RFP[] }>('/api/rfp/'),
+  list: (params?: CursorListParams) =>
+    api.get<{ data: RFP[]; nextToken?: string | null }>('/api/rfp/', {
+      params: {
+        limit: params?.limit,
+        nextToken: params?.nextToken,
+      },
+    }),
   get: (id: string) => api.get<RFP>(`/api/rfp/${id}`),
   update: (id: string, data: any) => api.put<RFP>(`/api/rfp/${id}`, data),
   delete: (id: string) => api.delete(`/api/rfp/${id}`),
@@ -278,7 +295,16 @@ export const proposalApi = {
     customContent?: any
   }) => api.post<Proposal>('/api/proposals/generate', data),
   // Backend routes are defined with a trailing slash; avoid 307 redirects.
-  list: () => api.get<{ data: Proposal[] }>('/api/proposals/'),
+  list: (params?: CursorListParams) =>
+    api.get<{ data: Proposal[]; nextToken?: string | null }>(
+      '/api/proposals/',
+      {
+        params: {
+          limit: params?.limit,
+          nextToken: params?.nextToken,
+        },
+      },
+    ),
   get: (id: string) => api.get<Proposal>(`/api/proposals/${id}`),
   update: (id: string, data: any) =>
     api.put<Proposal>(`/api/proposals/${id}`, data),
@@ -474,7 +500,16 @@ export const proposalApiPdf = {
     title: string
     customContent?: any
   }) => api.post<Proposal>('/api/proposals/generate', data),
-  list: () => api.get<{ data: Proposal[] }>('/api/proposals/'),
+  list: (params?: CursorListParams) =>
+    api.get<{ data: Proposal[]; nextToken?: string | null }>(
+      '/api/proposals/',
+      {
+        params: {
+          limit: params?.limit,
+          nextToken: params?.nextToken,
+        },
+      },
+    ),
   get: (id: string) => api.get<Proposal>(`/api/proposals/${id}`),
   update: (id: string, data: any) =>
     api.put<Proposal>(`/api/proposals/${id}`, data),

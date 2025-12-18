@@ -7,7 +7,7 @@ from typing import Any, Iterable
 
 from boto3.dynamodb.conditions import Key
 
-from .ddb import table
+from ..db.dynamodb.table import get_main_table
 
 
 def now_iso() -> str:
@@ -42,12 +42,11 @@ def put_user_linkedin_state(*, user_sub: str, encrypted_storage_state: str) -> N
         "encryptedStorageState": encrypted_storage_state,
         "updatedAt": now_iso(),
     }
-    table().put_item(Item=item)
+    get_main_table().put_item(item=item)
 
 
 def get_user_linkedin_state(*, user_sub: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=user_state_key(user_sub))
-    return resp.get("Item")
+    return get_main_table().get_item(key=user_state_key(user_sub))
 
 
 def create_run(
@@ -77,8 +76,6 @@ def create_run(
         "progress": {"discovered": 0, "saved": 0, "scored": 0},
         "error": None,
     }
-    table().put_item(Item=run_item, ConditionExpression="attribute_not_exists(pk)")
-
     link_item: dict[str, Any] = {
         **rfp_run_link_key(rfp_id, run_id),
         "entityType": "FinderRunLink",
@@ -87,13 +84,26 @@ def create_run(
         "userSub": user_sub,
         "createdAt": created_at,
     }
-    table().put_item(Item=link_item)
+
+    # Transactional create: ensure the run and the RFP link are created atomically.
+    t = get_main_table()
+    t.transact_write(
+        puts=[
+            t.tx_put(
+                item=run_item,
+                condition_expression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+            ),
+            t.tx_put(
+                item=link_item,
+                condition_expression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+            ),
+        ]
+    )
     return run_item
 
 
 def get_run(run_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=run_key(run_id))
-    return resp.get("Item")
+    return get_main_table().get_item(key=run_key(run_id))
 
 
 def update_run_fields(run_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
@@ -112,14 +122,13 @@ def update_run_fields(run_id: str, updates: dict[str, Any]) -> dict[str, Any] | 
         expr_values[vk] = v
         expr_parts.append(f"{nk} = {vk}")
 
-    resp = table().update_item(
-        Key=run_key(run_id),
-        UpdateExpression="SET " + ", ".join(expr_parts),
-        ExpressionAttributeNames=expr_names,
-        ExpressionAttributeValues=expr_values,
-        ReturnValues="ALL_NEW",
+    return get_main_table().update_item(
+        key=run_key(run_id),
+        update_expression="SET " + ", ".join(expr_parts),
+        expression_attribute_names=expr_names,
+        expression_attribute_values=expr_values,
+        return_values="ALL_NEW",
     )
-    return resp.get("Attributes")
 
 
 def put_profiles(*, run_id: str, profiles: Iterable[dict[str, Any]]) -> int:
@@ -134,20 +143,22 @@ def put_profiles(*, run_id: str, profiles: Iterable[dict[str, Any]]) -> int:
             "createdAt": now_iso(),
             **p,
         }
-        table().put_item(Item=item)
+        get_main_table().put_item(item=item)
         n += 1
     return n
 
 
 def list_profiles(run_id: str, limit: int = 200) -> list[dict[str, Any]]:
     lim = max(1, min(500, int(limit or 200)))
-    resp = table().query(
-        KeyConditionExpression=Key("pk").eq(f"FINDER#RUN#{run_id}")
+    t = get_main_table()
+    pg = t.query_page(
+        key_condition_expression=Key("pk").eq(f"FINDER#RUN#{run_id}")
         & Key("sk").begins_with("FINDER#PROFILE#"),
-        ScanIndexForward=True,
-        Limit=lim,
+        scan_index_forward=True,
+        limit=lim,
+        next_token=None,
     )
-    return resp.get("Items") or []
+    return pg.items
 
 
 def normalize_storage_state(storage_state: Any) -> dict[str, Any]:

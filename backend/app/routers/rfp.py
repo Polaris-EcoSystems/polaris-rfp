@@ -102,9 +102,9 @@ async def upload(file: UploadFile = File(...)):
 
 
 @router.get("/")
-def get_all(request: Request, page: int = 1, limit: int = 20):
+def get_all(request: Request, page: int = 1, limit: int = 20, nextToken: str | None = None):
     try:
-        return list_rfps(page=page, limit=limit)
+        return list_rfps(page=page, limit=limit, next_token=nextToken)
     except Exception as e:
         # Ensure we get a traceback in CloudWatch (these errors are otherwise swallowed by HTTPException).
         rid = getattr(getattr(request, "state", None), "request_id", None)

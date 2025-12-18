@@ -5,7 +5,7 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from .ddb import table
+from ..db.dynamodb.table import get_main_table
 
 
 def now_iso() -> str:
@@ -46,7 +46,7 @@ def upsert_connection_for_user(user_id: str, fields: dict[str, Any]) -> dict[str
         "gsi1pk": type_pk("CANVA_CONNECTION"),
         "gsi1sk": f"{now}#{user_id}",
     }
-    table().put_item(Item=item)
+    get_main_table().put_item(item=item)
     return _normalize(item) or {}
 
 
@@ -65,17 +65,17 @@ def upsert_pkce_for_user(user_id: str, pkce_id: str, fields: dict[str, Any]) -> 
         "gsi1pk": type_pk("CANVA_PKCE"),
         "gsi1sk": f"{now}#{user_id}#{pkce_id}",
     }
-    table().put_item(Item=item)
+    get_main_table().put_item(item=item)
     return _normalize(item) or {}
 
 
 def get_pkce_for_user(user_id: str, pkce_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key={"pk": f"USER#{user_id}", "sk": f"CANVA#PKCE#{pkce_id}"})
-    return _normalize(resp.get("Item"))
+    item = get_main_table().get_item(key={"pk": f"USER#{user_id}", "sk": f"CANVA#PKCE#{pkce_id}"})
+    return _normalize(item)
 
 
 def delete_pkce_for_user(user_id: str, pkce_id: str) -> None:
-    table().delete_item(Key={"pk": f"USER#{user_id}", "sk": f"CANVA#PKCE#{pkce_id}"})
+    get_main_table().delete_item(key={"pk": f"USER#{user_id}", "sk": f"CANVA#PKCE#{pkce_id}"})
 
 
 # --- Proposal design cache (for create-design + export reuse) ---
@@ -105,39 +105,39 @@ def upsert_proposal_design_cache(
         "gsi1pk": type_pk("CANVA_PROPOSAL_DESIGN"),
         "gsi1sk": f"{now}#{proposal_id}#{company_id}#{brand_template_id}",
     }
-    table().put_item(Item=item)
+    get_main_table().put_item(item=item)
     return _normalize(item) or {}
 
 
 def get_proposal_design_cache(
     *, proposal_id: str, company_id: str, brand_template_id: str
 ) -> dict[str, Any] | None:
-    resp = table().get_item(
-        Key={
+    item = get_main_table().get_item(
+        key={
             "pk": f"PROPOSAL#{proposal_id}",
             "sk": f"CANVA#DESIGN#{company_id}#{brand_template_id}",
         }
     )
-    return _normalize(resp.get("Item"))
+    return _normalize(item)
 
 
 def delete_proposal_design_cache(
     *, proposal_id: str, company_id: str, brand_template_id: str
 ) -> None:
-    table().delete_item(
-        Key={
+    get_main_table().delete_item(
+        key={
             "pk": f"PROPOSAL#{proposal_id}",
             "sk": f"CANVA#DESIGN#{company_id}#{brand_template_id}",
         }
     )
 
 def get_connection_for_user(user_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=_connection_key(user_id))
-    return _normalize(resp.get("Item"))
+    item = get_main_table().get_item(key=_connection_key(user_id))
+    return _normalize(item)
 
 
 def delete_connection_for_user(user_id: str) -> None:
-    table().delete_item(Key=_connection_key(user_id))
+    get_main_table().delete_item(key=_connection_key(user_id))
 
 
 # --- Company mappings ---
@@ -158,24 +158,26 @@ def upsert_company_mapping(company_id: str, brand_template_id: str, field_mappin
         "gsi1pk": type_pk("CANVA_COMPANY_TEMPLATE"),
         "gsi1sk": f"{now}#{company_id}",
     }
-    table().put_item(Item=item)
+    get_main_table().put_item(item=item)
     return _normalize(item) or {}
 
 
 def get_company_mapping(company_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=_company_mapping_key(company_id))
-    return _normalize(resp.get("Item"))
+    item = get_main_table().get_item(key=_company_mapping_key(company_id))
+    return _normalize(item)
 
 
 def list_company_mappings(limit: int = 200) -> list[dict[str, Any]]:
-    resp = table().query(
-        IndexName="GSI1",
-        KeyConditionExpression=Key("gsi1pk").eq(type_pk("CANVA_COMPANY_TEMPLATE")),
-        ScanIndexForward=False,
-        Limit=max(1, min(200, int(limit or 200))),
+    t = get_main_table()
+    pg = t.query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq(type_pk("CANVA_COMPANY_TEMPLATE")),
+        scan_index_forward=False,
+        limit=max(1, min(200, int(limit or 200))),
+        next_token=None,
     )
     out: list[dict[str, Any]] = []
-    for it in resp.get("Items") or []:
+    for it in pg.items:
         norm = _normalize(it)
         if norm:
             out.append(norm)
@@ -203,10 +205,10 @@ def upsert_asset_link(owner_type: str, owner_id: str, kind: str, canva_asset_id:
         "gsi1pk": type_pk("CANVA_ASSET_LINK"),
         "gsi1sk": f"{now}#{owner_type}#{owner_id}#{kind}",
     }
-    table().put_item(Item=item)
+    get_main_table().put_item(item=item)
     return _normalize(item) or {}
 
 
 def get_asset_link(owner_type: str, owner_id: str, kind: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=_asset_link_key(owner_type, owner_id, kind))
-    return _normalize(resp.get("Item"))
+    item = get_main_table().get_item(key=_asset_link_key(owner_type, owner_id, kind))
+    return _normalize(item)

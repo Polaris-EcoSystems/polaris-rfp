@@ -6,7 +6,7 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from .ddb import table
+from ..db.dynamodb.table import get_main_table
 
 
 def now_iso() -> str:
@@ -36,19 +36,21 @@ def normalize_template(item: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def get_template_by_id(template_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=template_key(template_id))
-    return normalize_template(resp.get("Item"))
+    item = get_main_table().get_item(key=template_key(template_id))
+    return normalize_template(item)
 
 
 def list_templates(limit: int = 200) -> list[dict[str, Any]]:
-    resp = table().query(
-        IndexName="GSI1",
-        KeyConditionExpression=Key("gsi1pk").eq(type_pk("TEMPLATE")),
-        ScanIndexForward=False,
-        Limit=max(1, min(200, int(limit or 200))),
+    t = get_main_table()
+    pg = t.query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq(type_pk("TEMPLATE")),
+        scan_index_forward=False,
+        limit=max(1, min(200, int(limit or 200))),
+        next_token=None,
     )
     out: list[dict[str, Any]] = []
-    for it in resp.get("Items") or []:
+    for it in pg.items:
         norm = normalize_template(it)
         if norm:
             out.append(norm)
@@ -78,7 +80,7 @@ def create_template(doc: dict[str, Any]) -> dict[str, Any]:
         "gsi1sk": f"{now}#{template_id}",
     }
 
-    table().put_item(Item=item, ConditionExpression="attribute_not_exists(pk)")
+    get_main_table().put_item(item=item, condition_expression="attribute_not_exists(pk)")
     return normalize_template(item) or {}
 
 
@@ -113,16 +115,16 @@ def update_template(template_id: str, patch: dict[str, Any]) -> dict[str, Any] |
     expr_parts.append("updatedAt = :u")
     expr_parts.append("gsi1sk = :g")
 
-    resp = table().update_item(
-        Key=template_key(template_id),
-        UpdateExpression="SET " + ", ".join(expr_parts),
-        ExpressionAttributeNames=expr_names if expr_names else None,
-        ExpressionAttributeValues=expr_values,
-        ReturnValues="ALL_NEW",
+    updated = get_main_table().update_item(
+        key=template_key(template_id),
+        update_expression="SET " + ", ".join(expr_parts),
+        expression_attribute_names=expr_names if expr_names else None,
+        expression_attribute_values=expr_values,
+        return_values="ALL_NEW",
     )
 
-    return normalize_template(resp.get("Attributes"))
+    return normalize_template(updated)
 
 
 def delete_template(template_id: str) -> None:
-    table().delete_item(Key=template_key(template_id))
+    get_main_table().delete_item(key=template_key(template_id))

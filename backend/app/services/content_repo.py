@@ -7,7 +7,7 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from .ddb import table
+from ..db.dynamodb.table import get_main_table
 
 
 def now_iso() -> str:
@@ -44,20 +44,21 @@ def company_key(company_id: str) -> dict[str, str]:
 
 
 def get_company_by_company_id(company_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=company_key(company_id))
-    return _normalize(resp.get("Item"), id_field="companyId")
+    item = get_main_table().get_item(key=company_key(company_id))
+    return _normalize(item, id_field="companyId")
 
 
 def list_companies(limit: int = 200) -> list[dict[str, Any]]:
-    resp = table().query(
-        IndexName="GSI1",
-        KeyConditionExpression=Key("gsi1pk").eq(type_pk("COMPANY")),
-        ScanIndexForward=False,
-        Limit=max(1, min(200, int(limit or 200))),
+    pg = get_main_table().query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq(type_pk("COMPANY")),
+        scan_index_forward=False,
+        limit=max(1, min(200, int(limit or 200))),
+        next_token=None,
     )
     return [
         _normalize(it, id_field="companyId")
-        for it in (resp.get("Items") or [])
+        for it in (pg.items or [])
         if _normalize(it, id_field="companyId")
     ]
 
@@ -76,7 +77,7 @@ def upsert_company(company: dict[str, Any]) -> dict[str, Any]:
         "gsi1pk": type_pk("COMPANY"),
         "gsi1sk": f"{now}#{company_id}",
     }
-    table().put_item(Item=item)
+    get_main_table().put_item(item=item)
     return _normalize(item, id_field="companyId") or {}
 
 
@@ -87,19 +88,20 @@ def team_member_key(member_id: str) -> dict[str, str]:
 
 
 def get_team_member_by_id(member_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=team_member_key(member_id))
-    return _normalize(resp.get("Item"), id_field="memberId")
+    item = get_main_table().get_item(key=team_member_key(member_id))
+    return _normalize(item, id_field="memberId")
 
 
 def list_team_members(limit: int = 200) -> list[dict[str, Any]]:
-    resp = table().query(
-        IndexName="GSI1",
-        KeyConditionExpression=Key("gsi1pk").eq(type_pk("TEAM_MEMBER")),
-        ScanIndexForward=False,
-        Limit=max(1, min(500, int(limit or 200))),
+    pg = get_main_table().query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq(type_pk("TEAM_MEMBER")),
+        scan_index_forward=False,
+        limit=max(1, min(500, int(limit or 200))),
+        next_token=None,
     )
     out: list[dict[str, Any]] = []
-    for it in resp.get("Items") or []:
+    for it in pg.items or []:
         norm = _normalize(it, id_field="memberId")
         if norm:
             out.append(norm)
@@ -127,7 +129,7 @@ def upsert_team_member(member: dict[str, Any]) -> dict[str, Any]:
         "gsi1pk": type_pk("TEAM_MEMBER"),
         "gsi1sk": f"{now}#{member_id}",
     }
-    table().put_item(Item=item)
+    get_main_table().put_item(item=item)
     return _normalize(item, id_field="memberId") or {}
 
 
@@ -138,22 +140,23 @@ def past_project_key(project_id: str) -> dict[str, str]:
 
 
 def list_past_projects(limit: int = 200) -> list[dict[str, Any]]:
-    resp = table().query(
-        IndexName="GSI1",
-        KeyConditionExpression=Key("gsi1pk").eq(type_pk("PAST_PROJECT")),
-        ScanIndexForward=False,
-        Limit=max(1, min(500, int(limit or 200))),
+    pg = get_main_table().query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq(type_pk("PAST_PROJECT")),
+        scan_index_forward=False,
+        limit=max(1, min(500, int(limit or 200))),
+        next_token=None,
     )
     return [
         _normalize(it, id_field="projectId")
-        for it in (resp.get("Items") or [])
+        for it in (pg.items or [])
         if _normalize(it, id_field="projectId")
     ]
 
 
 def get_past_project_by_id(project_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=past_project_key(project_id))
-    return _normalize(resp.get("Item"), id_field="projectId")
+    item = get_main_table().get_item(key=past_project_key(project_id))
+    return _normalize(item, id_field="projectId")
 
 
 def upsert_past_project(project: dict[str, Any]) -> dict[str, Any]:
@@ -170,7 +173,7 @@ def upsert_past_project(project: dict[str, Any]) -> dict[str, Any]:
         "gsi1pk": type_pk("PAST_PROJECT"),
         "gsi1sk": f"{now}#{project_id}",
     }
-    table().put_item(Item=item)
+    get_main_table().put_item(item=item)
     return _normalize(item, id_field="projectId") or {}
 
 
@@ -181,15 +184,16 @@ def project_reference_key(reference_id: str) -> dict[str, str]:
 
 
 def list_project_references(limit: int = 200) -> list[dict[str, Any]]:
-    resp = table().query(
-        IndexName="GSI1",
-        KeyConditionExpression=Key("gsi1pk").eq(type_pk("PROJECT_REFERENCE")),
-        ScanIndexForward=False,
-        Limit=max(1, min(500, int(limit or 200))),
+    pg = get_main_table().query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq(type_pk("PROJECT_REFERENCE")),
+        scan_index_forward=False,
+        limit=max(1, min(500, int(limit or 200))),
+        next_token=None,
     )
     return [
         _normalize(it, id_field="referenceId")
-        for it in (resp.get("Items") or [])
+        for it in (pg.items or [])
         if _normalize(it, id_field="referenceId")
     ]
 
@@ -206,8 +210,8 @@ def get_project_references_by_ids(reference_ids: list[str]) -> list[dict[str, An
 
 
 def get_project_reference_by_id(reference_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=project_reference_key(reference_id))
-    return _normalize(resp.get("Item"), id_field="referenceId")
+    item = get_main_table().get_item(key=project_reference_key(reference_id))
+    return _normalize(item, id_field="referenceId")
 
 
 def upsert_project_reference(ref: dict[str, Any]) -> dict[str, Any]:
@@ -224,5 +228,5 @@ def upsert_project_reference(ref: dict[str, Any]) -> dict[str, Any]:
         "gsi1pk": type_pk("PROJECT_REFERENCE"),
         "gsi1sk": f"{now}#{reference_id}",
     }
-    table().put_item(Item=item)
+    get_main_table().put_item(item=item)
     return _normalize(item, id_field="referenceId") or {}

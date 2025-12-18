@@ -6,7 +6,7 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from .ddb import table
+from ..db.dynamodb.table import get_main_table
 
 
 def now_iso() -> str:
@@ -46,7 +46,7 @@ def add_attachments(rfp_id: str, attachments: list[dict[str, Any]]) -> list[dict
             "uploadedAt": uploaded_at,
             **(a or {}),
         }
-        table().put_item(Item=item)
+        get_main_table().put_item(item=item)
         norm = normalize_attachment(item)
         if norm:
             created.append(norm)
@@ -54,12 +54,24 @@ def add_attachments(rfp_id: str, attachments: list[dict[str, Any]]) -> list[dict
 
 
 def list_attachments(rfp_id: str) -> list[dict[str, Any]]:
-    resp = table().query(
-        KeyConditionExpression=Key("pk").eq(f"RFP#{rfp_id}") & Key("sk").begins_with("ATTACHMENT#"),
-        ScanIndexForward=False,
-    )
+    t = get_main_table()
+    items: list[dict[str, Any]] = []
+    tok: str | None = None
+    while True:
+        pg = t.query_page(
+            key_condition_expression=Key("pk").eq(f"RFP#{rfp_id}")
+            & Key("sk").begins_with("ATTACHMENT#"),
+            scan_index_forward=False,
+            limit=200,
+            next_token=tok,
+        )
+        items.extend(pg.items)
+        tok = pg.next_token
+        if not tok or not pg.items:
+            break
+
     out: list[dict[str, Any]] = []
-    for it in resp.get("Items") or []:
+    for it in items:
         norm = normalize_attachment(it)
         if norm:
             out.append(norm)
@@ -67,9 +79,9 @@ def list_attachments(rfp_id: str) -> list[dict[str, Any]]:
 
 
 def get_attachment(rfp_id: str, attachment_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key=attachment_key(rfp_id, attachment_id))
-    return normalize_attachment(resp.get("Item"))
+    item = get_main_table().get_item(key=attachment_key(rfp_id, attachment_id))
+    return normalize_attachment(item)
 
 
 def delete_attachment(rfp_id: str, attachment_id: str) -> None:
-    table().delete_item(Key=attachment_key(rfp_id, attachment_id))
+    get_main_table().delete_item(key=attachment_key(rfp_id, attachment_id))

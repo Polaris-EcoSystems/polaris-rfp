@@ -1,22 +1,18 @@
 from __future__ import annotations
 
 import time
-from functools import lru_cache
 from typing import Any
 
-import boto3
 from boto3.dynamodb.conditions import Key
 
 from ..settings import settings
+from ..db.dynamodb.table import get_table
 
 
-@lru_cache(maxsize=1)
-def table():
+def _table():
     if not settings.magic_link_table_name:
         raise RuntimeError("MAGIC_LINK_TABLE_NAME is not configured")
-    return boto3.resource("dynamodb", region_name=settings.aws_region).Table(
-        settings.magic_link_table_name
-    )
+    return get_table(settings.magic_link_table_name)
 
 
 def put_magic_session(
@@ -41,7 +37,7 @@ def put_magic_session(
         "createdAt": now,
         "updatedAt": now,
     }
-    table().put_item(Item=item)
+    _table().put_item(item=item)
     return item
 
 
@@ -64,18 +60,19 @@ def put_magic_session_for_email(
         "createdAt": now,
         "updatedAt": now,
     }
-    table().put_item(Item=item)
+    _table().put_item(item=item)
     return item
 
 
 def get_latest_magic_session_for_email(*, email: str) -> dict[str, Any] | None:
-    resp = table().query(
-        KeyConditionExpression=Key("pk").eq(f"EMAIL#{email.lower()}")
+    pg = _table().query_page(
+        key_condition_expression=Key("pk").eq(f"EMAIL#{email.lower()}")
         & Key("sk").begins_with("SESSION#"),
-        ScanIndexForward=False,
-        Limit=1,
+        scan_index_forward=False,
+        limit=1,
+        next_token=None,
     )
-    items = resp.get("Items") or []
+    items = pg.items or []
     if not items:
         return None
     item = items[0]
@@ -88,12 +85,11 @@ def get_latest_magic_session_for_email(*, email: str) -> dict[str, Any] | None:
 
 
 def delete_magic_session_for_email(*, email: str, sk: str) -> None:
-    table().delete_item(Key={"pk": f"EMAIL#{email.lower()}", "sk": sk})
+    _table().delete_item(key={"pk": f"EMAIL#{email.lower()}", "sk": sk})
 
 
 def get_magic_session(*, magic_id: str) -> dict[str, Any] | None:
-    resp = table().get_item(Key={"pk": f"MAGIC#{magic_id}", "sk": "SESSION"})
-    item = resp.get("Item")
+    item = _table().get_item(key={"pk": f"MAGIC#{magic_id}", "sk": "SESSION"})
     if not item:
         return None
     # TTL is enforced asynchronously; also enforce in app
@@ -106,6 +102,6 @@ def get_magic_session(*, magic_id: str) -> dict[str, Any] | None:
 
 
 def delete_magic_session(*, magic_id: str) -> None:
-    table().delete_item(Key={"pk": f"MAGIC#{magic_id}", "sk": "SESSION"})
+    _table().delete_item(key={"pk": f"MAGIC#{magic_id}", "sk": "SESSION"})
 
 
