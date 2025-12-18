@@ -120,7 +120,7 @@ Resources:
           ses = boto3.client("ses")
 
           def _send_email(to_email: str, subject: str, body_text: str):
-              ses.send_email(
+              return ses.send_email(
                   Source=os.environ["FROM_EMAIL"],
                   Destination={"ToAddresses": [to_email]},
                   Message={
@@ -133,6 +133,7 @@ Resources:
               req = event.get("request", {})
               user_attrs = req.get("userAttributes") or {}
               email = user_attrs.get("email") or ""
+              from_email = os.environ.get("FROM_EMAIL") or ""
 
               if req.get("challengeName") != "CUSTOM_CHALLENGE":
                   return event
@@ -146,13 +147,27 @@ Resources:
               rt = urllib.parse.quote(str(return_to), safe="")
               link = f"{base}/magic?mid={magic_id}&code={code}&returnTo={rt}"
 
+              # Debug logging (do not log the full email or code)
+              try:
+                  masked = ""
+                  if email and "@" in email:
+                      local, dom = email.split("@", 1)
+                      masked = (local[:2] + "***@" + dom) if local else ("***@" + dom)
+                  print("CreateAuthChallenge:", {"to": masked or bool(email), "from": from_email, "hasMagicId": bool(magic_id)})
+              except Exception:
+                  pass
+
               if email:
                   try:
-                      _send_email(
+                      resp = _send_email(
                           email,
                           "Your sign-in link",
                           f"Click to sign in:\\n\\n{link}\\n\\nThis link expires in 10 minutes.\\n",
                       )
+                      try:
+                          print("SES send_email ok")
+                      except Exception:
+                          pass
                   except Exception as e:
                       # Don't break auth, but do log for debugging.
                       print("SES send_email failed:", repr(e))
