@@ -26,7 +26,7 @@ Parameters:
   BackendUrl:
     Type: String
     Description: Backend API URL
-    Default: 'https://cvsmuhhazj.us-east-1.awsapprunner.com'
+    Default: 'https://api.rfp.polariseco.com'
 
   CognitoUserPoolId:
     Type: String

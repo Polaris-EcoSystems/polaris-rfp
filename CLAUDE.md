@@ -124,15 +124,14 @@ OPENAI_API_KEY=your-openai-api-key
 ### Frontend Environment
 
 ```
-API_BASE_URL=https://cvsmuhhazj.us-east-1.awsapprunner.com
+API_BASE_URL=https://api.rfp.polariseco.com
 ```
 
 ## Authentication
 
-- JWT-based authentication with configurable expiration
-- Default admin user: `admin` / `admin123` (change in production)
-- Protected routes require valid JWT token
-- Token stored in localStorage for persistence
+- Cognito-backed authentication (custom Next.js login UI)
+- Protected routes require a valid `Authorization: Bearer <token>` header (Cognito JWT)
+- Token stored in browser storage for persistence
 
 ## File Upload Handling
 

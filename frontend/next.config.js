@@ -6,11 +6,11 @@ const nextConfig = {
   env: {
     API_BASE_URL:
       process.env.API_BASE_URL ||
-      'https://cvsmuhhazj.us-east-1.awsapprunner.com',
+      'https://api.rfp.polariseco.com',
     NEXT_PUBLIC_API_BASE_URL:
       process.env.NEXT_PUBLIC_API_BASE_URL ||
       process.env.API_BASE_URL ||
-      'https://cvsmuhhazj.us-east-1.awsapprunner.com',
+      'https://api.rfp.polariseco.com',
   },
   // Amplify configuration
   trailingSlash: true,
@@ -21,11 +21,11 @@ const nextConfig = {
   publicRuntimeConfig: {
     API_BASE_URL:
       process.env.API_BASE_URL ||
-      'https://cvsmuhhazj.us-east-1.awsapprunner.com',
+      'https://api.rfp.polariseco.com',
     NEXT_PUBLIC_API_BASE_URL:
       process.env.NEXT_PUBLIC_API_BASE_URL ||
       process.env.API_BASE_URL ||
-      'https://cvsmuhhazj.us-east-1.awsapprunner.com',
+      'https://api.rfp.polariseco.com',
   },
 }
 

@@ -1,10 +1,11 @@
 # Frontend Environment Variables
-NEXT_PUBLIC_API_BASE_URL=https://cvsmuhhazj.us-east-1.awsapprunner.com
+NEXT_PUBLIC_API_BASE_URL=https://api.rfp.polariseco.com
 NODE_ENV=development
 
-# Backend Environment Variables
-PORT=8000
+# Backend (FastAPI) Environment Variables
+PORT=8080
 NODE_ENV=development
+FRONTEND_BASE_URL=http://localhost:3000
 FRONTEND_URL=http://localhost:3000
 
 # DynamoDB
@@ -20,7 +21,16 @@ JWT_SECRET=your-super-secret-jwt-key-here
 # OpenAI API Key (if using AI features)
 OPENAI_API_KEY=your-openai-api-key-here
 
-# Google Drive API (if using Google Drive integration)
-GOOGLE_DRIVE_CLIENT_ID=your-google-client-id
-GOOGLE_DRIVE_CLIENT_SECRET=your-google-client-secret
-GOOGLE_DRIVE_REDIRECT_URI=http://localhost:8000/api/googledrive/callback
+# Cognito (required for auth in production)
+COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
+COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
+COGNITO_REGION=us-east-1
+
+# S3 assets bucket (headshots, etc.)
+ASSETS_BUCKET_NAME=your-assets-bucket-name
+
+# Canva Connect (optional; enables /integrations/canva)
+CANVA_CLIENT_ID=your-canva-client-id
+CANVA_CLIENT_SECRET=your-canva-client-secret
+CANVA_REDIRECT_URI=https://api.rfp.polariseco.com/api/integrations/canva/callback
+CANVA_TOKEN_ENC_KEY=your-canva-token-encryption-key
