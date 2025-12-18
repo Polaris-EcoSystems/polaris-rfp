@@ -395,6 +395,7 @@ def delete_one(id: str):
 
 
 @router.get("/{id}/export-pdf")
+@router.get("/{id}/export/pdf")
 def export_pdf(id: str):
     proposal = get_proposal_by_id(id, include_sections=True)
     if not proposal:
