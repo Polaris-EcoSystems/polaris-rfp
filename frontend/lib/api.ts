@@ -47,7 +47,10 @@ try {
     typeof api.defaults.baseURL === 'string' &&
     api.defaults.baseURL.startsWith('http://')
   ) {
-    api.defaults.baseURL = api.defaults.baseURL.replace(/^http:\/\//, 'https://')
+    api.defaults.baseURL = api.defaults.baseURL.replace(
+      /^http:\/\//,
+      'https://',
+    )
   }
 } catch (_e) {
   // ignore
@@ -246,7 +249,8 @@ export const rfpApi = {
     return api.post('/api/rfp/analyze-url', { url })
   },
   analyzeUrls: (urls: string[]) => api.post('/api/rfp/analyze-urls', { urls }),
-  list: () => api.get<{ data: RFP[] }>('/api/rfp'),
+  // Backend routes are defined with a trailing slash; avoid 307 redirects.
+  list: () => api.get<{ data: RFP[] }>('/api/rfp/'),
   get: (id: string) => api.get<RFP>(`/api/rfp/${id}`),
   update: (id: string, data: any) => api.put<RFP>(`/api/rfp/${id}`, data),
   delete: (id: string) => api.delete(`/api/rfp/${id}`),
@@ -273,7 +277,8 @@ export const proposalApi = {
     companyId?: string
     customContent?: any
   }) => api.post<Proposal>('/api/proposals/generate', data),
-  list: () => api.get<{ data: Proposal[] }>('/api/proposals'),
+  // Backend routes are defined with a trailing slash; avoid 307 redirects.
+  list: () => api.get<{ data: Proposal[] }>('/api/proposals/'),
   get: (id: string) => api.get<Proposal>(`/api/proposals/${id}`),
   update: (id: string, data: any) =>
     api.put<Proposal>(`/api/proposals/${id}`, data),
@@ -469,7 +474,7 @@ export const proposalApiPdf = {
     title: string
     customContent?: any
   }) => api.post<Proposal>('/api/proposals/generate', data),
-  list: () => api.get<{ data: Proposal[] }>('/api/proposals'),
+  list: () => api.get<{ data: Proposal[] }>('/api/proposals/'),
   get: (id: string) => api.get<Proposal>(`/api/proposals/${id}`),
   update: (id: string, data: any) =>
     api.put<Proposal>(`/api/proposals/${id}`, data),
