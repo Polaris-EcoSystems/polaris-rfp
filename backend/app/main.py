@@ -13,6 +13,7 @@ from .routers.health import router as health_router
 from .routers.auth import router as auth_router
 from .routers.content import router as content_router
 from .routers.rfp import router as rfp_router
+from .routers.attachments import router as attachments_router
 from .routers.proposals import router as proposals_router
 from .routers.templates import router as templates_router
 from .routers.ai import router as ai_router
@@ -66,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(auth_router, prefix="/api/auth")
     app.include_router(rfp_router, prefix="/api/rfp")
+    app.include_router(attachments_router, prefix="/api/rfp")
     app.include_router(proposals_router, prefix="/api/proposals")
     app.include_router(templates_router, prefix="/api/templates")
     app.include_router(content_router, prefix="/api/content")

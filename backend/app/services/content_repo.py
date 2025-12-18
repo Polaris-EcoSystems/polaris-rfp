@@ -106,6 +106,13 @@ def list_team_members(limit: int = 200) -> list[dict[str, Any]]:
     return out
 
 
+def get_team_members_by_ids(member_ids: list[str]) -> list[dict[str, Any]]:
+    # No batch_get helper yet; list + filter is fine for small selections.
+    all_members = list_team_members(limit=500)
+    wanted = {str(x) for x in (member_ids or [])}
+    return [m for m in all_members if str(m.get("memberId")) in wanted]
+
+
 def upsert_team_member(member: dict[str, Any]) -> dict[str, Any]:
     member_id = member.get("memberId") or new_id("member")
     now = now_iso()
@@ -185,6 +192,17 @@ def list_project_references(limit: int = 200) -> list[dict[str, Any]]:
         for it in (resp.get("Items") or [])
         if _normalize(it, id_field="referenceId")
     ]
+
+
+def get_project_references_by_ids(reference_ids: list[str]) -> list[dict[str, Any]]:
+    all_refs = list_project_references(limit=500)
+    wanted = {str(x) for x in (reference_ids or [])}
+    out: list[dict[str, Any]] = []
+    for r in all_refs:
+        rid = str(r.get("_id") or r.get("referenceId") or "")
+        if rid in wanted:
+            out.append(r)
+    return out
 
 
 def get_project_reference_by_id(reference_id: str) -> dict[str, Any] | None:
