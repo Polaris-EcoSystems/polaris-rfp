@@ -123,10 +123,6 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: !If
-        - UseProvidedDdbTableName
-        - !Ref DdbTableName
-        - !Sub 'polaris-rfp-${Environment}'
       BillingMode: PAY_PER_REQUEST
       SSESpecification:
         SSEEnabled: true
