@@ -24,7 +24,9 @@ export default function Finder() {
       setResults(resp.data?.results || [])
       setUrlsText('')
     } catch (e: any) {
-      setError(e?.response?.data?.error || e?.message || 'Failed to analyze URLs')
+      setError(
+        e?.response?.data?.error || e?.message || 'Failed to analyze URLs',
+      )
     } finally {
       setIsSubmitting(false)
     }
@@ -45,7 +47,9 @@ export default function Finder() {
         </div>
 
         <div className="bg-white shadow rounded-lg p-6 space-y-4">
-          <h2 className="text-lg font-semibold text-gray-900">Analyze RFP URLs</h2>
+          <h2 className="text-lg font-semibold text-gray-900">
+            Analyze RFP URLs
+          </h2>
           <textarea
             value={urlsText}
             onChange={(e) => setUrlsText(e.target.value)}
@@ -75,7 +79,9 @@ export default function Finder() {
                 <div
                   key={idx}
                   className={`p-3 rounded-md border ${
-                    r.ok ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'
+                    r.ok
+                      ? 'border-green-200 bg-green-50'
+                      : 'border-red-200 bg-red-50'
                   }`}
                 >
                   <div className="text-xs text-gray-600 break-all">{r.url}</div>
