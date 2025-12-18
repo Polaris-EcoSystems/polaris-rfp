@@ -142,6 +142,24 @@ def _validation_error_handler(_request, exc: RequestValidationError):
 
 
 def _unhandled_exception_handler(request, exc: Exception):
+    # Log the full traceback to CloudWatch. We keep the HTTP response generic
+    # in production (see problem_response), but operators need stack traces.
+    try:
+        log = get_logger("unhandled")
+        rid = getattr(getattr(request, "state", None), "request_id", None)
+        user = getattr(getattr(request, "state", None), "user", None)
+        user_sub = getattr(user, "sub", None) if user else None
+        log.exception(
+            "unhandled_exception",
+            request_id=str(rid) if rid else None,
+            http_method=str(getattr(request, "method", "") or "").upper() or None,
+            path=str(getattr(getattr(request, "url", None), "path", "") or ""),
+            user_sub=str(user_sub) if user_sub else None,
+        )
+    except Exception:
+        # Never let logging crash the exception handler.
+        pass
+
     return problem_response(
         request=request,
         status_code=500,
