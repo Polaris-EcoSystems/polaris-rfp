@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from docx import Document
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from openai import OpenAI
 from reportlab.lib.pagesizes import letter
@@ -30,8 +30,10 @@ from ..services.shared_section_formatters import (
 )
 from ..services.team_member_profiles import pick_team_member_bio, pick_team_member_experience
 from ..services.templates_catalog import get_builtin_template, to_generator_template
+from ..observability.logging import get_logger
 
 router = APIRouter(tags=["proposals"])
+log = get_logger("proposals")
 
 
 def _openai() -> OpenAI | None:
@@ -362,11 +364,19 @@ def generate_sections(id: str):
 
 
 @router.get("/")
-def list_all(page: int = 1, limit: int = 20):
+def list_all(request: Request, page: int = 1, limit: int = 20):
     try:
         return list_proposals(page=page, limit=limit)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to fetch proposals")
+    except Exception as e:
+        rid = getattr(getattr(request, "state", None), "request_id", None)
+        user = getattr(getattr(request, "state", None), "user", None)
+        user_sub = getattr(user, "sub", None) if user else None
+        log.exception(
+            "proposal_list_failed",
+            request_id=str(rid) if rid else None,
+            user_sub=str(user_sub) if user_sub else None,
+        )
+        raise HTTPException(status_code=500, detail="Failed to fetch proposals") from e
 
 
 @router.get("/{id}")

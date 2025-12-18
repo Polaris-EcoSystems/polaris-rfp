@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
 
 from ..services.ai_section_titles import generate_section_titles
 from ..services.rfp_analyzer import analyze_rfp
@@ -15,8 +15,10 @@ from ..services.rfps_repo import (
     update_rfp,
 )
 from ..services.attachments_repo import list_attachments
+from ..observability.logging import get_logger
 
 router = APIRouter(tags=["rfp"])
+log = get_logger("rfp")
 
 
 @router.post("/analyze-url", status_code=201)
@@ -100,11 +102,20 @@ async def upload(file: UploadFile = File(...)):
 
 
 @router.get("/")
-def get_all(page: int = 1, limit: int = 20):
+def get_all(request: Request, page: int = 1, limit: int = 20):
     try:
         return list_rfps(page=page, limit=limit)
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to fetch RFPs")
+    except Exception as e:
+        # Ensure we get a traceback in CloudWatch (these errors are otherwise swallowed by HTTPException).
+        rid = getattr(getattr(request, "state", None), "request_id", None)
+        user = getattr(getattr(request, "state", None), "user", None)
+        user_sub = getattr(user, "sub", None) if user else None
+        log.exception(
+            "rfp_list_failed",
+            request_id=str(rid) if rid else None,
+            user_sub=str(user_sub) if user_sub else None,
+        )
+        raise HTTPException(status_code=500, detail="Failed to fetch RFPs") from e
 
 
 @router.get("/search/{query}")
