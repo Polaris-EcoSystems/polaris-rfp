@@ -224,6 +224,12 @@ export default function Layout({ children }: LayoutProps) {
       current: router.pathname === '/content',
     },
     {
+      name: 'Profile',
+      href: '/profile',
+      icon: UserCircleIcon,
+      current: router.pathname === '/profile',
+    },
+    {
       name: 'Integrations',
       href: '/integrations/canva',
       icon: CogIcon,

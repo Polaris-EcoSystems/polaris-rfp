@@ -12,7 +12,7 @@ function normalizeApiBaseUrl(input: string): string {
 const API_BASE_URL = normalizeApiBaseUrl(
   process.env.NEXT_PUBLIC_API_BASE_URL ||
     process.env.API_BASE_URL ||
-    'https://cvsmuhhazj.us-east-1.awsapprunner.com',
+    'https://api.rfp.polariseco.com',
 )
 
 const api = axios.create({
@@ -134,6 +134,25 @@ export interface Template {
   name: string
   projectType: string
   sectionCount: number
+}
+
+export interface CognitoProfileAttribute {
+  name: string
+  value: string
+  required: boolean
+  mutable: boolean
+}
+
+export interface CognitoProfileResponse {
+  user: {
+    sub: string
+    username: string
+    email?: string | null
+    cognito_username: string
+  }
+  claims: Record<string, any>
+  attributes: CognitoProfileAttribute[]
+  schema: { name: string; required: boolean; mutable: boolean }[]
 }
 
 // ---- Response helpers ----
@@ -317,6 +336,16 @@ export const aiApi = {
     context?: string
     contentType?: string
   }) => api.post('/api/ai/generate-content', data),
+}
+
+export const profileApi = {
+  get: () => api.get<CognitoProfileResponse>('/api/profile'),
+  updateAttributes: (attributes: { name: string; value: string | null }[]) =>
+    api.put<CognitoProfileResponse>('/api/profile/attributes', { attributes }),
+  deleteAttribute: (name: string) =>
+    api.delete<CognitoProfileResponse>(
+      `/api/profile/attributes/${encodeURIComponent(name)}`,
+    ),
 }
 export const proposalApiPdf = {
   generate: (data: {

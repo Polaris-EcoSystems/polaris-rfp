@@ -45,3 +45,46 @@ def admin_set_password(*, user_pool_id: str, email: str, new_password: str) -> N
         Password=new_password,
         Permanent=True,
     )
+
+
+def describe_user_pool(*, user_pool_id: str) -> dict[str, Any]:
+    """
+    Returns the user pool metadata including the attribute schema.
+    Used by the Profile page to know which attributes are mutable/required.
+    """
+    return client().describe_user_pool(UserPoolId=user_pool_id)
+
+
+def admin_get_user(*, user_pool_id: str, username: str) -> dict[str, Any]:
+    """
+    Admin read for a specific user. `username` should be the Cognito username
+    (often the user's email when UsernameAttributes include email).
+    """
+    return client().admin_get_user(UserPoolId=user_pool_id, Username=username)
+
+
+def admin_update_user_attributes(
+    *,
+    user_pool_id: str,
+    username: str,
+    attributes: dict[str, str],
+) -> dict[str, Any]:
+    user_attributes = [{"Name": k, "Value": v} for k, v in (attributes or {}).items()]
+    return client().admin_update_user_attributes(
+        UserPoolId=user_pool_id,
+        Username=username,
+        UserAttributes=user_attributes,
+    )
+
+
+def admin_delete_user_attributes(
+    *,
+    user_pool_id: str,
+    username: str,
+    attribute_names: list[str],
+) -> dict[str, Any]:
+    return client().admin_delete_user_attributes(
+        UserPoolId=user_pool_id,
+        Username=username,
+        UserAttributeNames=list(attribute_names or []),
+    )
