@@ -12,12 +12,7 @@ def is_public_path(path: str) -> bool:
 
     # Keep compatibility with legacy backend:
     # /api/auth/me is protected, but auth entrypoints are public.
-    if path in (
-        "/api/auth/login",
-        "/api/auth/signup",
-        "/api/auth/request-password-reset",
-        "/api/auth/reset-password",
-    ):
+    if path.startswith("/api/auth/") and path not in ("/api/auth/me",):
         return True
 
     return False
