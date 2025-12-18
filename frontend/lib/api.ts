@@ -34,19 +34,23 @@ api.interceptors.request.use(
     try {
       if (typeof window !== 'undefined') {
         const proto = window.location?.protocol || ''
-        if (
-          proto === 'https:' &&
-          typeof config.baseURL === 'string' &&
-          config.baseURL.startsWith('http://')
-        ) {
-          config.baseURL = config.baseURL.replace(/^http:\/\//, 'https://')
-        }
-        if (
-          proto === 'https:' &&
-          typeof config.url === 'string' &&
-          config.url.startsWith('http://')
-        ) {
-          config.url = config.url.replace(/^http:\/\//, 'https://')
+        if (proto === 'https:') {
+          // Axios may not always materialize baseURL onto the per-request config,
+          // so also check the instance default.
+          const currentBase =
+            (typeof config.baseURL === 'string' && config.baseURL) ||
+            (typeof api.defaults.baseURL === 'string' && api.defaults.baseURL) ||
+            ''
+
+          if (currentBase.startsWith('http://')) {
+            const upgraded = currentBase.replace(/^http:\/\//, 'https://')
+            api.defaults.baseURL = upgraded
+            config.baseURL = upgraded
+          }
+
+          if (typeof config.url === 'string' && config.url.startsWith('http://')) {
+            config.url = config.url.replace(/^http:\/\//, 'https://')
+          }
         }
       }
     } catch (_e) {
