@@ -7,6 +7,9 @@ Conditions:
     - !Equals [!Ref JwtSecretArn, '']
     - !Not [!Equals [!Ref JwtSecret, '']]
   UseMagicLinkTable: !Not [!Equals [!Ref MagicLinkSessionsTableName, '']]
+  UseOpenAiApiKeySecretArn: !Not [!Equals [!Ref OpenAiApiKeySecretArn, '']]
+  UseOpenAiApiKeySecretJsonKey:
+    !Not [!Equals [!Ref OpenAiApiKeySecretJsonKey, '']]
 
 Parameters:
   Environment:
@@ -96,6 +99,16 @@ Parameters:
   JwtSecretArn:
     Type: String
     Description: Secrets Manager secret ARN for JWT_SECRET
+    Default: ''
+
+  OpenAiApiKeySecretArn:
+    Type: String
+    Description: Secrets Manager secret ARN for OPENAI_API_KEY
+    Default: ''
+
+  OpenAiApiKeySecretJsonKey:
+    Type: String
+    Description: Optional JSON key name if the OpenAI secret is stored as JSON (e.g. OPENAI_API_KEY)
     Default: ''
 
   JwtExpire:
@@ -270,6 +283,22 @@ Resources:
               - secretsmanager:GetSecretValue
             Resource: !Ref JwtSecretArn
 
+  TaskExecutionRoleOpenAiSecretPolicy:
+    Type: AWS::IAM::Policy
+    Condition: UseOpenAiApiKeySecretArn
+    Properties:
+      PolicyName: !Sub 'polaris-ecs-exec-openai-secret-${Environment}-${AWS::Region}'
+      Roles:
+        - !Ref TaskExecutionRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadOpenAiApiKeySecret
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Ref OpenAiApiKeySecretArn
+
   TaskRole:
     Type: AWS::IAM::Role
     Properties:
@@ -286,6 +315,16 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
+              - Sid: CognitoIdpAdminAccess
+                Effect: Allow
+                Action:
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminConfirmSignUp
+                  - cognito-idp:AdminSetUserPassword
+                  - cognito-idp:AdminUpdateUserAttributes
+                  - cognito-idp:AdminDeleteUserAttributes
+                Resource: !Sub 'arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/${CognitoUserPoolId}'
               - Sid: DynamoDBAccess
                 Effect: Allow
                 Action:
@@ -380,7 +419,22 @@ Resources:
             - UseJwtSecretArn
             - - Name: JWT_SECRET
                 ValueFrom: !Ref JwtSecretArn
-            - !Ref AWS::NoValue
+              - !If
+                - UseOpenAiApiKeySecretArn
+                - Name: OPENAI_API_KEY
+                  ValueFrom: !If
+                    - UseOpenAiApiKeySecretJsonKey
+                    - !Sub '${OpenAiApiKeySecretArn}:SecretString:${OpenAiApiKeySecretJsonKey}::'
+                    - !Ref OpenAiApiKeySecretArn
+                - !Ref AWS::NoValue
+            - - !If
+                - UseOpenAiApiKeySecretArn
+                - Name: OPENAI_API_KEY
+                  ValueFrom: !If
+                    - UseOpenAiApiKeySecretJsonKey
+                    - !Sub '${OpenAiApiKeySecretArn}:SecretString:${OpenAiApiKeySecretJsonKey}::'
+                    - !Ref OpenAiApiKeySecretArn
+                - !Ref AWS::NoValue
           LogConfiguration:
             LogDriver: awslogs
             Options:
