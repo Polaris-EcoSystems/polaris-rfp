@@ -24,9 +24,7 @@ export default function Finder() {
       setResults(resp.data?.results || [])
       setUrlsText('')
     } catch (e: any) {
-      setError(
-        e?.response?.data?.error || e?.message || 'Failed to analyze URLs',
-      )
+      setError(e?.response?.data?.error || e?.message || 'Failed to analyze URLs')
     } finally {
       setIsSubmitting(false)
     }
@@ -38,21 +36,22 @@ export default function Finder() {
         <title>Finder - RFP Proposal System</title>
       </Head>
 
-      <div className="space-y-8">
+      <div className="space-y-6">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Finder</h1>
           <p className="mt-2 text-sm text-gray-600">
-            Paste one URL per line. We’ll analyze and save each RFP.
+            Paste multiple RFP URLs (one per line) to analyze and save them.
           </p>
         </div>
 
         <div className="bg-white shadow rounded-lg p-6 space-y-4">
+          <h2 className="text-lg font-semibold text-gray-900">Analyze RFP URLs</h2>
           <textarea
             value={urlsText}
             onChange={(e) => setUrlsText(e.target.value)}
             rows={8}
             className="w-full border border-gray-300 rounded-md px-3 py-2 bg-gray-100 text-gray-900"
-            placeholder="https://example.com/rfp.pdf&#10;https://procurement.site.gov/opportunity/123"
+            placeholder="https://example.com/rfp.pdf\nhttps://procurement.site.gov/opportunity/123"
           />
           <div className="flex items-center justify-end">
             <button
@@ -76,9 +75,7 @@ export default function Finder() {
                 <div
                   key={idx}
                   className={`p-3 rounded-md border ${
-                    r.ok
-                      ? 'border-green-200 bg-green-50'
-                      : 'border-red-200 bg-red-50'
+                    r.ok ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'
                   }`}
                 >
                   <div className="text-xs text-gray-600 break-all">{r.url}</div>
@@ -86,21 +83,6 @@ export default function Finder() {
                     <div className="mt-1 text-sm text-gray-900">
                       Saved:{' '}
                       <span className="font-semibold">{r.rfp?.title}</span>
-                      {typeof r.rfp?.fitScore === 'number' && (
-                        <span className="ml-2 text-xs text-gray-600">
-                          Fit score: {r.rfp.fitScore}
-                        </span>
-                      )}
-                      {Array.isArray(r.rfp?.fitReasons) &&
-                        r.rfp.fitReasons.length > 0 && (
-                          <ul className="mt-2 text-xs text-gray-700 list-disc pl-5 space-y-1">
-                            {r.rfp.fitReasons
-                              .slice(0, 6)
-                              .map((msg: any, i: any) => (
-                                <li key={i}>{msg}</li>
-                              ))}
-                          </ul>
-                        )}
                       {r.rfp?._id && (
                         <div className="mt-1">
                           <Link
