@@ -29,6 +29,29 @@ const api = axios.create({
 // Add request interceptor for debugging
 api.interceptors.request.use(
   (config) => {
+    // Hard guard against Mixed Content in production:
+    // if the page is https:// but the configured baseURL is http://, browsers will block.
+    try {
+      if (typeof window !== 'undefined') {
+        const proto = window.location?.protocol || ''
+        if (
+          proto === 'https:' &&
+          typeof config.baseURL === 'string' &&
+          config.baseURL.startsWith('http://')
+        ) {
+          config.baseURL = config.baseURL.replace(/^http:\/\//, 'https://')
+        }
+        if (
+          proto === 'https:' &&
+          typeof config.url === 'string' &&
+          config.url.startsWith('http://')
+        ) {
+          config.url = config.url.replace(/^http:\/\//, 'https://')
+        }
+      }
+    } catch (_e) {
+      // ignore
+    }
     return config
   },
   (error) => {
