@@ -11,11 +11,9 @@ from ..settings import settings
 
 
 def _get_key() -> bytes:
-    raw = (
-        settings.canva_token_enc_key
-        or settings.jwt_secret
-        or "your-secret-key"
-    )
+    raw = settings.canva_token_enc_key or settings.jwt_secret
+    if not raw:
+        raise RuntimeError("Missing CANVA_TOKEN_ENC_KEY (or JWT_SECRET) for encryption")
     return hashlib.sha256(str(raw).encode("utf-8")).digest()  # 32 bytes
 
 

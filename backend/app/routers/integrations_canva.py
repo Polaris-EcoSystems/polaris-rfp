@@ -57,7 +57,13 @@ def _frontend_base_url() -> str:
 
 def _jwt_secret() -> str:
     # Align with legacy behavior: JWT_SECRET is used to sign Canva state
-    return settings.jwt_secret or settings.canva_token_enc_key or "your-secret-key"
+    secret = settings.jwt_secret or settings.canva_token_enc_key
+    if not secret:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Missing JWT secret", "message": "Set JWT_SECRET or CANVA_TOKEN_ENC_KEY"},
+        )
+    return str(secret)
 
 
 def _safe_json(v: Any) -> dict[str, Any]:

@@ -6,6 +6,7 @@ import os
 
 from pydantic import BaseModel, EmailStr, Field
 
+from ..observability.logging import get_logger
 from ..services import cognito_idp
 from ..services.magic_links_repo import (
     delete_magic_session,
@@ -19,6 +20,7 @@ from ..services.password_reset import consume_password_reset, create_password_re
 from ..settings import settings
 
 router = APIRouter(tags=["auth"])
+log = get_logger("auth")
 
 
 def _sanitize_return_to(raw: str | None) -> str:
@@ -105,7 +107,11 @@ def request_magic_link(body: MagicLinkRequest):
                     new_password=cognito_idp.generate_password(),
                 )
             except Exception as e:
-                print("magic-link: failed to convert FORCE_CHANGE_PASSWORD user:", repr(e))
+                log.warning(
+                    "magic_link_force_change_password_convert_failed",
+                    email_domain=email.split("@", 1)[1] if "@" in email else None,
+                    error=str(e),
+                )
     except Exception:
         # Create a confirmed user without a user-visible password.
         # We sign up with a random password and admin-confirm.
@@ -121,7 +127,11 @@ def request_magic_link(body: MagicLinkRequest):
             )
         except Exception as e:
             # Enumeration-safe: still return ok (but log for operators)
-            print("magic-link: user create/confirm failed:", repr(e))
+            log.warning(
+                "magic_link_user_create_or_confirm_failed",
+                email_domain=email.split("@", 1)[1] if "@" in email else None,
+                error=str(e),
+            )
             return {"ok": True}
 
     # Start custom auth; triggers will email the link.
@@ -137,14 +147,20 @@ def request_magic_link(body: MagicLinkRequest):
         session = str(resp.get("Session") or "")
         if not session:
             # Still return ok; user can retry
-            print("magic-link: initiate_custom_auth returned no Session")
+            log.warning(
+                "magic_link_initiate_custom_auth_missing_session",
+                email_domain=email.split("@", 1)[1] if "@" in email else None,
+                magic_id_prefix=magic_id[:6],
+            )
             return {"ok": True}
 
         try:
             dom = email.split("@", 1)[1] if "@" in email else ""
-            print(
-                "magic-link: initiated",
-                {"emailDomain": dom, "magicIdPrefix": magic_id[:6], "hasSession": True},
+            log.info(
+                "magic_link_initiated",
+                email_domain=dom or None,
+                magic_id_prefix=magic_id[:6],
+                has_session=True,
             )
         except Exception:
             pass
@@ -164,7 +180,12 @@ def request_magic_link(body: MagicLinkRequest):
         )
         return {"ok": True}
     except Exception as e:
-        print("magic-link: initiate_custom_auth failed:", repr(e))
+        log.warning(
+            "magic_link_initiate_custom_auth_failed",
+            email_domain=email.split("@", 1)[1] if "@" in email else None,
+            magic_id_prefix=magic_id[:6],
+            error=str(e),
+        )
         # Enumeration-safe
         return {"ok": True}
 

@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 from cachetools import TTLCache
 from jose import jwt
+from jose.exceptions import JWTError
 
 from ..settings import settings
 
@@ -22,9 +23,32 @@ class VerifiedUser:
 _JWKS_CACHE: TTLCache[str, dict[str, Any]] = TTLCache(maxsize=4, ttl=60 * 60)
 
 
+class CognitoAuthError(Exception):
+    """
+    Base class for auth-related errors with a suggested HTTP status code.
+    """
+
+    status_code: int = 401
+
+    def __init__(self, message: str = "Unauthorized"):
+        super().__init__(message)
+
+
+class CognitoTokenError(CognitoAuthError):
+    status_code = 401
+
+
+class CognitoConfigError(CognitoAuthError):
+    status_code = 500
+
+
+class CognitoJWKSError(CognitoAuthError):
+    status_code = 503
+
+
 def _issuer() -> str:
     if not settings.cognito_user_pool_id:
-        raise RuntimeError("COGNITO_USER_POOL_ID is not set")
+        raise CognitoConfigError("COGNITO_USER_POOL_ID is not set")
     region = settings.cognito_region or settings.aws_region
     return f"https://cognito-idp.{region}.amazonaws.com/{settings.cognito_user_pool_id}"
 
@@ -33,16 +57,30 @@ def _jwks_url() -> str:
     return f"{_issuer()}/.well-known/jwks.json"
 
 
+_HTTP: httpx.Client | None = None
+
+
+def _http_client() -> httpx.Client:
+    global _HTTP
+    if _HTTP is None:
+        _HTTP = httpx.Client(timeout=10.0, headers={"User-Agent": "polaris-rfp-backend"})
+    return _HTTP
+
+
 def _get_jwks() -> dict[str, Any]:
     url = _jwks_url()
     cached = _JWKS_CACHE.get(url)
     if cached:
         return cached
 
-    with httpx.Client(timeout=10.0) as client:
-        resp = client.get(url)
+    try:
+        resp = _http_client().get(url)
         resp.raise_for_status()
         jwks = resp.json()
+        if not isinstance(jwks, dict) or "keys" not in jwks:
+            raise CognitoJWKSError("Invalid JWKS response")
+    except httpx.HTTPError as e:
+        raise CognitoJWKSError(f"Failed to fetch JWKS: {e}") from e
 
     _JWKS_CACHE[url] = jwks
     return jwks
@@ -50,37 +88,40 @@ def _get_jwks() -> dict[str, Any]:
 
 def verify_bearer_token(token: str) -> VerifiedUser:
     if not token:
-        raise ValueError("missing token")
+        raise CognitoTokenError("missing token")
     if not settings.cognito_client_id:
-        raise RuntimeError("COGNITO_CLIENT_ID is not set")
+        raise CognitoConfigError("COGNITO_CLIENT_ID is not set")
 
     jwks = _get_jwks()
     issuer = _issuer()
 
     # Cognito ID token is what the frontend stores as `access_token` for now.
     # Validate standard claims.
-    claims = jwt.decode(
-        token,
-        jwks,
-        algorithms=["RS256"],
-        audience=settings.cognito_client_id,
-        issuer=issuer,
-        options={"verify_aud": True, "verify_iss": True},
-    )
+    try:
+        claims = jwt.decode(
+            token,
+            jwks,
+            algorithms=["RS256"],
+            audience=settings.cognito_client_id,
+            issuer=issuer,
+            options={"verify_aud": True, "verify_iss": True},
+        )
+    except JWTError as e:
+        raise CognitoTokenError("invalid token") from e
 
     # Basic expiry check (jwt.decode already verifies exp, but keep explicit for clarity)
     exp = claims.get("exp")
     if exp and int(exp) < int(time.time()):
-        raise ValueError("token expired")
+        raise CognitoTokenError("token expired")
 
     token_use = claims.get("token_use")
     # Accept id tokens primarily; can loosen later.
     if token_use and token_use not in ("id", "access"):
-        raise ValueError("invalid token_use")
+        raise CognitoTokenError("invalid token_use")
 
     sub = str(claims.get("sub") or "")
     if not sub:
-        raise ValueError("missing sub")
+        raise CognitoTokenError("missing sub")
 
     email = claims.get("email")
     if email is not None:

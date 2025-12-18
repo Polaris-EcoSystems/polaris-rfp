@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import lru_cache
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -53,5 +55,101 @@ class Settings(BaseSettings):
     # Legacy JWT secret still used for signed state in integrations (optional)
     jwt_secret: str | None = Field(default=None, validation_alias="JWT_SECRET")
 
+    # ---- helpers / derived flags ----
+    @property
+    def normalized_environment(self) -> str:
+        v = (self.environment or "").strip().lower()
+        if v in ("prod", "production"):
+            return "production"
+        if v in ("stage", "staging"):
+            return "staging"
+        if v in ("dev", "development"):
+            return "development"
+        return v or "development"
 
-settings = Settings()  # singleton
+    @property
+    def is_production(self) -> bool:
+        return self.normalized_environment == "production"
+
+    @property
+    def is_development(self) -> bool:
+        return self.normalized_environment == "development"
+
+    def require_in_production(self) -> None:
+        """
+        Enforce required settings in production.
+
+        Development/staging are allowed to run with partial config for local work,
+        but production must be fully configured.
+        """
+        if not self.is_production:
+            return
+
+        missing: list[str] = []
+
+        # Core auth
+        if not self.cognito_user_pool_id:
+            missing.append("COGNITO_USER_POOL_ID")
+        if not self.cognito_client_id:
+            missing.append("COGNITO_CLIENT_ID")
+
+        # Magic link flow depends on DynamoDB
+        if not self.magic_link_table_name:
+            missing.append("MAGIC_LINK_TABLE_NAME")
+
+        # Crypto: encryption must never fall back to an insecure default in prod.
+        # We accept either CANVA_TOKEN_ENC_KEY (preferred) or JWT_SECRET (legacy).
+        if not (self.canva_token_enc_key or self.jwt_secret):
+            missing.append("CANVA_TOKEN_ENC_KEY (or JWT_SECRET)")
+
+        if missing:
+            raise RuntimeError(
+                "Missing required production environment variables: "
+                + ", ".join(missing)
+            )
+
+    def to_log_safe_dict(self) -> dict[str, object]:
+        """
+        A redacted representation safe for structured logs / diagnostics.
+        """
+        def _has(v: object) -> bool:
+            return v is not None and str(v).strip() != ""
+
+        return {
+            "environment": self.normalized_environment,
+            "port": self.port,
+            "frontend": {
+                "frontend_base_url": self.frontend_base_url,
+                "frontend_url": self.frontend_url,
+                "frontend_urls": self.frontend_urls,
+            },
+            "aws": {
+                "aws_region": self.aws_region,
+                "ddb_table_name": self.ddb_table_name,
+                "assets_bucket_name": self.assets_bucket_name,
+            },
+            "auth": {
+                "cognito_user_pool_id": self.cognito_user_pool_id,
+                "cognito_client_id": self.cognito_client_id,
+                "cognito_region": self.cognito_region,
+                "magic_link_table_name": self.magic_link_table_name,
+            },
+            "integrations": {
+                "openai_api_key_configured": _has(self.openai_api_key),
+                "canva_client_id": self.canva_client_id,
+                "canva_redirect_uri": self.canva_redirect_uri,
+                "canva_client_secret_configured": _has(self.canva_client_secret),
+                "canva_token_enc_key_configured": _has(self.canva_token_enc_key),
+                "jwt_secret_configured": _has(self.jwt_secret),
+            },
+        }
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    s = Settings()
+    s.require_in_production()
+    return s
+
+
+# Backwards-compatible module-level singleton.
+settings = get_settings()

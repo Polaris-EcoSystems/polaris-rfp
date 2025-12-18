@@ -39,7 +39,8 @@ api.interceptors.request.use(
           // so also check the instance default.
           const currentBase =
             (typeof config.baseURL === 'string' && config.baseURL) ||
-            (typeof api.defaults.baseURL === 'string' && api.defaults.baseURL) ||
+            (typeof api.defaults.baseURL === 'string' &&
+              api.defaults.baseURL) ||
             ''
 
           if (currentBase.startsWith('http://')) {
@@ -48,7 +49,10 @@ api.interceptors.request.use(
             config.baseURL = upgraded
           }
 
-          if (typeof config.url === 'string' && config.url.startsWith('http://')) {
+          if (
+            typeof config.url === 'string' &&
+            config.url.startsWith('http://')
+          ) {
             config.url = config.url.replace(/^http:\/\//, 'https://')
           }
         }

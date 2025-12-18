@@ -1,9 +1,9 @@
 'use client'
 
-import { useRouter, useSearchParams } from 'next/navigation'
-import { useEffect, useRef, useState } from 'react'
 import { useToast } from '@/components/ui/Toast'
 import { useAuth } from '@/lib/auth'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { useEffect, useRef, useState } from 'react'
 
 export default function MagicLinkPage() {
   const router = useRouter()
@@ -59,4 +59,3 @@ export default function MagicLinkPage() {
     </div>
   )
 }
-

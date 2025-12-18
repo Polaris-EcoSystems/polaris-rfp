@@ -54,4 +54,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=2).read(); print('ok')"
 
 # Gunicorn + Uvicorn worker for production (use ECS-provided PORT)
-CMD ["sh", "-c", "gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-2} -b 0.0.0.0:${PORT:-8080} app.main:app"]
+# Log everything to stdout/stderr so the ECS awslogs driver ships it to CloudWatch:
+# - access logs (HTTP request/response)
+# - error logs
+# - app stdout/stderr from workers
+CMD ["sh", "-c", "gunicorn -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-2} -b 0.0.0.0:${PORT:-8080} --log-level ${LOG_LEVEL:-info} --access-logfile - --error-logfile - --capture-output --access-logformat '%(h)s %(l)s %(u)s %(t)s \"%(r)s\" %(s)s %(b)s \"%(f)s\" \"%(a)s\"' app.main:app"]

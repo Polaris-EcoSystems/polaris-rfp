@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, Request
-from fastapi.responses import ORJSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from ..auth.cognito import verify_bearer_token
+from ..auth.cognito import CognitoAuthError, verify_bearer_token
+from ..observability.logging import get_logger
+from ..problem_details import problem_response
 
 
 def is_public_path(path: str) -> bool:
@@ -46,6 +47,8 @@ async def require_auth(request: Request):
     token = parts[1].strip()
     try:
         user = verify_bearer_token(token)
+    except CognitoAuthError as e:
+        raise HTTPException(status_code=int(getattr(e, "status_code", 401)), detail=str(e))
     except Exception:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -61,13 +64,29 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
+        log = get_logger("auth_middleware")
         try:
             await require_auth(request)
         except Exception as exc:
-            status_code = getattr(exc, "status_code", 500)
-            detail = getattr(exc, "detail", "Unauthorized")
-            return ORJSONResponse(
-                status_code=int(status_code),
-                content={"error": detail if isinstance(detail, str) else "Unauthorized"},
+            status_code = int(getattr(exc, "status_code", 500) or 500)
+            detail = getattr(exc, "detail", None)
+            # Log auth failures (avoid PII)
+            if status_code >= 500:
+                log.exception(
+                    "auth_middleware_error",
+                    status_code=status_code,
+                    path=request.url.path,
+                )
+            else:
+                log.info(
+                    "auth_middleware_denied",
+                    status_code=status_code,
+                    path=request.url.path,
+                )
+            return problem_response(
+                request=request,
+                status_code=status_code,
+                title="Unauthorized" if status_code == 401 else None,
+                detail=str(detail) if isinstance(detail, str) else None,
             )
         return await call_next(request)

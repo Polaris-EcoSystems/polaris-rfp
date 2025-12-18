@@ -6,9 +6,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .errors import http_404_handler, http_500_handler
+from .middleware.access_log import AccessLogMiddleware
 from .middleware.auth import AuthMiddleware
 from .middleware.cors import build_allowed_origin_regex, build_allowed_origins
+from .middleware.request_context import RequestContextMiddleware
+from .observability.logging import configure_logging, get_logger
+from .problem_details import problem_response
 from .routers.health import router as health_router
 from .routers.auth import router as auth_router
 from .routers.content import router as content_router
@@ -24,6 +27,10 @@ from .settings import settings
 
 
 def create_app() -> FastAPI:
+    # Logging must be configured before the app starts handling requests.
+    configure_logging(level="INFO")
+    log = get_logger("startup")
+
     app = FastAPI(
         title="Polaris RFP Backend",
         version="1.0.0",
@@ -35,8 +42,14 @@ def create_app() -> FastAPI:
         frontend_url=settings.frontend_url,
         frontend_urls=settings.frontend_urls,
     )
+
+    log.info("app_starting", settings=settings.to_log_safe_dict())
+
+    # Middlewares (order matters; last added is outermost)
     # Auth runs inside CORS so auth failures still get CORS headers.
     app.add_middleware(AuthMiddleware)
+    # Access logs (structured JSON)
+    app.add_middleware(AccessLogMiddleware, exclude_paths={"/"})
     # Use CORSMiddleware with both explicit allowlist AND wildcard regex support.
     app.add_middleware(
         CORSMiddleware,
@@ -48,11 +61,13 @@ def create_app() -> FastAPI:
         expose_headers=["ETag"],
         max_age=3000,
     )
+    # Outermost: request context (request-id) wraps everything.
+    app.add_middleware(RequestContextMiddleware)
 
     # Error handlers
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
-    app.add_exception_handler(Exception, http_500_handler)
+    app.add_exception_handler(Exception, _unhandled_exception_handler)
 
     # Routes
     app.include_router(health_router)
@@ -71,24 +86,68 @@ def create_app() -> FastAPI:
 
 
 def _http_exception_handler(request, exc: StarletteHTTPException):
-    if exc.status_code == 404:
-        return http_404_handler(request, exc)
-    # Match legacy shape for other HTTP errors where possible
-    return ORJSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+    status_code = int(getattr(exc, "status_code", 500) or 500)
+    detail = getattr(exc, "detail", None)
+
+    # Standardize to RFC7807 while preserving useful structured details
+    # some routes currently raise HTTPException(detail={...}).
+    title: str | None = None
+    extensions: dict | None = None
+    safe_detail: str | None = None
+
+    if isinstance(detail, dict):
+        extensions = detail
+        if "error" in detail and isinstance(detail.get("error"), str):
+            title = detail.get("error")
+        msg = detail.get("message")
+        if isinstance(msg, str) and msg.strip():
+            safe_detail = msg.strip()
+    elif detail is not None:
+        safe_detail = str(detail)
+
+    if status_code == 404:
+        title = title or "Not Found"
+        safe_detail = safe_detail or "Route not found"
+
+    return problem_response(
+        request=request,
+        status_code=status_code,
+        title=title,
+        detail=safe_detail,
+        extensions=extensions,
+    )
 
 
 def _validation_error_handler(_request, exc: RequestValidationError):
-    # Keep close to Express-validator style: { errors: [...] }
-    errors = []
+    request = _request
+    errors: list[dict[str, object]] = []
     for e in exc.errors():
+        loc = e.get("loc") or ()
+        loc_path = ".".join([str(x) for x in loc if x != "body"])
         errors.append(
             {
-                "msg": e.get("msg", "Invalid value"),
-                "path": ".".join([str(x) for x in e.get("loc", []) if x != "body"]),
+                "location": list(loc) if isinstance(loc, (list, tuple)) else [],
+                "path": loc_path,
+                "message": e.get("msg", "Invalid value"),
                 "type": e.get("type"),
             }
         )
-    return ORJSONResponse(status_code=400, content={"errors": errors})
+    return problem_response(
+        request=request,
+        status_code=422,
+        title="Validation Failed",
+        detail="Request validation failed",
+        errors=errors,
+    )
+
+
+def _unhandled_exception_handler(request, exc: Exception):
+    return problem_response(
+        request=request,
+        status_code=500,
+        title="Internal Server Error",
+        detail=str(exc) if exc else None,
+    )
 
 
 app = create_app()
