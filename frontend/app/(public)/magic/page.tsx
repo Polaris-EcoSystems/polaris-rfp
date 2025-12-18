@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useToast } from '@/components/ui/Toast'
 import { useAuth } from '@/lib/auth'
 
@@ -11,6 +11,7 @@ export default function MagicLinkPage() {
   const toast = useToast()
   const { verifyMagicLink } = useAuth()
   const [loading, setLoading] = useState(true)
+  const ranKeyRef = useRef<string>('')
 
   useEffect(() => {
     const mid = searchParams.get('mid') || ''
@@ -27,6 +28,11 @@ export default function MagicLinkPage() {
           router.replace('/login')
           return
         }
+
+        // Guard against double-submits (can happen due to re-renders / param object identity changes).
+        const key = `${idOrEmail}::${code}`
+        if (ranKeyRef.current === key) return
+        ranKeyRef.current = key
 
         const res = await verifyMagicLink(idOrEmail, code, true)
         if (!res.ok) {
