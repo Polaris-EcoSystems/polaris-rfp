@@ -81,8 +81,9 @@ export default function LoginPage() {
 
           {sent && (
             <div className="text-sm text-gray-700 bg-blue-50 border border-blue-100 rounded-lg p-3">
-              We sent a sign-in link to <span className="font-medium">{email}</span>.
-              Open it to finish signing in.
+              We sent a sign-in link to{' '}
+              <span className="font-medium">{email}</span>. Open it to finish
+              signing in.
             </div>
           )}
 

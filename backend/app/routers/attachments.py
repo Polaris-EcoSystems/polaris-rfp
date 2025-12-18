@@ -21,8 +21,23 @@ from ..services.rfps_repo import get_rfp_by_id
 
 router = APIRouter(tags=["attachments"])
 
-_ATTACHMENTS_DIR = Path(__file__).resolve().parent.parent.parent / "uploads" / "attachments"
-_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+def _attachments_dir() -> Path:
+    """
+    Where uploaded attachment files are temporarily stored.
+
+    In ECS/Fargate, the container filesystem is ephemeral and the image runs as a
+    non-root user, so writing under /app can fail. Prefer a writable temp dir.
+    """
+    # If explicitly configured, treat ATTACHMENTS_DIR as the full directory.
+    explicit = (os.environ.get("ATTACHMENTS_DIR") or "").strip()
+    if explicit:
+        p = Path(explicit)
+    else:
+        tmp = (os.environ.get("TMPDIR") or "/tmp").strip() or "/tmp"
+        p = Path(tmp) / "polaris-rfp" / "uploads" / "attachments"
+
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def _file_type_category(mime_type: str) -> str:
@@ -128,7 +143,7 @@ async def upload_attachments(
 
             ext = _safe_ext(f.filename or "")
             unique = f"{__import__('time').time_ns()}-{__import__('random').randint(0, 10**9)}{ext}"
-            dest = _ATTACHMENTS_DIR / unique
+            dest = _attachments_dir() / unique
 
             with dest.open("wb") as out:
                 shutil.copyfileobj(f.file, out)
