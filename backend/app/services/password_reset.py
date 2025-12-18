@@ -4,7 +4,7 @@ import secrets
 import time
 from dataclasses import dataclass
 
-from .ddb import delete_item, get_item, put_item
+from ..db.dynamodb.table import get_main_table
 
 
 @dataclass
@@ -23,8 +23,8 @@ def create_password_reset(email: str, ttl_seconds: int = 30 * 60) -> PasswordRes
     now = int(time.time())
     expires_at = now + ttl_seconds
 
-    put_item(
-        {
+    get_main_table().put_item(
+        item={
             "pk": _pk(token),
             "sk": "v1",
             "type": "password_reset",
@@ -37,21 +37,21 @@ def create_password_reset(email: str, ttl_seconds: int = 30 * 60) -> PasswordRes
 
 
 def consume_password_reset(token: str) -> PasswordResetToken | None:
-    item = get_item(_pk(token), "v1")
+    item = get_main_table().get_item(key={"pk": _pk(token), "sk": "v1"})
     if not item:
         return None
 
     expires_at = int(item.get("expiresAt") or 0)
     if expires_at and expires_at < int(time.time()):
         # expired
-        delete_item(_pk(token), "v1")
+        get_main_table().delete_item(key={"pk": _pk(token), "sk": "v1"})
         return None
 
     email = str(item.get("email") or "").strip()
     if not email:
-        delete_item(_pk(token), "v1")
+        get_main_table().delete_item(key={"pk": _pk(token), "sk": "v1"})
         return None
 
     # one-time
-    delete_item(_pk(token), "v1")
+    get_main_table().delete_item(key={"pk": _pk(token), "sk": "v1"})
     return PasswordResetToken(token=token, email=email, expires_at=expires_at)
