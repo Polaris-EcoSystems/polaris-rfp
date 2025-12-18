@@ -321,6 +321,8 @@ Resources:
                   - cognito-idp:AdminGetUser
                   - cognito-idp:AdminCreateUser
                   - cognito-idp:AdminConfirmSignUp
+                  - cognito-idp:AdminInitiateAuth
+                  - cognito-idp:AdminRespondToAuthChallenge
                   - cognito-idp:AdminSetUserPassword
                   - cognito-idp:AdminUpdateUserAttributes
                   - cognito-idp:AdminDeleteUserAttributes

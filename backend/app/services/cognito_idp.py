@@ -92,9 +92,11 @@ def initiate_custom_auth(
     Starts Cognito CUSTOM_AUTH flow (used for magic-link sign in).
     ClientMetadata is forwarded to Lambda triggers.
     """
-    return client().initiate_auth(
-        AuthFlow="CUSTOM_AUTH",
+    # IMPORTANT: ClientMetadata is only reliably forwarded to triggers for *Admin* auth APIs.
+    return client().admin_initiate_auth(
+        UserPoolId=settings.cognito_user_pool_id,
         ClientId=settings.cognito_client_id,
+        AuthFlow="CUSTOM_AUTH",
         AuthParameters={"USERNAME": email},
         ClientMetadata=client_metadata or {},
     )
@@ -106,7 +108,8 @@ def respond_to_custom_challenge(
     email: str,
     answer: str,
 ) -> dict[str, Any]:
-    return client().respond_to_auth_challenge(
+    return client().admin_respond_to_auth_challenge(
+        UserPoolId=settings.cognito_user_pool_id,
         ClientId=settings.cognito_client_id,
         ChallengeName="CUSTOM_CHALLENGE",
         Session=session,
