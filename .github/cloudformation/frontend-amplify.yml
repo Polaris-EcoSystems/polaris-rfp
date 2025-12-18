@@ -143,6 +143,7 @@ Resources:
   AmplifyDomain:
     Condition: UseCustomDomain
     Type: AWS::Amplify::Domain
+    DependsOn: AmplifyBranch
     Properties:
       AppId: !GetAtt AmplifyApp.AppId
       DomainName: !Ref CustomDomainName
