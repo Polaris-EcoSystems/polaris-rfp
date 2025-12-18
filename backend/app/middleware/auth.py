@@ -24,7 +24,13 @@ def is_public_path(path: str) -> bool:
 
 
 async def require_auth(request: Request):
-    if is_public_path(request.url.path):
+    path = request.url.path
+
+    # Only enforce auth for API routes. Non-API paths should return legacy 404s.
+    if not path.startswith("/api/"):
+        return
+
+    if is_public_path(path):
         return
 
     auth = request.headers.get("authorization") or request.headers.get("Authorization")
