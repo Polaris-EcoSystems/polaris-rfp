@@ -1,9 +1,9 @@
 'use client'
 
-import { useParams, useRouter } from 'next/navigation'
-import React, { useState } from 'react'
 import { useToast } from '@/components/ui/Toast'
 import api from '@/lib/api'
+import { useParams, useRouter } from 'next/navigation'
+import React, { useState } from 'react'
 
 export default function ResetPasswordTokenPage() {
   const router = useRouter()
@@ -99,4 +99,3 @@ export default function ResetPasswordTokenPage() {
     </div>
   )
 }
-

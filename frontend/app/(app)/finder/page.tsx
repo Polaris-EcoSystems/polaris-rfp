@@ -1,8 +1,8 @@
 'use client'
 
+import { rfpApi } from '@/lib/api'
 import Link from 'next/link'
 import { useState } from 'react'
-import { rfpApi } from '@/lib/api'
 
 export default function FinderPage() {
   const [urlsText, setUrlsText] = useState('')
@@ -105,4 +105,3 @@ export default function FinderPage() {
     </div>
   )
 }
-
