@@ -1448,3 +1448,4 @@ export default function CanvaIntegrationPage() {
     </div>
   )
 }
+

@@ -66,3 +66,4 @@ def decrypt_string(cipher_text: Any) -> str | None:
         return pt.decode("utf-8")
     except Exception:
         return None
+

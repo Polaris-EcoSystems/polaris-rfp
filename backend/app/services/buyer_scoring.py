@@ -161,3 +161,4 @@ def enrich_buyer_profile_with_ai(
         person["ai"] = data
     return person
 
+

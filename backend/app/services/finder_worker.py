@@ -95,3 +95,4 @@ def run_finder_job(
     except Exception as e:
         finder_repo.update_run_fields(run_id, {"status": "error", "error": str(e) or "Finder run failed"})
 
+

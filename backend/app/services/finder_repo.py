@@ -162,3 +162,4 @@ def normalize_storage_state(storage_state: Any) -> dict[str, Any]:
         return storage_state
     return json.loads(json.dumps(storage_state))
 
+

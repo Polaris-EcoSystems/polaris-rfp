@@ -213,3 +213,4 @@ def discover_people_for_company(
 
     return people[:max_people]
 
+

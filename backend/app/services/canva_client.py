@@ -299,3 +299,4 @@ def poll_job(fn, *, interval_ms: int = 1500, timeout_ms: int = 90000) -> dict[st
         if (time.time() - start) * 1000 > timeout_ms:
             raise RuntimeError("Timed out waiting for Canva job to complete")
         time.sleep(interval_ms / 1000.0)
+

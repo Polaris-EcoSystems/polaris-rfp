@@ -108,3 +108,4 @@ def get_magic_session(*, magic_id: str) -> dict[str, Any] | None:
 def delete_magic_session(*, magic_id: str) -> None:
     table().delete_item(Key={"pk": f"MAGIC#{magic_id}", "sk": "SESSION"})
 
+

@@ -8,3 +8,4 @@
   <rect width="64" height="64" rx="14" fill="url(#g)"/>
   <path d="M18 20h20a8 8 0 0 1 0 16H26v8h-8V20zm8 6v8h12a4 4 0 1 0 0-8H26z" fill="#fff" fill-rule="evenodd"/>
 </svg>
+
