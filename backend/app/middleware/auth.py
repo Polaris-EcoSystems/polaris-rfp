@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, Request
+from fastapi.responses import ORJSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..auth.cognito import verify_bearer_token
 
@@ -20,6 +22,11 @@ def is_public_path(path: str) -> bool:
 
 async def require_auth(request: Request):
     path = request.url.path
+
+    # Let CORS preflight through without auth.
+    # CORSMiddleware will handle preflight and add headers.
+    if request.method.upper() == "OPTIONS":
+        return
 
     # Only enforce auth for API routes. Non-API paths should return legacy 404s.
     if not path.startswith("/api/"):
@@ -43,3 +50,24 @@ async def require_auth(request: Request):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     request.state.user = user
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """
+    Auth enforcement as ASGI middleware.
+
+    Important: this should be added *before* CORSMiddleware so CORS wraps all
+    responses (including auth failures) and preflight works.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        try:
+            await require_auth(request)
+        except Exception as exc:
+            status_code = getattr(exc, "status_code", 500)
+            detail = getattr(exc, "detail", "Unauthorized")
+            return ORJSONResponse(
+                status_code=int(status_code),
+                content={"error": detail if isinstance(detail, str) else "Unauthorized"},
+            )
+        return await call_next(request)

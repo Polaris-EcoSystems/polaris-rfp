@@ -7,7 +7,7 @@ from fastapi.responses import ORJSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .errors import http_404_handler, http_500_handler
-from .middleware.auth import require_auth
+from .middleware.auth import AuthMiddleware
 from .middleware.cors import build_allowed_origin_regex, build_allowed_origins
 from .routers.health import router as health_router
 from .routers.auth import router as auth_router
@@ -35,6 +35,8 @@ def create_app() -> FastAPI:
         frontend_url=settings.frontend_url,
         frontend_urls=settings.frontend_urls,
     )
+    # Auth runs inside CORS so auth failures still get CORS headers.
+    app.add_middleware(AuthMiddleware)
     # Use CORSMiddleware with both explicit allowlist AND wildcard regex support.
     app.add_middleware(
         CORSMiddleware,
@@ -46,21 +48,6 @@ def create_app() -> FastAPI:
         expose_headers=["ETag"],
         max_age=3000,
     )
-
-    # Auth dependency (placeholder; Cognito will replace)
-    @app.middleware("http")
-    async def _auth_middleware(request, call_next):
-        try:
-            await require_auth(request)
-        except Exception as exc:
-            # auth middleware should never crash the app; always respond.
-            status_code = getattr(exc, "status_code", 500)
-            detail = getattr(exc, "detail", "Unauthorized")
-            return ORJSONResponse(
-                status_code=int(status_code),
-                content={"error": detail if isinstance(detail, str) else "Unauthorized"},
-            )
-        return await call_next(request)
 
     # Error handlers
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
