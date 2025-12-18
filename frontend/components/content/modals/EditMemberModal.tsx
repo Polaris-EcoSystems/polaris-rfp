@@ -1,6 +1,6 @@
+import api from '@/lib/api'
 import Image from 'next/image'
 import { useEffect, useState } from 'react'
-import api from '@/lib/api'
 
 function ensureBulletText(value: string) {
   const v = String(value || '')
