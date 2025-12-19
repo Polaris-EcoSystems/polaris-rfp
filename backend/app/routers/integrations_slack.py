@@ -5,6 +5,7 @@ import hmac
 import hashlib
 import time
 from urllib.parse import parse_qs
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -13,6 +14,7 @@ from ..settings import settings
 from ..services.proposals_repo import list_proposals
 from ..services.rfp_upload_jobs_repo import get_job
 from ..services.rfps_repo import get_rfp_by_id, list_rfps
+from ..services.slack_response_url import respond as respond_via_response_url
 from ..services.slack_secrets import get_secret_str
 from ..services.slack_web import is_slack_configured, post_message
 
@@ -139,6 +141,59 @@ def _rfp_stage(rfp: dict, proposals_for_rfp: list[dict]) -> str:
         return "ProposalDraft"
     except Exception:
         return "BidDecision"
+
+
+def _build_rfp_summary_blocks(*, rfp: dict, proposals_count: int) -> tuple[str, list[dict[str, Any]]]:
+    rid = str(rfp.get("_id") or "").strip()
+    title = str(rfp.get("title") or "RFP").strip() or "RFP"
+    client = str(rfp.get("clientName") or "").strip()
+    ptype = str(rfp.get("projectType") or "").strip()
+    due = str(rfp.get("submissionDeadline") or "").strip()
+    du = _days_until_submission(rfp)
+    fit = rfp.get("fitScore")
+    review = rfp.get("review") if isinstance(rfp.get("review"), dict) else {}
+    decision = str((review or {}).get("decision") or "").strip() or "unreviewed"
+
+    fields: list[dict[str, str]] = []
+    if client:
+        fields.append({"type": "mrkdwn", "text": f"*Client*\n{client}"})
+    if ptype:
+        fields.append({"type": "mrkdwn", "text": f"*Type*\n{ptype}"})
+    if due:
+        due_line = f"{due}" + (f" (in {du}d)" if isinstance(du, int) else "")
+        fields.append({"type": "mrkdwn", "text": f"*Due*\n{due_line}"})
+    if isinstance(fit, (int, float)):
+        fields.append({"type": "mrkdwn", "text": f"*Fit*\n{int(fit)}"})
+    fields.append({"type": "mrkdwn", "text": f"*Bid decision*\n`{decision}`"})
+    fields.append({"type": "mrkdwn", "text": f"*Proposals*\n{int(proposals_count)}"})
+
+    blocks: list[dict[str, Any]] = [
+        {"type": "header", "text": {"type": "plain_text", "text": title[:150]}},
+        {"type": "section", "fields": fields[:10]},
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Open RFP"},
+                    "url": _rfp_url(rid),
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Pipeline"},
+                    "url": _pipeline_url(),
+                },
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "List proposals"},
+                    "action_id": "polaris_list_rfp_proposals",
+                    "value": rid,
+                },
+            ],
+        },
+    ]
+    text = f"{title} — {client}" if client else title
+    return text, blocks
 
 
 def _search_rfps(query: str, *, max_results: int = 10) -> list[dict]:
@@ -297,9 +352,31 @@ async def slack_commands(request: Request):
                     "- `/polaris help`",
                     "- `/polaris recent [n]` (list latest RFPs)",
                     "- `/polaris search <keywords>` (search title/client/type)",
+                    "- `/polaris due [days]` (submission deadlines due soon; default 7)",
+                    "- `/polaris pipeline [stage]` (group RFPs by workflow stage)",
+                    "- `/polaris proposals [n]` (list latest proposals)",
+                    "- `/polaris proposal <keywords>` (search proposals)",
+                    "- `/polaris summarize <keywords>` (RFP summary + links)",
+                    "- `/polaris links` (quick links)",
                     "- `/polaris rfp <rfpId>` (returns a link)",
                     "- `/polaris open <keywords>` (first search result)",
                     "- `/polaris job <jobId>` (RFP upload job status)",
+                ]
+            ),
+        }
+
+    if sub == "links":
+        return {
+            "response_type": "ephemeral",
+            "text": "\n".join(
+                [
+                    "*Quick links*",
+                    f"- <{_pipeline_url()}|Pipeline>",
+                    f"- <{_rfps_url()}|RFPs>",
+                    f"- <{_proposals_url()}|Proposals>",
+                    f"- <{_upload_url()}|Upload RFP>",
+                    f"- <{_templates_url()}|Templates>",
+                    f"- <{_content_url()}|Content Library>",
                 ]
             ),
         }
@@ -343,6 +420,198 @@ async def slack_commands(request: Request):
         client = str(r.get("clientName") or "").strip()
         extra = f" ({client})" if client else ""
         return {"response_type": "ephemeral", "text": f"<{_rfp_url(rid)}|{title}>{extra}"}
+
+    if sub in ("due", "deadlines"):
+        days = 7
+        if args:
+            try:
+                days = int(args[0])
+            except Exception:
+                days = 7
+        days = max(1, min(30, days))
+        items = _recent_rfps(max_results=200)
+        hits: list[dict] = []
+        for r in items:
+            du = _days_until_submission(r)
+            if du is None:
+                continue
+            if 0 <= du <= days:
+                hits.append(r)
+
+        hits.sort(
+            key=lambda r: (
+                _days_until_submission(r) if _days_until_submission(r) is not None else 9999,
+                str(r.get("createdAt") or ""),
+            )
+        )
+        if not hits:
+            return {
+                "response_type": "ephemeral",
+                "text": f"No RFPs due in the next {days} days.",
+            }
+        lines = [f"*RFPs due in the next {days} days*"] + [
+            _format_rfp_line(r) for r in hits[:12]
+        ]
+        if len(hits) > 12:
+            lines.append(f"_Showing 12 of {len(hits)}._")
+        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+
+    if sub == "pipeline":
+        stage_filter = str(args[0] or "").strip().lower() if args else ""
+        stage_map = {
+            "bid": "BidDecision",
+            "decision": "BidDecision",
+            "draft": "ProposalDraft",
+            "review": "ReviewRebuttal",
+            "rebuttal": "ReviewRebuttal",
+            "rework": "Rework",
+            "ready": "ReadyToSubmit",
+            "submit": "ReadyToSubmit",
+            "submitted": "Submitted",
+            "nobid": "NoBid",
+            "no-bid": "NoBid",
+            "disqualified": "Disqualified",
+        }
+        want = stage_map.get(stage_filter) if stage_filter else None
+
+        rfps = _recent_rfps(max_results=200)
+        props = _recent_proposals(max_results=200)
+        by_rfp: dict[str, list[dict]] = {}
+        for p in props:
+            rid = str(p.get("rfpId") or "").strip()
+            if not rid:
+                continue
+            by_rfp.setdefault(rid, []).append(p)
+
+        order = [
+            "BidDecision",
+            "ProposalDraft",
+            "ReviewRebuttal",
+            "Rework",
+            "ReadyToSubmit",
+            "Submitted",
+            "NoBid",
+            "Disqualified",
+        ]
+        grouped: dict[str, list[dict]] = {k: [] for k in order}
+
+        for r in rfps:
+            rid = str(r.get("_id") or "").strip()
+            stage = _rfp_stage(r, by_rfp.get(rid, []))
+            if want and stage != want:
+                continue
+            grouped.setdefault(stage, []).append(r)
+
+        if want and all(len(grouped.get(k, [])) == 0 for k in grouped.keys()):
+            return {
+                "response_type": "ephemeral",
+                "text": f"No RFPs found in stage `{want}`.",
+            }
+
+        def _sort_key(r: dict):
+            du = _days_until_submission(r)
+            return (du if isinstance(du, int) else 9999, str(r.get("createdAt") or ""))
+
+        for k in list(grouped.keys()):
+            grouped[k].sort(key=_sort_key)
+
+        lines: list[str] = []
+        lines.append("*Pipeline*")
+        lines.append(f"<{_pipeline_url()}|Open Pipeline>")
+        if want:
+            lines.append(f"_Filter:_ `{want}`")
+        for k in order:
+            if not grouped.get(k):
+                continue
+            lines.append(f"\n*{k}* ({len(grouped[k])})")
+            for r in grouped[k][:6]:
+                lines.append(_format_rfp_line(r))
+            if len(grouped[k]) > 6:
+                lines.append(f"_…and {len(grouped[k]) - 6} more_")
+        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+
+    if sub in ("proposals", "proposal-list"):
+        n = 8
+        if args:
+            try:
+                n = int(args[0])
+            except Exception:
+                n = 8
+        n = max(1, min(15, n))
+        items = _recent_proposals(max_results=n)
+        if not items:
+            return {"response_type": "ephemeral", "text": "No proposals found."}
+        lines = [f"*Latest {min(n, len(items))} proposals*"] + [
+            _format_proposal_line(p) for p in items[:n]
+        ]
+        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+
+    if sub == "proposal":
+        if not args:
+            return {
+                "response_type": "ephemeral",
+                "text": "Usage: `/polaris proposal <keywords>`",
+            }
+        q = " ".join(args).strip()
+        hits = _search_proposals(q, max_results=5)
+        if not hits:
+            return {"response_type": "ephemeral", "text": f"No proposal matches for: `{q}`"}
+        if len(hits) == 1:
+            p = hits[0]
+            pid = str(p.get("_id") or "").strip()
+            title = str(p.get("title") or "Proposal").strip()
+            return {
+                "response_type": "ephemeral",
+                "text": f"<{_proposal_url(pid)}|{title}> `{pid}`",
+            }
+        lines = [f"*Proposal matches for:* `{q}`"] + [_format_proposal_line(p) for p in hits]
+        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+
+    if sub in ("summarize", "summary"):
+        if not args:
+            return {
+                "response_type": "ephemeral",
+                "text": "Usage: `/polaris summarize <rfp keywords>`",
+            }
+        q = " ".join(args).strip()
+        hits = _search_rfps(q, max_results=5)
+        if not hits:
+            return {"response_type": "ephemeral", "text": f"No RFP matches for: `{q}`"}
+
+        r = hits[0]
+        rid = str(r.get("_id") or "").strip()
+        title = str(r.get("title") or "RFP").strip()
+        client = str(r.get("clientName") or "").strip()
+        ptype = str(r.get("projectType") or "").strip()
+        due = str(r.get("submissionDeadline") or "").strip()
+        du = _days_until_submission(r)
+        fit = r.get("fitScore")
+        review = r.get("review") if isinstance(r.get("review"), dict) else {}
+        decision = str((review or {}).get("decision") or "").strip() or "unreviewed"
+        warnings = r.get("dateWarnings") if isinstance(r.get("dateWarnings"), list) else []
+        reqs = r.get("keyRequirements") if isinstance(r.get("keyRequirements"), list) else []
+
+        # Proposals count (cheap join)
+        props = _recent_proposals(max_results=200)
+        prop_count = sum(1 for p in props if str(p.get("rfpId") or "").strip() == rid)
+
+        # Prefer blocks for a richer Slack UX.
+        text0, blocks = _build_rfp_summary_blocks(rfp=r, proposals_count=prop_count)
+        # Append warnings + requirements into plain text (keeps blocks clean).
+        lines: list[str] = []
+        if warnings:
+            lines.append(f"*Date warnings:* {len(warnings)} (e.g. {str(warnings[0])})")
+        if reqs:
+            top = [str(x).strip() for x in reqs[:5] if str(x).strip()]
+            if top:
+                lines.append("*Top requirements:*")
+                lines.extend([f"- {t}" for t in top])
+        if len(hits) > 1:
+            lines.append("*Other matches:*")
+            for alt in hits[1:4]:
+                lines.append(_format_rfp_line(alt))
+        text = (text0 + ("\n" + "\n".join(lines) if lines else "")).strip()
+        return {"response_type": "ephemeral", "text": text, "blocks": blocks}
 
     if sub == "rfp":
         if not args:
@@ -403,10 +672,51 @@ async def slack_interactions(request: Request):
     ptype = str(payload.get("type") or "").strip() or None
     user_id = str(((payload.get("user") or {}) if isinstance(payload.get("user"), dict) else {}).get("id") or "").strip() or None
     channel_id = str(((payload.get("channel") or {}) if isinstance(payload.get("channel"), dict) else {}).get("id") or "").strip() or None
+    response_url = str(payload.get("response_url") or "").strip() or None
 
-    # Minimal, safe default: acknowledge and provide a hint.
-    # We can expand this to real actions (e.g., "summarize", "move stage", "mark checklist")
-    # once buttons are added to Slack messages.
+    # Handle Block Kit actions quickly (<3s) then post details via response_url.
+    if ptype == "block_actions":
+        actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
+        act = actions[0] if actions else {}
+        action_id = str(act.get("action_id") or "").strip()
+        value = str(act.get("value") or "").strip()
+
+        if action_id == "polaris_list_rfp_proposals":
+            # Ack immediately then post followup.
+            if response_url:
+                try:
+                    resp = list_proposals(page=1, limit=200)
+                    items = resp.get("data") or []
+                    rid = value
+                    hits = [
+                        p for p in items
+                        if isinstance(p, dict) and str(p.get("rfpId") or "").strip() == rid
+                    ]
+                    if not hits:
+                        respond_via_response_url(
+                            response_url=response_url,
+                            text=f"No proposals found for RFP `{rid}`.",
+                            response_type="ephemeral",
+                        )
+                    else:
+                        lines = [f"*Proposals for* `{rid}`:"]
+                        for p in hits[:12]:
+                            lines.append(_format_proposal_line(p))
+                        if len(hits) > 12:
+                            lines.append(f"_Showing 12 of {len(hits)}._")
+                        respond_via_response_url(
+                            response_url=response_url,
+                            text="\n".join(lines),
+                            response_type="ephemeral",
+                        )
+                except Exception:
+                    respond_via_response_url(
+                        response_url=response_url,
+                        text="Failed to list proposals (server error).",
+                        response_type="ephemeral",
+                    )
+            return {"response_type": "ephemeral", "text": "Listing proposals…"}
+
     log.info(
         "slack_interaction_received",
         interaction_type=ptype,
@@ -416,5 +726,5 @@ async def slack_interactions(request: Request):
 
     return {
         "response_type": "ephemeral",
-        "text": "Got it. (Interactive actions are wired up; next we’ll add buttons/menus to messages.)",
+        "text": "Got it.",
     }

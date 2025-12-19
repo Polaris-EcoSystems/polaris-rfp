@@ -380,7 +380,6 @@ Resources:
                   - s3:GetObject
                   - s3:PutObject
                   - s3:DeleteObject
-                  - s3:CopyObject
                 Resource:
                   - !Sub 'arn:aws:s3:::${AssetsBucketName}/*'
 
@@ -548,7 +547,6 @@ Resources:
       Environment:
         Variables:
           SLACK_SECRET_ARN: !Ref SlackSecretArn
-          AWS_REGION: !Ref AWS::Region
       Code:
         ZipFile: |
           import json
@@ -615,8 +613,7 @@ Resources:
     Properties:
       Name: !Sub 'polaris-slack-rotator-${Environment}'
       Description: Refresh Slack access token and update Secrets Manager
-      State:
-        !If [!Equals [!Ref EnableSlackTokenRotation, 'true'], ENABLED, DISABLED]
+      State: !If [SlackTokenRotationEnabled, ENABLED, DISABLED]
       ScheduleExpression: rate(690 minutes)
       Targets:
         - Arn: !GetAtt SlackTokenRotatorFunction.Arn

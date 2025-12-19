@@ -28,6 +28,7 @@ from ..services.shared_section_formatters import (
     format_experience_section,
     format_title_section,
 )
+from ..services.slack_notifier import notify_proposal_created
 from ..services.team_member_profiles import pick_team_member_bio, pick_team_member_experience
 from ..services.templates_catalog import get_builtin_template, to_generator_template
 from ..observability.logging import get_logger
@@ -314,6 +315,16 @@ def generate(body: dict):
             "projectType": rfp.get("projectType"),
         },
     )
+
+    try:
+        notify_proposal_created(
+            proposal_id=str(proposal.get("_id") or ""),
+            rfp_id=str(proposal.get("rfpId") or str(rfp_id)),
+            title=str(proposal.get("title") or title),
+        )
+    except Exception:
+        # Best-effort only
+        pass
 
     return proposal
 
