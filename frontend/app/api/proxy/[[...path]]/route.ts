@@ -203,7 +203,8 @@ async function handler(
   // Browsers will auto-follow redirects for XHR/fetch POSTs in many cases; when the backend
   // is doing slash normalization redirects, our proxy rewrite can make that loop on itself.
   if (isRedirect && isMutating) {
-    const location = upstream.headers.get('location') || upstream.headers.get('Location')
+    const location =
+      upstream.headers.get('location') || upstream.headers.get('Location')
     return NextResponse.json(
       {
         error: 'Upstream redirect blocked',
@@ -248,5 +249,3 @@ export const PUT = handler
 export const PATCH = handler
 export const DELETE = handler
 export const OPTIONS = handler
-
-

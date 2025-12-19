@@ -104,6 +104,17 @@ Parameters:
     Description: OpenAI model to use by default (e.g. gpt-5.2)
     Default: 'gpt-5.2'
 
+  SlackSecretArn:
+    Type: String
+    Description: Optional Secrets Manager secret ARN containing Slack credentials/config (JSON)
+    Default: 'arn:aws:secretsmanager:us-east-1:211125621822:secret:polaris-rfp/slack-T4YN9o'
+
+  EnableSlackTokenRotation:
+    Type: String
+    Description: If true, deploy a scheduled Lambda to refresh Slack access tokens into Secrets Manager
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
   UseProvidedCanvaClientId: !Not [!Equals [!Ref CanvaClientId, '']]
@@ -257,6 +268,8 @@ Resources:
         OpenAiApiKeySecretArn: !Ref OpenAiApiKeySecretArn
         OpenAiApiKeySecretJsonKey: !Ref OpenAiApiKeySecretJsonKey
         OpenAiModel: !Ref OpenAiModel
+        SlackSecretArn: !Ref SlackSecretArn
+        EnableSlackTokenRotation: !Ref EnableSlackTokenRotation
 
   FrontendStack:
     Type: AWS::CloudFormation::Stack

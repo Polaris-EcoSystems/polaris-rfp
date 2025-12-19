@@ -8,6 +8,7 @@ from .buyer_scoring import enrich_buyer_profile_with_ai, score_buyer_likelihood
 from .linkedin_playwright import LinkedInSessionError, discover_people_for_company
 from .rfps_repo import get_rfp_by_id
 from .token_crypto import decrypt_string
+from .slack_notifier import notify_finder_run_done, notify_finder_run_error
 
 
 def _load_storage_state_for_user(user_sub: str) -> dict[str, Any]:
@@ -90,9 +91,18 @@ def run_finder_job(
                 },
             },
         )
+        notify_finder_run_done(
+            run_id=run_id,
+            rfp_id=rfp_id,
+            company_name=company_name,
+            discovered=len(people),
+            saved=saved_n,
+        )
     except LinkedInSessionError as e:
         finder_repo.update_run_fields(run_id, {"status": "error", "error": str(e)})
+        notify_finder_run_error(run_id=run_id, rfp_id=rfp_id, error=str(e))
     except Exception as e:
         finder_repo.update_run_fields(run_id, {"status": "error", "error": str(e) or "Finder run failed"})
+        notify_finder_run_error(run_id=run_id, rfp_id=rfp_id, error=str(e) or "Finder run failed")
 
 

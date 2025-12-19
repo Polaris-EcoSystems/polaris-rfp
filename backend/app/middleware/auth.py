@@ -18,6 +18,11 @@ def is_public_path(path: str) -> bool:
     if path.startswith("/api/auth/") and path not in ("/api/auth/me",):
         return True
 
+    # Slack integration endpoints are authenticated via Slack signatures,
+    # not via Cognito bearer tokens.
+    if path.startswith("/api/integrations/slack/"):
+        return True
+
     return False
 
 

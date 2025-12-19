@@ -10,6 +10,11 @@ Conditions:
   UseOpenAiApiKeySecretArn: !Not [!Equals [!Ref OpenAiApiKeySecretArn, '']]
   UseOpenAiApiKeySecretJsonKey:
     !Not [!Equals [!Ref OpenAiApiKeySecretJsonKey, '']]
+  UseSlackSecretArn: !Not [!Equals [!Ref SlackSecretArn, '']]
+  SlackTokenRotationEnabled: !Equals [!Ref EnableSlackTokenRotation, 'true']
+  UseSlackSecretArnAndRotation: !And
+    - !Condition UseSlackSecretArn
+    - !Condition SlackTokenRotationEnabled
 
 Parameters:
   Environment:
@@ -115,6 +120,17 @@ Parameters:
     Type: String
     Description: OpenAI model to use by default (e.g. gpt-5.2)
     Default: 'gpt-5.2'
+
+  SlackSecretArn:
+    Type: String
+    Description: Optional Secrets Manager secret ARN containing Slack credentials/config (JSON)
+    Default: ''
+
+  EnableSlackTokenRotation:
+    Type: String
+    Description: If true, deploy a scheduled Lambda to refresh Slack access tokens into Secrets Manager
+    Default: 'false'
+    AllowedValues: ['true', 'false']
 
   JwtExpire:
     Type: String
@@ -368,6 +384,38 @@ Resources:
                 Resource:
                   - !Sub 'arn:aws:s3:::${AssetsBucketName}/*'
 
+  TaskRoleSlackSecretsPolicy:
+    Type: AWS::IAM::Policy
+    Condition: UseSlackSecretArn
+    Properties:
+      PolicyName: !Sub 'polaris-ecs-task-slack-secret-${Environment}-${AWS::Region}'
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadSlackSecret
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Ref SlackSecretArn
+
+  TaskRoleSlackSecretsWritePolicy:
+    Type: AWS::IAM::Policy
+    Condition: UseSlackSecretArnAndRotation
+    Properties:
+      PolicyName: !Sub 'polaris-ecs-task-slack-secret-write-${Environment}-${AWS::Region}'
+      Roles:
+        - !Ref TaskRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: WriteSlackSecret
+            Effect: Allow
+            Action:
+              - secretsmanager:PutSecretValue
+            Resource: !Ref SlackSecretArn
+
   TaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -425,6 +473,13 @@ Resources:
               Value: !Ref CanvaRedirectUri
             - Name: CANVA_TOKEN_ENC_KEY
               Value: !Ref CanvaTokenEncKey
+            - Name: SLACK_ENABLED
+              Value: !If [UseSlackSecretArn, 'true', 'false']
+            - !If
+              - UseSlackSecretArn
+              - Name: SLACK_SECRET_ARN
+                Value: !Ref SlackSecretArn
+              - !Ref AWS::NoValue
           Secrets: !If
             - UseJwtSecretArn
             - - Name: JWT_SECRET
@@ -454,6 +509,127 @@ Resources:
               awslogs-group: !Ref BackendLogGroup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
+
+  SlackTokenRotatorRole:
+    Type: AWS::IAM::Role
+    Condition: UseSlackSecretArn
+    Properties:
+      RoleName: !Sub 'polaris-slack-rotator-${Environment}-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: SlackSecretReadWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ReadWriteSlackSecret
+                Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                Resource: !Ref SlackSecretArn
+
+  SlackTokenRotatorFunction:
+    Type: AWS::Lambda::Function
+    Condition: UseSlackSecretArn
+    Properties:
+      FunctionName: !Sub 'polaris-slack-rotator-${Environment}'
+      Role: !GetAtt SlackTokenRotatorRole.Arn
+      Runtime: python3.11
+      Handler: index.handler
+      Timeout: 30
+      Environment:
+        Variables:
+          SLACK_SECRET_ARN: !Ref SlackSecretArn
+          AWS_REGION: !Ref AWS::Region
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import time
+          import urllib.parse
+          import urllib.request
+          import boto3
+
+          def _post_form(url: str, data: dict) -> dict:
+            body = urllib.parse.urlencode(data).encode("utf-8")
+            req = urllib.request.Request(url, data=body, method="POST")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+              raw = resp.read().decode("utf-8", errors="ignore")
+              return json.loads(raw) if raw else {}
+
+          def handler(_event, _context):
+            arn = os.environ.get("SLACK_SECRET_ARN", "").strip()
+            region = os.environ.get("AWS_REGION", "us-east-1").strip()
+            if not arn:
+              return {"ok": False, "reason": "missing_secret_arn"}
+
+            sm = boto3.client("secretsmanager", region_name=region)
+            sec = sm.get_secret_value(SecretId=arn).get("SecretString") or ""
+            obj = json.loads(sec) if sec else {}
+            if not isinstance(obj, dict):
+              return {"ok": False, "reason": "secret_not_json"}
+
+            refresh_token = str(obj.get("SLACK_REFRESH_TOKEN") or "").strip()
+            client_id = str(obj.get("SLACK_CLIENT_ID") or "").strip()
+            client_secret = str(obj.get("SLACK_CLIENT_SECRET") or "").strip()
+            if not (refresh_token and client_id and client_secret):
+              # Can't rotate without OAuth client credentials.
+              return {"ok": False, "reason": "missing_refresh_or_client_creds"}
+
+            # Refresh token via Slack OAuth v2
+            resp = _post_form(
+              "https://slack.com/api/oauth.v2.access",
+              {
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+                "client_secret": client_secret,
+              },
+            )
+            if not resp.get("ok"):
+              return {"ok": False, "reason": "slack_refresh_failed", "error": resp.get("error")}
+
+            access_token = resp.get("access_token")
+            new_refresh = resp.get("refresh_token") or refresh_token
+            expires_in = int(resp.get("expires_in") or 43200)  # default 12h
+            expires_at = int(time.time()) + max(60, expires_in)
+
+            obj["SLACK_ACCESS_TOKEN"] = access_token
+            obj["SLACK_REFRESH_TOKEN"] = new_refresh
+            obj["SLACK_ACCESS_TOKEN_EXPIRES_AT"] = expires_at
+
+            sm.put_secret_value(SecretId=arn, SecretString=json.dumps(obj))
+            return {"ok": True, "expires_at": expires_at}
+
+  SlackTokenRotatorRule:
+    Type: AWS::Events::Rule
+    Condition: UseSlackSecretArn
+    Properties:
+      Name: !Sub 'polaris-slack-rotator-${Environment}'
+      Description: Refresh Slack access token and update Secrets Manager
+      State:
+        !If [!Equals [!Ref EnableSlackTokenRotation, 'true'], ENABLED, DISABLED]
+      ScheduleExpression: rate(690 minutes)
+      Targets:
+        - Arn: !GetAtt SlackTokenRotatorFunction.Arn
+          Id: slack-token-rotator
+
+  SlackTokenRotatorInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: UseSlackSecretArn
+    Properties:
+      FunctionName: !Ref SlackTokenRotatorFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SlackTokenRotatorRule.Arn
 
   EcsService:
     Type: AWS::ECS::Service

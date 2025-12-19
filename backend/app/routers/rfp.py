@@ -25,6 +25,10 @@ from ..services.s3_assets import (
     to_s3_uri,
 )
 from ..services.rfp_upload_jobs_repo import create_job, get_job, get_job_item, update_job
+from ..services.slack_notifier import (
+    notify_rfp_upload_job_completed,
+    notify_rfp_upload_job_failed,
+)
 from ..observability.logging import get_logger
 
 router = APIRouter(tags=["rfp"])
@@ -236,6 +240,11 @@ def _process_rfp_upload_job(job_id: str) -> None:
                     "updatedAt": now_iso(),
                 },
             )
+            notify_rfp_upload_job_failed(
+                job_id=job_id,
+                file_name=file_name,
+                error="Uploaded object is empty",
+            )
             return
 
         analysis = analyze_rfp(data, file_name)
@@ -257,6 +266,7 @@ def _process_rfp_upload_job(job_id: str) -> None:
             },
         )
         log.info("rfp_upload_job_completed", jobId=job_id, rfpId=rfp_id)
+        notify_rfp_upload_job_completed(job_id=job_id, rfp_id=rfp_id, file_name=file_name)
     except Exception as e:
         update_job(
             job_id=job_id,
@@ -266,6 +276,11 @@ def _process_rfp_upload_job(job_id: str) -> None:
                 "finishedAt": now_iso(),
                 "updatedAt": now_iso(),
             },
+        )
+        notify_rfp_upload_job_failed(
+            job_id=job_id,
+            file_name=str(job.get("fileName") or "").strip() or file_name,
+            error=str(e) or "Failed to process RFP",
         )
         log.exception("rfp_upload_job_failed", jobId=job_id)
 

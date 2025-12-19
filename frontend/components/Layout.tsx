@@ -302,36 +302,224 @@ export default function Layout({ children }: LayoutProps) {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+      {/* Global top navigation bar (spans above sidebar + content) */}
+      <header className="bg-white/80 backdrop-blur-sm shadow-sm border-b border-gray-200/50 sticky top-0 z-40">
+        <div className="flex items-center justify-between h-16 px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center space-x-4 min-w-0">
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="lg:hidden p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+              aria-label="Open sidebar"
+              type="button"
+            >
+              <Bars3Icon className="h-6 w-6" />
+            </button>
+
+            <Link
+              href="/pipeline"
+              className="font-bold text-gray-900 tracking-tight whitespace-nowrap"
+            >
+              North Star RFP
+            </Link>
+
+            <div className="hidden sm:block">
+              <div className="relative">
+                <GlobalSearch />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-4">
+            <div
+              className="hidden sm:flex items-center gap-2 text-xs text-gray-600"
+              title={
+                backendUp === null
+                  ? 'Checking backend…'
+                  : backendUp
+                  ? `Backend reachable${
+                      backendLastCheckedAt
+                        ? ` (checked ${backendLastCheckedAt.toLocaleTimeString()})`
+                        : ''
+                    }`
+                  : `Backend unreachable${
+                      backendLastCheckedAt
+                        ? ` (checked ${backendLastCheckedAt.toLocaleTimeString()})`
+                        : ''
+                    }`
+              }
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  backendUp === null
+                    ? 'bg-gray-300'
+                    : backendUp
+                    ? 'bg-green-500'
+                    : 'bg-red-500'
+                }`}
+              />
+              <span>API</span>
+            </div>
+
+            <div ref={notificationsRef} className="relative">
+              <button
+                onClick={() => setNotificationsOpen((s) => !s)}
+                className="p-2 rounded-xl text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-all duration-200 relative"
+                aria-expanded={notificationsOpen}
+                aria-label="Notifications"
+                type="button"
+              >
+                <BellIcon className="h-6 w-6" />
+              </button>
+              {notificationsOpen && (
+                <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-xl z-50">
+                  <div className="px-4 py-3 border-b border-gray-100">
+                    <div className="text-sm font-semibold text-gray-900">
+                      Notifications
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Due date reminders and updates
+                    </div>
+                  </div>
+                  <div className="px-4 py-3 text-sm text-gray-700">
+                    {notificationsLoading ? (
+                      <div className="py-4 text-gray-600">Loading…</div>
+                    ) : notificationItems.length === 0 ? (
+                      <div className="py-4 text-gray-600">
+                        No notifications yet.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {notificationItems.map((it) => (
+                          <button
+                            key={it.id}
+                            type="button"
+                            onClick={() => {
+                              setNotificationsOpen(false)
+                              // Try to route to the RFP details if we can infer the ID from the composite key
+                              const rfpId = it.id.split(':')[0]
+                              if (rfpId) router.push(`/rfps/${rfpId}`)
+                            }}
+                            className="w-full text-left p-2 rounded-md hover:bg-gray-50"
+                          >
+                            <div className="flex items-start gap-2">
+                              <div
+                                className={`mt-1 h-2 w-2 rounded-full ${
+                                  it.tone === 'danger'
+                                    ? 'bg-red-500'
+                                    : it.tone === 'warning'
+                                    ? 'bg-amber-500'
+                                    : 'bg-blue-500'
+                                }`}
+                              />
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium text-gray-900 truncate">
+                                  {it.title}
+                                </div>
+                                <div className="text-xs text-gray-600 line-clamp-2">
+                                  {it.subtitle}
+                                </div>
+                              </div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div ref={topMenuRef} className="relative">
+              <button
+                onClick={() => setTopMenuOpen((s) => !s)}
+                className="flex items-center space-x-3 p-2 rounded-xl hover:bg-gray-100 transition-colors"
+                aria-expanded={topMenuOpen}
+                type="button"
+              >
+                <UserCircleIcon className="h-8 w-8 text-gray-600" />
+                <div className="hidden sm:block text-left">
+                  {user ? (
+                    <>
+                      <p className="text-sm font-medium text-gray-900">
+                        {displayName}
+                      </p>
+                      <p className="text-xs text-gray-500">Online</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-medium text-gray-900">Guest</p>
+                      <p className="text-xs text-gray-500">Offline</p>
+                    </>
+                  )}
+                </div>
+                {/* chevron indicating menu state */}
+                {topMenuOpen ? (
+                  <ChevronUpIcon className="h-4 w-4 text-gray-400" />
+                ) : (
+                  <ChevronDownIcon className="h-4 w-4 text-gray-400" />
+                )}
+              </button>
+              {topMenuOpen && (
+                <div className="absolute right-0 mt-2 w-52 bg-white border border-gray-200 rounded-lg shadow-xl z-50">
+                  <div className="py-1.5">
+                    <button
+                      onClick={async () => {
+                        setTopMenuOpen(false)
+                        await logout()
+                        router.push('/login')
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors duration-150 flex items-center gap-2 rounded-md"
+                      type="button"
+                    >
+                      <svg
+                        className="h-4 w-4"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                        />
+                      </svg>
+                      Logout
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </header>
+
       {/* Mobile sidebar backdrop */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 z-40 bg-gray-600 bg-opacity-75 transition-opacity lg:hidden"
+          className="fixed inset-x-0 bottom-0 top-16 z-30 bg-gray-600 bg-opacity-75 transition-opacity lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
       {/* Sidebar */}
       <div
-        className={`fixed inset-y-0 left-0 z-50 w-64 bg-white shadow-xl transform transition-transform duration-300 ease-in-out lg:translate-x-0 ${
+        className={`fixed left-0 top-16 bottom-0 z-50 w-64 bg-white shadow-xl transform transition-transform duration-300 ease-in-out lg:translate-x-0 ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200 bg-gradient-to-r from-blue-600 to-indigo-600">
-          <div className="flex items-center space-x-3">
-            <div className="flex-shrink-0">
-              {/* <SparklesIcon className="h-8 w-8 text-white" /> */}
-            </div>
-            <h1 className="text-xl font-bold text-white">RFP System</h1>
-          </div>
+        <div className="flex items-center justify-end px-4 py-3 lg:hidden border-b border-gray-200">
           <button
             onClick={() => setSidebarOpen(false)}
-            className="lg:hidden text-white hover:text-gray-200"
+            className="p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+            aria-label="Close sidebar"
+            type="button"
           >
             <XMarkIcon className="h-6 w-6" />
           </button>
         </div>
 
-        <nav className="mt-6 px-3 space-y-6">
+        <nav className="mt-4 px-3 space-y-6">
           <div className="space-y-2">
             <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
               Primary
@@ -457,187 +645,6 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Main content */}
       <div className="lg:pl-64">
-        {/* Top navigation bar */}
-        <header className="bg-white/80 backdrop-blur-sm shadow-sm border-b border-gray-200/50 sticky top-0 z-30">
-          <div className="flex items-center justify-between h-16 px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center space-x-4">
-              <button
-                onClick={() => setSidebarOpen(true)}
-                className="lg:hidden p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors"
-              >
-                <Bars3Icon className="h-6 w-6" />
-              </button>
-              <div className="hidden sm:block">
-                <div className="relative">
-                  <GlobalSearch />
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center space-x-4">
-              <div
-                className="hidden sm:flex items-center gap-2 text-xs text-gray-600"
-                title={
-                  backendUp === null
-                    ? 'Checking backend…'
-                    : backendUp
-                    ? `Backend reachable${
-                        backendLastCheckedAt
-                          ? ` (checked ${backendLastCheckedAt.toLocaleTimeString()})`
-                          : ''
-                      }`
-                    : `Backend unreachable${
-                        backendLastCheckedAt
-                          ? ` (checked ${backendLastCheckedAt.toLocaleTimeString()})`
-                          : ''
-                      }`
-                }
-              >
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    backendUp === null
-                      ? 'bg-gray-300'
-                      : backendUp
-                      ? 'bg-green-500'
-                      : 'bg-red-500'
-                  }`}
-                />
-                <span>API</span>
-              </div>
-              <div ref={notificationsRef} className="relative">
-                <button
-                  onClick={() => setNotificationsOpen((s) => !s)}
-                  className="p-2 rounded-xl text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-all duration-200 relative"
-                  aria-expanded={notificationsOpen}
-                  aria-label="Notifications"
-                  type="button"
-                >
-                  <BellIcon className="h-6 w-6" />
-                </button>
-                {notificationsOpen && (
-                  <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-xl z-50">
-                    <div className="px-4 py-3 border-b border-gray-100">
-                      <div className="text-sm font-semibold text-gray-900">
-                        Notifications
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        Due date reminders and updates
-                      </div>
-                    </div>
-                    <div className="px-4 py-3 text-sm text-gray-700">
-                      {notificationsLoading ? (
-                        <div className="py-4 text-gray-600">Loading…</div>
-                      ) : notificationItems.length === 0 ? (
-                        <div className="py-4 text-gray-600">
-                          No notifications yet.
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {notificationItems.map((it) => (
-                            <button
-                              key={it.id}
-                              type="button"
-                              onClick={() => {
-                                setNotificationsOpen(false)
-                                // Try to route to the RFP details if we can infer the ID from the composite key
-                                const rfpId = it.id.split(':')[0]
-                                if (rfpId) router.push(`/rfps/${rfpId}`)
-                              }}
-                              className="w-full text-left p-2 rounded-md hover:bg-gray-50"
-                            >
-                              <div className="flex items-start gap-2">
-                                <div
-                                  className={`mt-1 h-2 w-2 rounded-full ${
-                                    it.tone === 'danger'
-                                      ? 'bg-red-500'
-                                      : it.tone === 'warning'
-                                      ? 'bg-amber-500'
-                                      : 'bg-blue-500'
-                                  }`}
-                                />
-                                <div className="min-w-0">
-                                  <div className="text-sm font-medium text-gray-900 truncate">
-                                    {it.title}
-                                  </div>
-                                  <div className="text-xs text-gray-600 line-clamp-2">
-                                    {it.subtitle}
-                                  </div>
-                                </div>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div ref={topMenuRef} className="relative">
-                <button
-                  onClick={() => setTopMenuOpen((s) => !s)}
-                  className="flex items-center space-x-3 p-2 rounded-xl hover:bg-gray-100 transition-colors"
-                  aria-expanded={topMenuOpen}
-                >
-                  <UserCircleIcon className="h-8 w-8 text-gray-600" />
-                  <div className="hidden sm:block text-left">
-                    {user ? (
-                      <>
-                        <p className="text-sm font-medium text-gray-900">
-                          {displayName}
-                        </p>
-                        <p className="text-xs text-gray-500">Online</p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-sm font-medium text-gray-900">
-                          Guest
-                        </p>
-                        <p className="text-xs text-gray-500">Offline</p>
-                      </>
-                    )}
-                  </div>
-                  {/* chevron indicating menu state */}
-                  {topMenuOpen ? (
-                    <ChevronUpIcon className="h-4 w-4 text-gray-400" />
-                  ) : (
-                    <ChevronDownIcon className="h-4 w-4 text-gray-400" />
-                  )}
-                </button>
-                {topMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-52 bg-white border border-gray-200 rounded-lg shadow-xl z-50">
-                    <div className="py-1.5">
-                      <button
-                        onClick={async () => {
-                          setTopMenuOpen(false)
-                          await logout()
-                          router.push('/login')
-                        }}
-                        className="w-full text-left px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors duration-150 flex items-center gap-2 rounded-md"
-                      >
-                        <svg
-                          className="h-4 w-4"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                          />
-                        </svg>
-                        Logout
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </header>
-
         {/* Main content area */}
         <main className="min-h-screen">
           <div className="py-8">

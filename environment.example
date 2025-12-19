@@ -39,3 +39,19 @@ CANVA_CLIENT_ID=your-canva-client-id
 CANVA_CLIENT_SECRET=your-canva-client-secret
 CANVA_REDIRECT_URI=https://api.rfp.polariseco.com/api/integrations/canva/callback
 CANVA_TOKEN_ENC_KEY=your-canva-token-encryption-key
+
+# Slack (optional; enables /api/integrations/slack/*)
+SLACK_ENABLED=false
+# Prefer providing a single secret ARN and storing Slack keys as JSON in Secrets Manager:
+# - SLACK_ACCESS_TOKEN (or SLACK_BOT_TOKEN)
+# - SLACK_REFRESH_TOKEN (optional, if using token rotation)
+# - SLACK_ACCESS_TOKEN_EXPIRES_AT (optional unix seconds)
+# - SLACK_SIGNING_SECRET
+# - SLACK_DEFAULT_CHANNEL
+# - SLACK_CLIENT_ID / SLACK_CLIENT_SECRET (required for refresh_token rotation)
+SLACK_SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:polaris-rfp/slack-xxxxxx
+
+# Legacy direct env vars (works, but doesn't auto-pick-up rotations without redeploy)
+SLACK_BOT_TOKEN=xoxb-your-token
+SLACK_SIGNING_SECRET=your-signing-secret
+SLACK_DEFAULT_CHANNEL=#rfp-alerts

@@ -29,6 +29,7 @@ from .routers.proposals import router as proposals_router
 from .routers.templates import router as templates_router
 from .routers.ai import router as ai_router
 from .routers.integrations_canva import router as canva_router
+from .routers.integrations_slack import router as slack_router
 from .routers.profile import router as profile_router
 from .routers.finder import router as finder_router
 from .settings import settings
@@ -91,6 +92,7 @@ def create_app() -> FastAPI:
     app.include_router(content_router, prefix="/api/content")
     app.include_router(ai_router, prefix="/api/ai")
     app.include_router(canva_router, prefix="/api/integrations/canva")
+    app.include_router(slack_router, prefix="/api/integrations")
     app.include_router(profile_router, prefix="/api/profile")
     app.include_router(finder_router, prefix="/api/finder")
 

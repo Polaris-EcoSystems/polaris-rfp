@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     openai_model_proposal_sections: str | None = Field(default=None, validation_alias="OPENAI_MODEL_PROPOSAL_SECTIONS")
     openai_model_buyer_enrichment: str | None = Field(default=None, validation_alias="OPENAI_MODEL_BUYER_ENRICHMENT")
 
+    # Slack (optional; enables /api/integrations/slack/*)
+    slack_enabled: bool = Field(default=False, validation_alias="SLACK_ENABLED")
+    slack_bot_token: str | None = Field(default=None, validation_alias="SLACK_BOT_TOKEN")
+    slack_signing_secret: str | None = Field(default=None, validation_alias="SLACK_SIGNING_SECRET")
+    slack_default_channel: str | None = Field(default=None, validation_alias="SLACK_DEFAULT_CHANNEL")
+    # Prefer injecting a single Secrets Manager ARN and resolving keys at runtime.
+    slack_secret_arn: str | None = Field(default=None, validation_alias="SLACK_SECRET_ARN")
+
     # Canva Connect (integration)
     canva_client_id: str | None = Field(default=None, validation_alias="CANVA_CLIENT_ID")
     canva_client_secret: str | None = Field(
@@ -114,6 +122,17 @@ class Settings(BaseSettings):
         if not (self.canva_token_enc_key or self.jwt_secret):
             missing.append("CANVA_TOKEN_ENC_KEY (or JWT_SECRET)")
 
+        # Slack (optional) - but if explicitly enabled, require full config.
+        if bool(self.slack_enabled):
+            # Allow either direct env vars or a Secrets Manager ARN.
+            if not (self.slack_secret_arn and str(self.slack_secret_arn).strip()):
+                if not self.slack_bot_token:
+                    missing.append("SLACK_BOT_TOKEN (or SLACK_SECRET_ARN)")
+                if not self.slack_signing_secret:
+                    missing.append("SLACK_SIGNING_SECRET (or SLACK_SECRET_ARN)")
+                if not self.slack_default_channel:
+                    missing.append("SLACK_DEFAULT_CHANNEL (or SLACK_SECRET_ARN)")
+
         if missing:
             raise RuntimeError(
                 "Missing required production environment variables: "
@@ -154,6 +173,11 @@ class Settings(BaseSettings):
                 "canva_client_secret_configured": _has(self.canva_client_secret),
                 "canva_token_enc_key_configured": _has(self.canva_token_enc_key),
                 "jwt_secret_configured": _has(self.jwt_secret),
+                "slack_enabled": bool(self.slack_enabled),
+                "slack_bot_token_configured": _has(self.slack_bot_token),
+                "slack_signing_secret_configured": _has(self.slack_signing_secret),
+                "slack_default_channel": self.slack_default_channel if _has(self.slack_default_channel) else None,
+                "slack_secret_arn_configured": _has(self.slack_secret_arn),
             },
         }
 
