@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import time
 from typing import Any
 
@@ -9,7 +10,10 @@ import httpx
 from openai import OpenAI
 from pypdf import PdfReader
 
+from ..observability.logging import get_logger
 from ..settings import settings
+
+log = get_logger("rfp_analyzer")
 
 
 def _openai() -> OpenAI | None:
@@ -88,7 +92,13 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
     if len(raw_text) < 80:
         raise RuntimeError("No extractable text found")
 
-    def _normalize_analysis(*, data: dict[str, Any] | None, used_ai: bool, model: str | None) -> dict[str, Any]:
+    def _normalize_analysis(
+        *,
+        data: dict[str, Any] | None,
+        used_ai: bool,
+        model: str | None,
+        ai_error: str | None = None,
+    ) -> dict[str, Any]:
         """
         Ensure a stable schema regardless of model output.
         We do not trust the model to return all keys or correct types.
@@ -143,6 +153,8 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
             "extractedChars": len(raw_text),
             "ts": int(time.time()),
         }
+        if ai_error:
+            d["_analysis"]["aiError"] = str(ai_error)
         return d
 
     def _fallback_analysis() -> dict[str, Any]:
@@ -229,7 +241,8 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
         )
 
     prompt = (
-        "Extract key information from the following RFP text and return JSON only.\n\n"
+        "Extract key information from the following RFP text.\n"
+        "Return ONLY a single JSON object. No markdown. No prose. No code fences.\n\n"
         "Return a JSON object with these keys (use empty string, empty list, or 'Not available' if unknown):\n"
         "- title (string)\n"
         "- clientName (string)\n"
@@ -257,42 +270,76 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
         return _fallback_analysis()
 
     chosen_model = settings.openai_model_for("rfp_analysis")
-    try:
-        completion = client.chat.completions.create(
-            model=chosen_model,
-            temperature=0.2,
-            max_tokens=3000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except Exception:
-        # If a newer model name is misconfigured/not available, fall back once.
+
+    def _call_openai(*, model: str, prompt_text: str, force_json: bool) -> str:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "temperature": 0.0 if force_json else 0.2,
+            "max_tokens": 3000,
+            "messages": [{"role": "user", "content": prompt_text}],
+        }
+        if force_json:
+            # Prefer models that support JSON-only response enforcement.
+            # If unsupported, we'll catch and fall back to best-effort parsing below.
+            kwargs["response_format"] = {"type": "json_object"}
+        completion = client.chat.completions.create(**kwargs)
+        return (completion.choices[0].message.content or "").strip()
+
+    last_content_preview: str | None = None
+    last_err: Exception | None = None
+
+    # Try a few times:
+    # 1) response_format enforced JSON (best when supported)
+    # 2) stricter prompt retry
+    # 3) fallback parsing/extraction
+    for attempt in range(1, 4):
         try:
-            completion = client.chat.completions.create(
-                model="gpt-4o-mini",  # hard fallback if configured model name is invalid
-                temperature=0.2,
-                max_tokens=3000,
-                messages=[{"role": "user", "content": prompt}],
+            force_json = attempt <= 2
+            attempt_prompt = prompt
+            if attempt >= 2:
+                attempt_prompt = (
+                    prompt
+                    + "\n\nIMPORTANT: Output must be valid JSON starting with '{' and ending with '}'."
+                )
+
+            try:
+                content = _call_openai(model=chosen_model, prompt_text=attempt_prompt, force_json=force_json)
+            except Exception:
+                # If a newer model name is misconfigured/not available, fall back once.
+                content = _call_openai(model="gpt-4o-mini", prompt_text=attempt_prompt, force_json=force_json)
+                chosen_model = "gpt-4o-mini"
+
+            if not content:
+                raise RuntimeError("empty_model_response")
+
+            # Parse JSON. If model returned extra text, extract the first object block.
+            try:
+                data = json.loads(content)
+            except Exception:
+                m = re.search(r"\{[\s\S]*\}", content)
+                if not m:
+                    raise RuntimeError("non_json_model_response")
+                data = json.loads(m.group(0))
+
+            if not isinstance(data, dict):
+                raise RuntimeError("json_not_object")
+
+            return _normalize_analysis(data=data, used_ai=True, model=chosen_model)
+        except Exception as e:
+            last_err = e
+            last_content_preview = (locals().get("content") or "")[:240]
+            log.warning(
+                "rfp_ai_json_parse_failed",
+                attempt=attempt,
+                model=chosen_model,
+                error=str(e),
+                content_preview=last_content_preview,
             )
-            chosen_model = "gpt-4o-mini"
-        except Exception:
-            # Keep the upload flow working even if OpenAI is down/misconfigured.
-            return _fallback_analysis()
 
-    content = (completion.choices[0].message.content or "").strip()
-
-    # best-effort JSON parse
-    try:
-        data = json.loads(content)
-    except Exception:
-        # attempt to find first {...}
-        import re
-
-        m = re.search(r"\{[\s\S]*\}", content)
-        if not m:
-            raise RuntimeError("AI analysis did not return JSON")
-        data = json.loads(m.group(0))
-
-    if not isinstance(data, dict):
-        raise RuntimeError("AI analysis JSON was not an object")
-
-    return _normalize_analysis(data=data, used_ai=True, model=chosen_model)
+    # If AI is flaky/non-JSON, do not fail the upload/job; fall back to heuristic analysis.
+    return _normalize_analysis(
+        data=_fallback_analysis(),
+        used_ai=False,
+        model=None,
+        ai_error=str(last_err) if last_err else "ai_json_parse_failed",
+    )
