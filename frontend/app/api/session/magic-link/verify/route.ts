@@ -13,13 +13,17 @@ export async function POST(req: Request) {
   try {
     const body = await req.json()
     const remember = Boolean((body as any)?.remember)
+    // Forward only fields the backend expects (FastAPI may reject unknown fields).
+    const forwardBody: any = { code: (body as any)?.code }
+    if ((body as any)?.email) forwardBody.email = (body as any).email
+    if ((body as any)?.magicId) forwardBody.magicId = (body as any).magicId
 
     const upstream = await fetch(
       `${getBackendBaseUrl()}/api/auth/magic-link/verify`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body ?? {}),
+        body: JSON.stringify(forwardBody),
         cache: 'no-store',
       },
     )
