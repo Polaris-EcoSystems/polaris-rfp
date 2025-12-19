@@ -140,6 +140,11 @@ def presign_upload(body: dict = Body(...)):
         "maxSizeBytes": 60 * 1024 * 1024,
     }
 
+@router.post("/upload/presign/", include_in_schema=False)
+def presign_upload_slash(body: dict = Body(...)):
+    # Accept trailing slash to avoid 307 redirect loops through the Next proxy.
+    return presign_upload(body=body)
+
 
 @router.post("/upload/from-s3", status_code=201)
 def upload_from_s3(request: Request, background_tasks: BackgroundTasks, body: dict = Body(...)):
@@ -170,6 +175,11 @@ def upload_from_s3(request: Request, background_tasks: BackgroundTasks, body: di
     background_tasks.add_task(_process_rfp_upload_job, job["jobId"])
     return {"ok": True, "job": job}
 
+@router.post("/upload/from-s3/", status_code=201, include_in_schema=False)
+def upload_from_s3_slash(request: Request, background_tasks: BackgroundTasks, body: dict = Body(...)):
+    # Accept trailing slash to avoid 307 redirect loops through the Next proxy.
+    return upload_from_s3(request=request, background_tasks=background_tasks, body=body)
+
 
 @router.get("/upload/jobs/{jobId}")
 def upload_job_status(request: Request, jobId: str):
@@ -185,6 +195,12 @@ def upload_job_status(request: Request, jobId: str):
         raise HTTPException(status_code=404, detail="Job not found")
     job = get_job(jobId)
     return {"ok": True, "job": job}
+
+
+@router.get("/upload/jobs/{jobId}/", include_in_schema=False)
+def upload_job_status_slash(request: Request, jobId: str):
+    # Accept trailing slash to avoid 307 redirect loops through the Next proxy.
+    return upload_job_status(request=request, jobId=jobId)
 
 
 def _process_rfp_upload_job(job_id: str) -> None:
