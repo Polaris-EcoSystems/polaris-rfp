@@ -157,6 +157,11 @@ async function handler(
 
   const upstreamUrl = buildUpstreamUrl(req)
   const method = req.method.toUpperCase()
+  const isMutating =
+    method === 'POST' ||
+    method === 'PUT' ||
+    method === 'PATCH' ||
+    method === 'DELETE'
 
   const headers = stripHopByHopHeaders(req.headers)
   headers.set('authorization', `Bearer ${token}`)
@@ -192,8 +197,25 @@ async function handler(
   })
   resHeaders.set('cache-control', 'no-store')
 
+  const isRedirect = [301, 302, 303, 307, 308].includes(upstream.status)
+
+  // Prevent infinite redirect loops on mutating requests.
+  // Browsers will auto-follow redirects for XHR/fetch POSTs in many cases; when the backend
+  // is doing slash normalization redirects, our proxy rewrite can make that loop on itself.
+  if (isRedirect && isMutating) {
+    const location = upstream.headers.get('location') || upstream.headers.get('Location')
+    return NextResponse.json(
+      {
+        error: 'Upstream redirect blocked',
+        status: upstream.status,
+        location: location || null,
+      },
+      { status: 502 },
+    )
+  }
+
   // Rewrite redirect locations so the browser never leaves our origin (and never hits http://).
-  if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+  if (isRedirect) {
     rewriteUpstreamLocationHeader({
       req,
       upstreamUrl,

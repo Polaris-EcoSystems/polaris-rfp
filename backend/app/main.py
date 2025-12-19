@@ -43,6 +43,9 @@ def create_app() -> FastAPI:
         title="Polaris RFP Backend",
         version="1.0.0",
         default_response_class=ORJSONResponse,
+        # Avoid 307/308 redirects between /path and /path/ which can create
+        # redirect loops when requests are proxied (e.g. via Next.js BFF).
+        redirect_slashes=False,
     )
 
     allowed_origins = build_allowed_origins(
