@@ -13,6 +13,7 @@ from ..services.magic_links_repo import (
     delete_magic_session_for_email,
     get_magic_session,
     get_latest_magic_session_for_email,
+    get_recent_magic_sessions_for_email,
     put_magic_session,
     put_magic_session_for_email,
 )
@@ -225,57 +226,98 @@ def verify_magic_link(body: MagicLinkVerify):
     magic_id = str(body.magicId or "").strip()
     code = str(body.code).strip()
 
-    sess = None
-    email = None
-    sk = None
+    # Prefer magicId when present (pins to a specific Cognito Session).
+    # If not present (email-only links), we may have multiple sessions for an email.
+    email: str | None = None
+    candidates: list[dict] = []
+    magic_item: dict | None = None
 
-    # Prefer email-based lookup (works even if Cognito triggers can't include magicId)
-    if body.email:
+    if magic_id:
+        magic_item = get_magic_session(magic_id=magic_id)
+        email = (
+            str((magic_item or {}).get("email") or "").strip().lower()
+            if magic_item
+            else None
+        )
+        if email:
+            _reject_if_disallowed_email(email)
+        # If we have an email, also allow fallbacks to email sessions (helps if MAGIC# was pruned).
+        if email:
+            candidates = get_recent_magic_sessions_for_email(email=email, limit=5)
+        if magic_item:
+            candidates = [magic_item, *candidates]
+    elif body.email:
         email = str(body.email).strip().lower()
         _reject_if_disallowed_email(email)
-        sess = get_latest_magic_session_for_email(email=email)
-        if sess:
-            sk = str(sess.get("sk") or "")
-    elif magic_id:
-        sess = get_magic_session(magic_id=magic_id)
-        email = str((sess or {}).get("email") or "").strip().lower() if sess else None
+        candidates = get_recent_magic_sessions_for_email(email=email, limit=5)
 
-    if not sess or not email:
+    if not candidates or not email:
         raise HTTPException(status_code=400, detail="Invalid or expired magic link")
 
-    _reject_if_disallowed_email(email)
-    session = str(sess.get("session") or "")
-    return_to = str(sess.get("returnTo") or "/")
-    if not email or not session:
-        if sk:
-            delete_magic_session_for_email(email=email, sk=sk)
-        elif magic_id:
-            delete_magic_session(magic_id=magic_id)
-        raise HTTPException(status_code=400, detail="Invalid or expired magic link")
+    # Try each candidate session until Cognito accepts the challenge.
+    last_err: Exception | None = None
+    for idx, sess in enumerate(candidates):
+        session = str((sess or {}).get("session") or "")
+        return_to = str((sess or {}).get("returnTo") or "/")
+        if not session:
+            continue
 
+        try:
+            resp = cognito_idp.respond_to_custom_challenge(
+                session=session,
+                email=email,
+                answer=code,
+            )
+            auth = resp.get("AuthenticationResult") or {}
+            id_token = auth.get("IdToken")
+            if not id_token:
+                raise RuntimeError("No IdToken returned")
+
+            # Cleanup the specific consumed session(s).
+            sk = str((sess or {}).get("sk") or "")
+            if sk and email:
+                delete_magic_session_for_email(email=email, sk=sk)
+            if magic_id:
+                delete_magic_session(magic_id=magic_id)
+
+            return {
+                "access_token": id_token,
+                "token_type": "bearer",
+                "expires_in": "24h",
+                "returnTo": return_to,
+            }
+        except Exception as e:
+            last_err = e
+            # Safe operator logs (no code leakage)
+            try:
+                dom = email.split("@", 1)[1] if email and "@" in email else None
+                log.info(
+                    "magic_link_verify_cognito_rejected",
+                    email_domain=dom,
+                    magic_id_prefix=magic_id[:6] if magic_id else None,
+                    attempt_index=idx,
+                    attempt_count=len(candidates),
+                    error_type=type(e).__name__,
+                    error=str(e)[:300] if str(e) else None,
+                )
+            except Exception:
+                pass
+            continue
+
+    # Don't leak whether code was wrong vs session mismatch.
+    # But do emit a final operator log so we can see systemic issues.
     try:
-        resp = cognito_idp.respond_to_custom_challenge(
-            session=session,
-            email=email,
-            answer=code,
+        dom = email.split("@", 1)[1] if email and "@" in email else None
+        log.warning(
+            "magic_link_verify_failed",
+            email_domain=dom,
+            magic_id_prefix=magic_id[:6] if magic_id else None,
+            attempt_count=len(candidates),
+            last_error_type=type(last_err).__name__ if last_err else None,
         )
-        auth = resp.get("AuthenticationResult") or {}
-        id_token = auth.get("IdToken")
-        if not id_token:
-            raise RuntimeError("No IdToken returned")
-        if sk:
-            delete_magic_session_for_email(email=email, sk=sk)
-        elif magic_id:
-            delete_magic_session(magic_id=magic_id)
-        return {
-            "access_token": id_token,
-            "token_type": "bearer",
-            "expires_in": "24h",
-            "returnTo": return_to,
-        }
     except Exception:
-        # Don't leak if code incorrect; keep short
-        raise HTTPException(status_code=400, detail="Invalid or expired magic link")
+        pass
+    raise HTTPException(status_code=400, detail="Invalid or expired magic link")
 
 
 @router.post("/request-password-reset")

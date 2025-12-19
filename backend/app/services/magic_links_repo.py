@@ -84,6 +84,37 @@ def get_latest_magic_session_for_email(*, email: str) -> dict[str, Any] | None:
     return item
 
 
+def get_recent_magic_sessions_for_email(
+    *, email: str, limit: int = 5
+) -> list[dict[str, Any]]:
+    """
+    Returns up to `limit` most-recent (non-expired) magic sessions for an email.
+    Used to make email-only magic links robust if multiple sessions exist.
+    """
+    lim = max(1, min(int(limit or 5), 25))
+    pg = _table().query_page(
+        key_condition_expression=Key("pk").eq(f"EMAIL#{email.lower()}")
+        & Key("sk").begins_with("SESSION#"),
+        scan_index_forward=False,
+        limit=lim,
+        next_token=None,
+    )
+    items = list(pg.items or [])
+    if not items:
+        return []
+
+    now = int(time.time())
+    out: list[dict[str, Any]] = []
+    for it in items:
+        try:
+            if int(it.get("expiresAt") or 0) <= now:
+                continue
+        except Exception:
+            continue
+        out.append(it)
+    return out
+
+
 def delete_magic_session_for_email(*, email: str, sk: str) -> None:
     _table().delete_item(key={"pk": f"EMAIL#{email.lower()}", "sk": sk})
 
