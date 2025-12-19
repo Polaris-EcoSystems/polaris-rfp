@@ -89,6 +89,16 @@ Parameters:
     Type: String
     Default: '24h'
 
+  OpenAiApiKeySecretArn:
+    Type: String
+    Description: Secrets Manager secret ARN for OPENAI_API_KEY (optional)
+    Default: 'arn:aws:secretsmanager:us-east-1:211125621822:secret:openai-TbIvAk'
+
+  OpenAiApiKeySecretJsonKey:
+    Type: String
+    Description: Optional JSON key name if the OpenAI secret is stored as JSON (e.g. OPENAI_API_KEY)
+    Default: ''
+
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
   UseProvidedCanvaClientId: !Not [!Equals [!Ref CanvaClientId, '']]
@@ -239,6 +249,8 @@ Resources:
           - ''
         JwtSecretArn: !Ref PolarisJwtSecret
         JwtExpire: !Ref JwtExpire
+        OpenAiApiKeySecretArn: !Ref OpenAiApiKeySecretArn
+        OpenAiApiKeySecretJsonKey: !Ref OpenAiApiKeySecretJsonKey
 
   FrontendStack:
     Type: AWS::CloudFormation::Stack
