@@ -1,5 +1,18 @@
 'use client'
 
+import AIPreviewModal from '@/components/AIPreviewModal'
+import AttachmentUploadModal from '@/components/AttachmentUploadModal'
+import ConfirmDeleteModal from '@/components/ConfirmDeleteModal'
+import { useToast } from '@/components/ui/Toast'
+import {
+  contentApi,
+  extractList,
+  proposalApi,
+  RFP,
+  rfpApi,
+  Template,
+  templateApi,
+} from '@/lib/api'
 import {
   BuildingOfficeIcon,
   CalendarDaysIcon,
@@ -14,19 +27,6 @@ import {
 import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import AIPreviewModal from '@/components/AIPreviewModal'
-import AttachmentUploadModal from '@/components/AttachmentUploadModal'
-import ConfirmDeleteModal from '@/components/ConfirmDeleteModal'
-import { useToast } from '@/components/ui/Toast'
-import {
-  contentApi,
-  extractList,
-  proposalApi,
-  RFP,
-  rfpApi,
-  Template,
-  templateApi,
-} from '@/lib/api'
 
 // Utility function to trim title properly
 const trimTitle = (title: string, maxLength: number = 60): string => {
@@ -1344,4 +1344,3 @@ export default function RFPDetailPage() {
     </div>
   )
 }
-
