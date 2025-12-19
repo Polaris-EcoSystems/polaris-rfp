@@ -6,6 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1
 
+ENV LOG_LEVEL=info
 WORKDIR /app
 
 # System deps for python wheels + Playwright/Chromium runtime deps
