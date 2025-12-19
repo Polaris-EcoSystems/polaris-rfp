@@ -1,5 +1,14 @@
 'use client'
 
+import PdfPreviewModal from '@/components/PdfPreviewModal'
+import Badge from '@/components/ui/Badge'
+import Button from '@/components/ui/Button'
+import Card, { CardBody } from '@/components/ui/Card'
+import DownloadMenu from '@/components/ui/DownloadMenu'
+import { LoadingScreen } from '@/components/ui/LoadingSpinner'
+import Modal from '@/components/ui/Modal'
+import PipelineContextBanner from '@/components/ui/PipelineContextBanner'
+import { Proposal, extractList, proposalApi, proposalApiPdf } from '@/lib/api'
 import {
   CalendarDaysIcon,
   CloudArrowUpIcon,
@@ -15,19 +24,6 @@ import {
 } from '@heroicons/react/24/outline'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import PdfPreviewModal from '@/components/PdfPreviewModal'
-import Badge from '@/components/ui/Badge'
-import Button from '@/components/ui/Button'
-import Card, { CardBody } from '@/components/ui/Card'
-import DownloadMenu from '@/components/ui/DownloadMenu'
-import { LoadingScreen } from '@/components/ui/LoadingSpinner'
-import Modal from '@/components/ui/Modal'
-import {
-  Proposal,
-  extractList,
-  proposalApi,
-  proposalApiPdf,
-} from '@/lib/api'
 
 export default function ProposalsPage() {
   const [proposals, setProposals] = useState<Proposal[]>([])
@@ -194,6 +190,16 @@ export default function ProposalsPage() {
 
   return (
     <div className="space-y-8">
+      <div className="space-y-2">
+        <PipelineContextBanner
+          variant="secondary"
+          title="Pipeline is the primary workflow."
+          description="This page is a table view for discovery and bulk review."
+        />
+        <p className="text-xs text-gray-600">
+          Use this list to bulk review and jump into the proposal editor.
+        </p>
+      </div>
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
         <div className="space-y-2">
@@ -553,4 +559,3 @@ export default function ProposalsPage() {
     </div>
   )
 }
-

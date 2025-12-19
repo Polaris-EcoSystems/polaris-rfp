@@ -1,5 +1,9 @@
 'use client'
 
+import RfpProposalsSection from '@/components/rfps/RfpProposalsSection'
+import Modal from '@/components/ui/Modal'
+import PipelineContextBanner from '@/components/ui/PipelineContextBanner'
+import { Proposal, RFP, extractList, rfpApi } from '@/lib/api'
 import {
   BuildingOfficeIcon,
   CalendarDaysIcon,
@@ -14,9 +18,6 @@ import {
 } from '@heroicons/react/24/outline'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-import RfpProposalsSection from '@/components/rfps/RfpProposalsSection'
-import Modal from '@/components/ui/Modal'
-import { Proposal, RFP, extractList, rfpApi } from '@/lib/api'
 
 const getFitBadge = (score: number | undefined) => {
   if (score === undefined || score === null) {
@@ -142,6 +143,13 @@ export default function RFPsPage() {
 
   return (
     <div>
+      <div className="mb-6">
+        <PipelineContextBanner
+          variant="secondary"
+          title="Pipeline is the primary workflow."
+          description="This page is a table view for discovery and bulk review."
+        />
+      </div>
       <div className="md:flex md:items-center md:justify-between">
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
@@ -384,4 +392,3 @@ export default function RFPsPage() {
     </div>
   )
 }
-

@@ -3,6 +3,7 @@
 import AIPreviewModal from '@/components/AIPreviewModal'
 import AttachmentUploadModal from '@/components/AttachmentUploadModal'
 import ConfirmDeleteModal from '@/components/ConfirmDeleteModal'
+import { PipelineBreadcrumbs } from '@/components/ui/PipelineBreadcrumbs'
 import { useToast } from '@/components/ui/Toast'
 import {
   contentApi,
@@ -1175,6 +1176,15 @@ export default function RFPDetailPage() {
 
   return (
     <div>
+      <div className="mb-4">
+        <PipelineBreadcrumbs
+          items={[
+            { label: 'Pipeline', href: '/pipeline' },
+            { label: 'RFPs', href: '/rfps' },
+            { label: rfp.title || 'RFP' },
+          ]}
+        />
+      </div>
       {/* Disqualified Banner */}
       {rfp.isDisqualified && (
         <div className="bg-red-50 border-l-4 border-red-400 p-4">
@@ -1234,7 +1244,7 @@ export default function RFPDetailPage() {
                 className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
               >
                 <UserGroupIcon className="h-5 w-5 mr-2" />
-                Run LinkedIn Finder
+                Run Buyer Profiles
               </Link>
             </div>
           </div>
@@ -1624,7 +1634,7 @@ export default function RFPDetailPage() {
                   <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
                     <div className="flex items-center justify-between">
                       <div className="text-sm font-semibold text-slate-900">
-                        Finder fit score
+                        Buyer Profiles fit score
                       </div>
                       <div className="text-sm font-semibold text-slate-900">
                         {(rfp as any).fitScore}
@@ -2171,7 +2181,7 @@ export default function RFPDetailPage() {
                           )}`}
                           className="text-xs text-primary-600 hover:text-primary-800"
                         >
-                          Update via LinkedIn Finder →
+                          Update via Buyer Profiles →
                         </Link>
                       </div>
                     </div>

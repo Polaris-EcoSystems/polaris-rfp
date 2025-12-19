@@ -1,7 +1,5 @@
-'use client'
-
-import Dashboard from '@/components/Dashboard'
+import { redirect } from 'next/navigation'
 
 export default function HomePage() {
-  return <Dashboard />
+  redirect('/pipeline')
 }

@@ -1,5 +1,8 @@
 'use client'
 
+import Button from '@/components/ui/Button'
+import PipelineContextBanner from '@/components/ui/PipelineContextBanner'
+import StepsPanel from '@/components/ui/StepsPanel'
 import { rfpApi } from '@/lib/api'
 import Link from 'next/link'
 import { useState } from 'react'
@@ -34,12 +37,36 @@ export default function FinderPage() {
 
   return (
     <div className="space-y-6">
+      <PipelineContextBanner
+        variant="tool"
+        title="This is a supporting mini-workflow."
+        description="Use it to pull in new RFPs and feed high-signal items into Pipeline."
+        rightSlot={
+          <Button as={Link} href="/rfps" variant="ghost" size="sm">
+            View RFPs
+          </Button>
+        }
+      />
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">Finder</h1>
+        <h1 className="text-3xl font-bold text-gray-900">RFP Finder</h1>
         <p className="mt-2 text-sm text-gray-600">
           Paste multiple RFP URLs (one per line) to analyze and save them.
         </p>
       </div>
+
+      <StepsPanel
+        title="How it works"
+        tone="blue"
+        columns={3}
+        steps={[
+          { title: 'Paste URLs', description: 'Add one RFP link per line.' },
+          { title: 'Analyze', description: 'We extract + save each RFP.' },
+          {
+            title: 'Review in Pipeline',
+            description: 'Triage and move work forward.',
+          },
+        ]}
+      />
 
       <div className="bg-white shadow rounded-lg p-6 space-y-4">
         <h2 className="text-lg font-semibold text-gray-900">

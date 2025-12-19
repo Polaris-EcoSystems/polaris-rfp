@@ -1,5 +1,8 @@
 'use client'
 
+import Button from '@/components/ui/Button'
+import PipelineContextBanner from '@/components/ui/PipelineContextBanner'
+import StepsPanel from '@/components/ui/StepsPanel'
 import { finderApi, rfpApi } from '@/lib/api'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
@@ -763,14 +766,49 @@ export default function LinkedInFinderPage() {
 
   return (
     <div className="space-y-8">
+      <PipelineContextBanner
+        variant="tool"
+        title="This is a supporting mini-workflow."
+        description="Use it to find likely buyers and attach them to an RFP (then review in Pipeline)."
+        rightSlot={
+          <Button as={Link} href="/rfps" variant="ghost" size="sm">
+            View RFPs
+          </Button>
+        }
+      />
       <div>
-        <h1 className="text-3xl font-bold text-gray-900">LinkedIn Finder</h1>
+        <h1 className="text-3xl font-bold text-gray-900">Buyer Profiles</h1>
         <p className="mt-2 text-sm text-gray-600">
           Upload a Playwright LinkedIn{' '}
           <span className="font-mono">storageState</span> once, then run a
           Finder job against an RFP to identify likely buyers.
         </p>
       </div>
+
+      <StepsPanel
+        title="Quick flow"
+        tone="slate"
+        columns={4}
+        steps={[
+          {
+            title: 'Connect',
+            description: (
+              <>
+                Upload a fresh <span className="font-mono">storageState</span>.
+              </>
+            ),
+          },
+          {
+            title: 'Select RFP',
+            description: 'Choose where buyers should attach.',
+          },
+          { title: 'Run', description: 'Generate and score buyer candidates.' },
+          {
+            title: 'Save',
+            description: 'Save buyers to the RFP, then go back to Pipeline.',
+          },
+        ]}
+      />
 
       <div className="bg-white shadow rounded-lg p-6 space-y-4">
         <div className="flex items-center justify-between">
@@ -1686,4 +1724,3 @@ export default function LinkedInFinderPage() {
     </div>
   )
 }
-

@@ -10,12 +10,22 @@ function isProd(): boolean {
   return process.env.NODE_ENV === 'production'
 }
 
-function buildUpstreamUrl(req: Request, pathParts: string[]): string {
+function buildUpstreamUrl(req: Request): string {
   const u = new URL(req.url)
   const base = getBackendBaseUrl()
-  const joined = pathParts.join('/')
-  const upstreamPath = joined ? `/${joined}` : '/'
-  return `${base}${upstreamPath}${u.search}`
+
+  // Preserve the original request pathname, including trailing slash.
+  // Next catch-all params drop empty segments, which can cause FastAPI to 307 redirect
+  // (and those redirects can carry an http:// Location behind an ALB, triggering mixed content).
+  const rawPath = u.pathname || ''
+  const prefix = '/api/proxy'
+  const suffix = rawPath.startsWith(prefix)
+    ? rawPath.slice(prefix.length)
+    : rawPath
+  const upstreamPath =
+    suffix && suffix.startsWith('/') ? suffix : `/${suffix || ''}`
+
+  return `${base}${upstreamPath || '/'}${u.search}`
 }
 
 function isAllowedProxyPath(parts: string[]): boolean {
@@ -50,6 +60,46 @@ function stripHopByHopHeaders(h: Headers): Headers {
     out.set(key, value)
   })
   return out
+}
+
+function rewriteUpstreamLocationHeader(args: {
+  req: Request
+  upstreamUrl: string
+  outHeaders: Headers
+}) {
+  const { req, upstreamUrl, outHeaders } = args
+  const location = outHeaders.get('location') || outHeaders.get('Location')
+  if (!location) return
+
+  // Only rewrite when it is an actual redirect response. (We pass status separately below via argument.)
+  // This helper expects upstream status to be checked by caller.
+  try {
+    const upstreamBase = new URL(getBackendBaseUrl())
+    const reqUrl = new URL(req.url)
+
+    // Resolve relative Location against upstream URL.
+    const resolved = new URL(location, upstreamUrl)
+
+    // If redirect target is NOT the backend host, drop it (avoid open redirects via proxy).
+    if (resolved.host !== upstreamBase.host) {
+      outHeaders.delete('location')
+      outHeaders.delete('Location')
+      return
+    }
+
+    const newPath = resolved.pathname + resolved.search
+    const proxied = `/api/proxy${
+      newPath.startsWith('/') ? newPath : `/${newPath}`
+    }`
+
+    // Keep redirect on our own origin.
+    const finalUrl = new URL(proxied, `${reqUrl.protocol}//${reqUrl.host}`)
+    outHeaders.set('location', `${finalUrl.pathname}${finalUrl.search}`)
+  } catch {
+    // If anything goes wrong, strip Location to avoid mixed-content / redirect escapes.
+    outHeaders.delete('location')
+    outHeaders.delete('Location')
+  }
 }
 
 function sameOriginGuard(req: Request): boolean {
@@ -105,7 +155,7 @@ async function handler(
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
   }
 
-  const upstreamUrl = buildUpstreamUrl(req, parts)
+  const upstreamUrl = buildUpstreamUrl(req)
   const method = req.method.toUpperCase()
 
   const headers = stripHopByHopHeaders(req.headers)
@@ -141,6 +191,15 @@ async function handler(
     resHeaders.set(key, value)
   })
   resHeaders.set('cache-control', 'no-store')
+
+  // Rewrite redirect locations so the browser never leaves our origin (and never hits http://).
+  if ([301, 302, 303, 307, 308].includes(upstream.status)) {
+    rewriteUpstreamLocationHeader({
+      req,
+      upstreamUrl,
+      outHeaders: resHeaders,
+    })
+  }
 
   const res = new NextResponse(upstream.body, {
     status: upstream.status,

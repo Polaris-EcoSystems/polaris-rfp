@@ -298,6 +298,14 @@ Resources:
           AttributeDataType: String
           Required: true
           Mutable: true
+        - Name: given_name
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: family_name
+          AttributeDataType: String
+          Required: false
+          Mutable: true
         - Name: preferred_username
           AttributeDataType: String
           Required: false

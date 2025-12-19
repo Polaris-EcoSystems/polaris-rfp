@@ -4,6 +4,8 @@ import Badge from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
 import Card, { CardBody, CardHeader } from '@/components/ui/Card'
 import { LoadingScreen } from '@/components/ui/LoadingSpinner'
+import PipelineContextBanner from '@/components/ui/PipelineContextBanner'
+import StepsPanel from '@/components/ui/StepsPanel'
 import api, { proxyUrl } from '@/lib/api'
 import {
   ArrowDownTrayIcon,
@@ -19,6 +21,7 @@ import {
   TrashIcon,
   XCircleIcon,
 } from '@heroicons/react/24/outline'
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 
 interface DriveFile {
@@ -205,6 +208,37 @@ export default function GoogleDrivePage() {
 
   return (
     <div className="space-y-8">
+      <PipelineContextBanner
+        variant="tool"
+        title="This is a supporting mini-workflow."
+        description="Use it to upload/share proposal artifacts, then continue work in Pipeline."
+        rightSlot={
+          <Button as={Link} href="/proposals" variant="ghost" size="sm">
+            View Proposals
+          </Button>
+        }
+      />
+
+      <StepsPanel
+        title="Quick flow"
+        tone="slate"
+        columns={3}
+        steps={[
+          {
+            title: 'Verify setup',
+            description: 'Confirm Drive integration is initialized.',
+          },
+          {
+            title: 'Upload + share',
+            description: 'Store proposal artifacts and share with reviewers.',
+          },
+          {
+            title: 'Continue in Pipeline',
+            description:
+              'Return to Pipeline to advance the RFP/proposal stage.',
+          },
+        ]}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-6">
         <div className="space-y-2">

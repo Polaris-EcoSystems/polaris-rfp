@@ -410,4 +410,25 @@ def me(request: Request):
     user = getattr(request.state, "user", None)
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    return {"username": user.username, "email": user.email}
+
+    claims = getattr(user, "claims", {}) or {}
+    given_name = str(claims.get("given_name") or "").strip() or None
+    family_name = str(claims.get("family_name") or "").strip() or None
+    name = str(claims.get("name") or "").strip() or None
+
+    display_name = None
+    if name:
+        display_name = name
+    else:
+        parts = [p for p in [given_name, family_name] if p]
+        if parts:
+            display_name = " ".join(parts)
+
+    return {
+        "sub": getattr(user, "sub", None),
+        "username": user.username,
+        "email": user.email,
+        "given_name": given_name,
+        "family_name": family_name,
+        "display_name": display_name or user.username,
+    }

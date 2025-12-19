@@ -28,6 +28,7 @@ export default function Layout({ children }: LayoutProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [topMenuOpen, setTopMenuOpen] = useState(false)
   const [footerMenuOpen, setFooterMenuOpen] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [backendUp, setBackendUp] = useState<boolean | null>(null)
   const [backendLastCheckedAt, setBackendLastCheckedAt] = useState<Date | null>(
@@ -190,13 +191,14 @@ export default function Layout({ children }: LayoutProps) {
 
   // Search moved to GlobalSearch component
 
-  const navigation = [
-    {
-      name: 'Dashboard',
-      href: '/',
-      icon: FolderIcon,
-      current: pathname === '/',
-    },
+  type NavItem = {
+    name: string
+    href: string
+    icon: any
+    current: boolean
+  }
+
+  const primaryNav: NavItem[] = [
     {
       name: 'Pipeline',
       href: '/pipeline',
@@ -210,23 +212,14 @@ export default function Layout({ children }: LayoutProps) {
       current: pathname.startsWith('/rfps'),
     },
     {
-      name: 'Finder',
-      href: '/finder',
-      icon: DocumentTextIcon,
-      current: pathname === '/finder',
-    },
-    {
-      name: 'LinkedIn Finder',
-      href: '/linkedin-finder',
-      icon: UserGroupIcon,
-      current: pathname === '/linkedin-finder',
-    },
-    {
       name: 'Proposals',
       href: '/proposals',
       icon: DocumentTextIcon,
       current: pathname.startsWith('/proposals'),
     },
+  ]
+
+  const resourcesNav: NavItem[] = [
     {
       name: 'Templates',
       href: '/templates',
@@ -239,15 +232,73 @@ export default function Layout({ children }: LayoutProps) {
       icon: UserGroupIcon,
       current: pathname === '/content',
     },
+  ]
+
+  const toolsNav: NavItem[] = [
+    {
+      name: 'RFP Finder',
+      href: '/finder',
+      icon: FolderIcon,
+      current: pathname === '/finder',
+    },
+    {
+      name: 'Buyer Profiles',
+      href: '/linkedin-finder',
+      icon: UserGroupIcon,
+      current: pathname === '/linkedin-finder',
+    },
+    {
+      name: 'Google Drive',
+      href: '/googledrive',
+      icon: FolderIcon,
+      current: pathname.startsWith('/googledrive'),
+    },
+    {
+      name: 'Canva',
+      href: '/integrations/canva',
+      icon: CogIcon,
+      current: pathname.startsWith('/integrations/canva'),
+    },
+  ]
+
+  const accountNav: NavItem[] = [
     {
       name: 'Profile',
       href: '/profile',
       icon: UserCircleIcon,
       current: pathname === '/profile',
     },
-    // Canva workflow lives under /templates now.
-    // { name: 'Google Drive', href: '/googledrive', icon: CloudIcon, current: router.pathname === '/googledrive' },
   ]
+
+  const toolsHasCurrent = toolsNav.some((x) => x.current)
+  const toolsVisible = toolsOpen || toolsHasCurrent
+
+  const NavLink = ({ item }: { item: NavItem }) => (
+    <Link
+      key={item.name}
+      href={item.href}
+      className={`group flex items-center px-3 py-3 text-sm font-medium rounded-xl transition-all duration-200 ${
+        item.current
+          ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg transform scale-105'
+          : 'text-gray-700 hover:text-gray-900 hover:bg-gray-100 hover:shadow-md hover:transform hover:scale-105'
+      }`}
+      onClick={() => setSidebarOpen(false)}
+    >
+      <item.icon
+        className={`mr-4 flex-shrink-0 h-6 w-6 transition-colors ${
+          item.current
+            ? 'text-white'
+            : 'text-gray-400 group-hover:text-gray-600'
+        }`}
+      />
+      <span className="font-medium">{item.name}</span>
+      {item.current && (
+        <div className="ml-auto w-2 h-2 bg-white rounded-full animate-pulse" />
+      )}
+    </Link>
+  )
+
+  const displayName = user?.display_name || user?.username || 'Guest'
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
@@ -280,31 +331,56 @@ export default function Layout({ children }: LayoutProps) {
           </button>
         </div>
 
-        <nav className="mt-6 px-3 space-y-2">
-          {navigation.map((item) => (
-            <Link
-              key={item.name}
-              href={item.href}
-              className={`group flex items-center px-3 py-3 text-sm font-medium rounded-xl transition-all duration-200 ${
-                item.current
-                  ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg transform scale-105'
-                  : 'text-gray-700 hover:text-gray-900 hover:bg-gray-100 hover:shadow-md hover:transform hover:scale-105'
-              }`}
-              onClick={() => setSidebarOpen(false)}
+        <nav className="mt-6 px-3 space-y-6">
+          <div className="space-y-2">
+            <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
+              Primary
+            </div>
+            {primaryNav.map((item) => (
+              <NavLink key={item.name} item={item} />
+            ))}
+          </div>
+
+          <div className="space-y-2">
+            <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
+              Resources
+            </div>
+            {resourcesNav.map((item) => (
+              <NavLink key={item.name} item={item} />
+            ))}
+          </div>
+
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={() => setToolsOpen((s) => !s)}
+              className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-semibold tracking-wider text-gray-400 uppercase hover:text-gray-600"
+              aria-expanded={toolsVisible}
             >
-              <item.icon
-                className={`mr-4 flex-shrink-0 h-6 w-6 transition-colors ${
-                  item.current
-                    ? 'text-white'
-                    : 'text-gray-400 group-hover:text-gray-600'
-                }`}
-              />
-              <span className="font-medium">{item.name}</span>
-              {item.current && (
-                <div className="ml-auto w-2 h-2 bg-white rounded-full animate-pulse" />
+              <span>Tools</span>
+              {toolsVisible ? (
+                <ChevronUpIcon className="h-4 w-4" />
+              ) : (
+                <ChevronDownIcon className="h-4 w-4" />
               )}
-            </Link>
-          ))}
+            </button>
+            {toolsVisible && (
+              <div className="space-y-2">
+                {toolsNav.map((item) => (
+                  <NavLink key={item.name} item={item} />
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
+              Account
+            </div>
+            {accountNav.map((item) => (
+              <NavLink key={item.name} item={item} />
+            ))}
+          </div>
         </nav>
 
         {/* Sidebar footer */}
@@ -324,7 +400,7 @@ export default function Layout({ children }: LayoutProps) {
                       aria-expanded={footerMenuOpen}
                     >
                       <p className="text-sm font-medium text-gray-900">
-                        {user.username}
+                        {displayName}
                       </p>
                       <p className="text-xs text-gray-500">
                         {user.email || ''}
@@ -508,7 +584,7 @@ export default function Layout({ children }: LayoutProps) {
                     {user ? (
                       <>
                         <p className="text-sm font-medium text-gray-900">
-                          {user.username}
+                          {displayName}
                         </p>
                         <p className="text-xs text-gray-500">Online</p>
                       </>

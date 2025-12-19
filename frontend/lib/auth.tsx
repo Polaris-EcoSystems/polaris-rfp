@@ -25,6 +25,10 @@ export function isAllowedEmail(raw: string): boolean {
 interface User {
   username: string
   email?: string
+  sub?: string | null
+  given_name?: string | null
+  family_name?: string | null
+  display_name?: string | null
 }
 
 interface AuthContextType {

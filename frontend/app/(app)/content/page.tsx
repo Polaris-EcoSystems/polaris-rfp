@@ -10,8 +10,11 @@ import EditReferenceModal from '@/components/content/modals/EditReferenceModal'
 import ProjectsSection from '@/components/content/ProjectsSection'
 import ReferencesSection from '@/components/content/ReferencesSection'
 import TeamSection from '@/components/content/TeamSection'
+import Button from '@/components/ui/Button'
 import DeleteConfirmationModal from '@/components/ui/DeleteConfirmationModal'
 import Modal from '@/components/ui/Modal'
+import PipelineContextBanner from '@/components/ui/PipelineContextBanner'
+import StepsPanel from '@/components/ui/StepsPanel'
 import { useToast } from '@/components/ui/Toast'
 import { contentApi } from '@/lib/api'
 import {
@@ -19,6 +22,7 @@ import {
   FolderIcon,
   UserGroupIcon,
 } from '@heroicons/react/24/outline'
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 
 export default function ContentLibraryPage() {
@@ -964,6 +968,39 @@ export default function ContentLibraryPage() {
 
   return (
     <div>
+      <div className="mb-6">
+        <PipelineContextBanner
+          variant="secondary"
+          title="Content Library powers proposals and templates."
+          description="This is a structured library for team, projects, and references."
+          rightSlot={
+            <Button as={Link} href="/proposals" variant="ghost" size="sm">
+              View Proposals
+            </Button>
+          }
+        />
+      </div>
+
+      <StepsPanel
+        title="How it fits into Pipeline"
+        tone="blue"
+        columns={3}
+        steps={[
+          {
+            title: 'Curate',
+            description: 'Keep team, projects, and references accurate.',
+          },
+          {
+            title: 'Assign',
+            description: 'Tie items to a company so they roll up correctly.',
+          },
+          {
+            title: 'Generate',
+            description:
+              'Use this library when generating proposals and templates.',
+          },
+        ]}
+      />
       <div className="md:flex md:items-center md:justify-between">
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">

@@ -4,6 +4,7 @@ import AIModal from '@/components/AIModal'
 import ContentLibraryModal from '@/components/ContentLibraryModal'
 import TextEditor from '@/components/TextEditor'
 import Modal from '@/components/ui/Modal'
+import { PipelineBreadcrumbs } from '@/components/ui/PipelineBreadcrumbs'
 import api, {
   Proposal,
   aiApi,
@@ -824,6 +825,15 @@ export default function ProposalDetailPage() {
 
   return (
     <div>
+      <div className="mb-4 px-4 sm:px-6 lg:max-w-6xl lg:mx-auto lg:px-8">
+        <PipelineBreadcrumbs
+          items={[
+            { label: 'Pipeline', href: '/pipeline' },
+            { label: 'Proposals', href: '/proposals' },
+            { label: proposal.title || 'Proposal' },
+          ]}
+        />
+      </div>
       {/* Header */}
       <div className="bg-white shadow">
         <div className="px-4 sm:px-6 lg:max-w-6xl lg:mx-auto lg:px-8">

@@ -1,5 +1,8 @@
 'use client'
 
+import Button from '@/components/ui/Button'
+import PipelineContextBanner from '@/components/ui/PipelineContextBanner'
+import StepsPanel from '@/components/ui/StepsPanel'
 import { useToast } from '@/components/ui/Toast'
 import {
   canvaApi,
@@ -617,6 +620,37 @@ export default function TemplatesPage() {
 
   return (
     <div className="space-y-6">
+      <PipelineContextBanner
+        variant="secondary"
+        title="Templates support the Pipeline workflow."
+        description="Use them to generate polished proposal outputs."
+        rightSlot={
+          <Button as={Link} href="/proposals" variant="ghost" size="sm">
+            Go to Proposals
+          </Button>
+        }
+      />
+
+      <StepsPanel
+        title="Quick flow"
+        tone="blue"
+        columns={3}
+        steps={[
+          {
+            title: 'Connect Canva',
+            description: 'Connect once for your user.',
+          },
+          {
+            title: 'Select inputs',
+            description: 'Choose branding, template, RFP, and team.',
+          },
+          {
+            title: 'Generate output',
+            description:
+              'Create a proposal + Canva design, then continue in Pipeline.',
+          },
+        ]}
+      />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Canva Templates</h1>
