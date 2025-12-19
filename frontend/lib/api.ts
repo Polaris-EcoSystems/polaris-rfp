@@ -376,9 +376,10 @@ export const canvaApi = {
 
 // Template API calls
 export const templateApi = {
-  list: () => api.get<{ data: Template[] }>('/api/templates'),
+  // Backend routes are defined with a trailing slash; avoid 307 redirects.
+  list: () => api.get<{ data: Template[] }>('/api/templates/'),
   get: (id: string) => api.get(`/api/templates/${id}`),
-  create: (data: any) => api.post('/api/templates', data),
+  create: (data: any) => api.post('/api/templates/', data),
   update: (id: string, data: any) => api.put(`/api/templates/${id}`, data),
   delete: (id: string) => api.delete(`/api/templates/${id}`),
   preview: (id: string, rfpData?: any) =>

@@ -145,26 +145,44 @@ export default function RFPDetailPage() {
 
   const loadRFP = async (rfpId: string) => {
     try {
-      const [rfpResponse, templatesResponse, companiesResponse] =
-        await Promise.all([
-          rfpApi.get(rfpId),
-          templateApi.list(),
-          contentApi.getCompanies(),
-        ])
+      // Load the RFP first so template/content errors can't surface as "RFP not found".
+      const rfpResponse = await rfpApi.get(rfpId)
       setRfp(rfpResponse.data)
-      const templatesData = extractList<Template>(templatesResponse)
-      setTemplates(templatesData)
 
-      const companiesData = extractList<any>(companiesResponse)
-      setCompanies(companiesData)
+      // Load supporting data best-effort.
+      const [templatesResponse, companiesResponse] = await Promise.allSettled([
+        templateApi.list(),
+        contentApi.getCompanies(),
+      ])
+
+      if (templatesResponse.status === 'fulfilled') {
+        const templatesData = extractList<Template>(templatesResponse.value)
+        setTemplates(templatesData)
+      } else {
+        console.error('Error loading templates:', templatesResponse.reason)
+        setTemplates([])
+      }
+
+      if (companiesResponse.status === 'fulfilled') {
+        const companiesData = extractList<any>(companiesResponse.value)
+        setCompanies(companiesData)
+        if (!selectedCompanyId) {
+          const polaris = companiesData.find((c) =>
+            String(c?.name || '')
+              .toLowerCase()
+              .includes('polaris'),
+          )
+          const defaultCompany = polaris || companiesData[0]
+          setSelectedCompanyId(defaultCompany?.companyId || null)
+        }
+      } else {
+        console.error('Error loading companies:', companiesResponse.reason)
+        setCompanies([])
+      }
+
       if (!selectedCompanyId) {
-        const polaris = companiesData.find((c) =>
-          String(c?.name || '')
-            .toLowerCase()
-            .includes('polaris'),
-        )
-        const defaultCompany = polaris || companiesData[0]
-        setSelectedCompanyId(defaultCompany?.companyId || null)
+        // If companies failed to load, keep company selection empty (user can retry).
+        setSelectedCompanyId(null)
       }
 
       setProposalsLoading(true)
@@ -176,7 +194,9 @@ export default function RFPDetailPage() {
       }
     } catch (error) {
       console.error('Error loading RFP:', error)
-      setError('Failed to load RFP details')
+      const status = (error as any)?.response?.status
+      if (status === 404) setError('RFP not found')
+      else setError('Failed to load RFP details')
     } finally {
       setLoading(false)
     }
