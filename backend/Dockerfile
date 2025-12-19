@@ -1,6 +1,7 @@
 # Python + FastAPI backend image (ECS)
 FROM python:3.11-slim-bookworm
 
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
