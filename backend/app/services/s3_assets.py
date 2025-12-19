@@ -37,6 +37,20 @@ def make_key(*, kind: str = "headshot", file_name: str = "", member_id: str | No
     return f"team/{_safe_member(member_id)}/{kind}/{uuid.uuid4()}{ext}"
 
 
+def make_rfp_upload_key(*, file_name: str = "") -> str:
+    """
+    Key namespace for uploaded RFP PDFs.
+    """
+    raw = (file_name or "").strip()
+    ext = ".pdf"
+    m = re.search(r"\.([a-zA-Z0-9]{1,10})$", raw)
+    if m:
+        got = f".{m.group(1).lower()}"
+        if got == ".pdf":
+            ext = got
+    return f"rfp/uploads/{uuid.uuid4()}{ext}"
+
+
 @lru_cache(maxsize=1)
 def _s3_client():
     return boto3.client("s3", region_name=settings.aws_region)
@@ -91,6 +105,31 @@ def delete_object(*, key: str) -> None:
 def move_object(*, source_key: str, dest_key: str) -> None:
     copy_object(source_key=source_key, dest_key=dest_key)
     delete_object(key=source_key)
+
+
+def head_object(*, key: str) -> dict[str, Any]:
+    bucket = get_assets_bucket_name()
+    return _s3_client().head_object(Bucket=bucket, Key=str(key))
+
+
+def get_object_bytes(*, key: str, max_bytes: int = 60 * 1024 * 1024) -> bytes:
+    """
+    Download an object into memory, with a safety max to prevent OOM.
+    """
+    bucket = get_assets_bucket_name()
+    meta = head_object(key=str(key))
+    size = int(meta.get("ContentLength") or 0)
+    if size <= 0:
+        return b""
+    if size > int(max_bytes):
+        raise RuntimeError(f"Object too large ({size} bytes), max is {int(max_bytes)} bytes")
+
+    resp = _s3_client().get_object(Bucket=bucket, Key=str(key))
+    body = resp.get("Body")
+    if not body:
+        return b""
+    data = body.read()
+    return data or b""
 
 
 # Signed URL cache for headshots

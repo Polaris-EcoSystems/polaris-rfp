@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, File, HTTPException, Request, UploadFile
 
 from ..services.ai_section_titles import generate_section_titles
 from ..services.rfp_analyzer import analyze_rfp
@@ -16,6 +16,15 @@ from ..services.rfps_repo import (
     update_rfp,
 )
 from ..services.attachments_repo import list_attachments
+from ..services.s3_assets import (
+    get_assets_bucket_name,
+    get_object_bytes,
+    head_object,
+    make_rfp_upload_key,
+    presign_put_object,
+    to_s3_uri,
+)
+from ..services.rfp_upload_jobs_repo import create_job, get_job, get_job_item, update_job
 from ..observability.logging import get_logger
 
 router = APIRouter(tags=["rfp"])
@@ -100,6 +109,149 @@ async def upload(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail={"error": "Failed to process RFP", "message": msg})
     except Exception as e:
         raise HTTPException(status_code=500, detail={"error": "Failed to process RFP", "message": str(e)})
+
+
+@router.post("/upload/", status_code=201, include_in_schema=False)
+async def upload_slash(file: UploadFile = File(...)):
+    # Accept trailing slash to avoid 307 redirect (which breaks large uploads and proxying).
+    return await upload(file=file)
+
+
+@router.post("/upload/presign")
+def presign_upload(body: dict = Body(...)):
+    """
+    Presign a direct-to-S3 upload for a PDF. This avoids sending large multipart
+    bodies through the Next.js proxy layer (which often triggers 413).
+    """
+    file_name = str((body or {}).get("fileName") or "").strip() or "upload.pdf"
+    content_type = str((body or {}).get("contentType") or "").strip().lower()
+    if content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+
+    key = make_rfp_upload_key(file_name=file_name)
+    put = presign_put_object(key=key, content_type=content_type, expires_in=900)
+    return {
+        "ok": True,
+        "bucket": put["bucket"],
+        "key": key,
+        "s3Uri": to_s3_uri(bucket=put["bucket"], key=key),
+        "putUrl": put["url"],
+        "expiresInSeconds": 900,
+        "maxSizeBytes": 60 * 1024 * 1024,
+    }
+
+
+@router.post("/upload/from-s3", status_code=201)
+def upload_from_s3(request: Request, background_tasks: BackgroundTasks, body: dict = Body(...)):
+    """
+    Create an async analysis job for an uploaded S3 PDF.
+    """
+    key = str((body or {}).get("key") or "").strip()
+    file_name = str((body or {}).get("fileName") or "").strip() or "upload.pdf"
+    if not key:
+        raise HTTPException(status_code=400, detail="key is required")
+    if not key.startswith("rfp/uploads/"):
+        raise HTTPException(status_code=400, detail="Invalid key")
+
+    user = getattr(getattr(request, "state", None), "user", None)
+    user_sub = str(getattr(user, "sub", "") or "").strip()
+    if not user_sub:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Basic sanity check (fast) before enqueueing.
+    meta = head_object(key=key)
+    size = int(meta.get("ContentLength") or 0)
+    if size <= 0:
+        raise HTTPException(status_code=400, detail="Uploaded object is empty")
+    if size > 60 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large")
+
+    job = create_job(user_sub=user_sub, s3_key=key, file_name=file_name)
+    background_tasks.add_task(_process_rfp_upload_job, job["jobId"])
+    return {"ok": True, "job": job}
+
+
+@router.get("/upload/jobs/{jobId}")
+def upload_job_status(request: Request, jobId: str):
+    user = getattr(getattr(request, "state", None), "user", None)
+    user_sub = str(getattr(user, "sub", "") or "").strip()
+    if not user_sub:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    raw = get_job_item(jobId)
+    if not raw:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if str(raw.get("userSub") or "") != user_sub:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = get_job(jobId)
+    return {"ok": True, "job": job}
+
+
+def _process_rfp_upload_job(job_id: str) -> None:
+    # Best-effort background processing. Status is persisted to DynamoDB.
+    log.info("rfp_upload_job_starting", jobId=job_id)
+    job = get_job_item(job_id) or {}
+    if not job:
+        return
+    if job.get("status") not in ("queued", "processing"):
+        return
+
+    try:
+        update_job(
+            job_id=job_id,
+            updates_obj={
+                "status": "processing",
+                "startedAt": now_iso(),
+                "updatedAt": now_iso(),
+            },
+        )
+
+        key = str(job.get("s3Key") or "").strip()
+        file_name = str(job.get("fileName") or "upload.pdf").strip() or "upload.pdf"
+
+        data = get_object_bytes(key=key, max_bytes=60 * 1024 * 1024)
+        if not data:
+            update_job(
+                job_id=job_id,
+                updates_obj={
+                    "status": "failed",
+                    "error": "Uploaded object is empty",
+                    "finishedAt": now_iso(),
+                    "updatedAt": now_iso(),
+                },
+            )
+            return
+
+        analysis = analyze_rfp(data, file_name)
+        saved = create_rfp_from_analysis(
+            analysis=analysis,
+            source_file_name=file_name,
+            source_file_size=len(data),
+        )
+        rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
+
+        update_job(
+            job_id=job_id,
+            updates_obj={
+                "status": "completed",
+                "rfpId": rfp_id,
+                "sourceS3Uri": to_s3_uri(bucket=get_assets_bucket_name(), key=key),
+                "finishedAt": now_iso(),
+                "updatedAt": now_iso(),
+            },
+        )
+        log.info("rfp_upload_job_completed", jobId=job_id, rfpId=rfp_id)
+    except Exception as e:
+        update_job(
+            job_id=job_id,
+            updates_obj={
+                "status": "failed",
+                "error": str(e) or "Failed to process RFP",
+                "finishedAt": now_iso(),
+                "updatedAt": now_iso(),
+            },
+        )
+        log.exception("rfp_upload_job_failed", jobId=job_id)
 
 
 @router.get("/")

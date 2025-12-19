@@ -208,10 +208,82 @@ export type CursorListParams = {
 
 // RFP API calls
 export const rfpApi = {
-  upload: (file: File) => {
-    const formData = new FormData()
-    formData.append('file', file)
-    return api.post(proxyUrl('/api/rfp/upload'), formData)
+  upload: async (file: File) => {
+    // Avoid sending large multipart bodies through the Next.js proxy (can trigger 413).
+    // Flow:
+    // 1) Ask backend for a presigned PUT URL (small JSON through proxy)
+    // 2) Upload PDF directly to S3 using that URL
+    // 3) Tell backend to analyze the uploaded object (small JSON through proxy)
+    const fileName = file?.name || 'upload.pdf'
+    const contentType =
+      (file?.type || '').toLowerCase() === 'application/pdf'
+        ? 'application/pdf'
+        : 'application/pdf'
+
+    const presignResp = await api.post(proxyUrl('/api/rfp/upload/presign'), {
+      fileName,
+      contentType,
+    })
+
+    const putUrl = String(presignResp?.data?.putUrl || '')
+    const key = String(presignResp?.data?.key || '')
+    if (!putUrl || !key) {
+      throw new Error('Failed to get upload URL')
+    }
+
+    const putRes = await fetch(putUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      body: file,
+    })
+    if (!putRes.ok) {
+      throw new Error(`Upload failed (${putRes.status})`)
+    }
+
+    const jobResp = await api.post(proxyUrl('/api/rfp/upload/from-s3'), {
+      key,
+      fileName,
+    })
+
+    const jobId = String(jobResp?.data?.job?.jobId || '')
+    if (!jobId) {
+      throw new Error('Upload job was not created')
+    }
+
+    const maxMs = 5 * 60 * 1000
+    const start = Date.now()
+    let delayMs = 750
+
+    // Poll until the backend finishes analysis (or fails).
+    // Keep returning an AxiosResponse-compatible Promise at the end (like before).
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      if (Date.now() - start > maxMs) {
+        throw new Error('RFP analysis timed out')
+      }
+
+      await new Promise((r) => setTimeout(r, delayMs))
+      delayMs = Math.min(5000, Math.round(delayMs * 1.4))
+
+      const statusResp = await api.get(
+        proxyUrl(`/api/rfp/upload/jobs/${jobId}`),
+      )
+      const job = statusResp?.data?.job
+      const status = String(job?.status || '')
+
+      if (status === 'completed') {
+        const rfpId = String(job?.rfpId || '')
+        if (!rfpId) {
+          throw new Error('RFP job completed but no rfpId returned')
+        }
+        return api.get(proxyUrl(`/api/rfp/${rfpId}`))
+      }
+
+      if (status === 'failed') {
+        const err = String(job?.error || 'RFP analysis failed')
+        throw new Error(err)
+      }
+    }
   },
   analyzeUrl: (url: string) => {
     return api.post(proxyUrl('/api/rfp/analyze-url'), { url })
