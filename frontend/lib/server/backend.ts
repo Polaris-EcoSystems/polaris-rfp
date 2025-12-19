@@ -19,3 +19,4 @@ export function getBackendBaseUrl(): string {
   if (!base) throw new Error('Missing backend base URL (API_BASE_URL)')
   return base.replace(/\/+$/, '')
 }
+

@@ -5,3 +5,4 @@ export default function CanvaIntegrationPage() {
   // We’ve moved the Canva-template workflow to /templates.
   redirect('/templates')
 }
+

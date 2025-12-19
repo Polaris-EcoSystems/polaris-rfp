@@ -70,3 +70,4 @@ def configure_logging(*, level: str | int = "INFO") -> None:
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
     return structlog.get_logger(name)
 
+

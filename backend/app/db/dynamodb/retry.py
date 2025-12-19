@@ -208,3 +208,4 @@ def ddb_call(
     if isinstance(last_exc, DdbError):
         raise last_exc
     raise DdbInternal(message="DynamoDB request failed", operation=operation, table_name=table_name, key=key)
+

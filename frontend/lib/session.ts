@@ -6,3 +6,4 @@ export const SESSION_COOKIE_NAME =
 export function sessionCookieName(): string {
   return SESSION_COOKIE_NAME
 }
+

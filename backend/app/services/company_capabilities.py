@@ -317,3 +317,4 @@ def regenerate_company_capabilities(company_id: str) -> dict[str, Any] | None:
     )
     return updated
 
+

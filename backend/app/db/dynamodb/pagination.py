@@ -46,3 +46,4 @@ def decode_next_token(next_token: str | None) -> dict[str, Any] | None:
         raise DdbValidation(message="Invalid nextToken")
 
     return lek
+

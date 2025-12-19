@@ -62,3 +62,4 @@ def test_auth_denied_is_problem_json():
     assert body["status"] == r.status_code
     assert body.get("requestId")
 
+

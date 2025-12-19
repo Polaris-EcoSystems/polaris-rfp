@@ -52,3 +52,4 @@ class DdbUnavailable(DdbError):
 @dataclass(slots=True)
 class DdbInternal(DdbError):
     pass
+
