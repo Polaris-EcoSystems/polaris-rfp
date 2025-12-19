@@ -70,7 +70,7 @@ def _generate_text_section(
     )
 
     completion = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model=settings.openai_model_for("proposal_sections"),
         temperature=0.4,
         max_tokens=1200,
         messages=[{"role": "user", "content": prompt}],

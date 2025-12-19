@@ -99,6 +99,11 @@ Parameters:
     Description: Optional JSON key name if the OpenAI secret is stored as JSON (e.g. OPENAI_API_KEY)
     Default: ''
 
+  OpenAiModel:
+    Type: String
+    Description: OpenAI model to use by default (e.g. gpt-5.2)
+    Default: 'gpt-5.2'
+
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
   UseProvidedCanvaClientId: !Not [!Equals [!Ref CanvaClientId, '']]
@@ -251,6 +256,7 @@ Resources:
         JwtExpire: !Ref JwtExpire
         OpenAiApiKeySecretArn: !Ref OpenAiApiKeySecretArn
         OpenAiApiKeySecretJsonKey: !Ref OpenAiApiKeySecretJsonKey
+        OpenAiModel: !Ref OpenAiModel
 
   FrontendStack:
     Type: AWS::CloudFormation::Stack

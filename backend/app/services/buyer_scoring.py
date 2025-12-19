@@ -139,7 +139,7 @@ def enrich_buyer_profile_with_ai(
     )
 
     completion = _client().chat.completions.create(
-        model="gpt-4o-mini",
+        model=settings.openai_model_for("buyer_enrichment"),
         temperature=0.4,
         max_tokens=900,
         messages=[{"role": "user", "content": prompt}],

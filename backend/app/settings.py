@@ -43,6 +43,13 @@ class Settings(BaseSettings):
 
     # Misc integrations
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-4o-mini", validation_alias="OPENAI_MODEL")
+    openai_model_rfp_analysis: str | None = Field(default=None, validation_alias="OPENAI_MODEL_RFP_ANALYSIS")
+    openai_model_section_titles: str | None = Field(default=None, validation_alias="OPENAI_MODEL_SECTION_TITLES")
+    openai_model_text_edit: str | None = Field(default=None, validation_alias="OPENAI_MODEL_TEXT_EDIT")
+    openai_model_generate_content: str | None = Field(default=None, validation_alias="OPENAI_MODEL_GENERATE_CONTENT")
+    openai_model_proposal_sections: str | None = Field(default=None, validation_alias="OPENAI_MODEL_PROPOSAL_SECTIONS")
+    openai_model_buyer_enrichment: str | None = Field(default=None, validation_alias="OPENAI_MODEL_BUYER_ENRICHMENT")
 
     # Canva Connect (integration)
     canva_client_id: str | None = Field(default=None, validation_alias="CANVA_CLIENT_ID")
@@ -136,6 +143,7 @@ class Settings(BaseSettings):
             },
             "integrations": {
                 "openai_api_key_configured": _has(self.openai_api_key),
+                "openai_model": self.openai_model,
                 "canva_client_id": self.canva_client_id,
                 "canva_redirect_uri": self.canva_redirect_uri,
                 "canva_client_secret_configured": _has(self.canva_client_secret),
@@ -143,6 +151,22 @@ class Settings(BaseSettings):
                 "jwt_secret_configured": _has(self.jwt_secret),
             },
         }
+
+    def openai_model_for(self, purpose: str) -> str:
+        # Allow per-purpose override, else fall back to OPENAI_MODEL.
+        purpose = (purpose or "").strip().lower()
+        override_map = {
+            "rfp_analysis": self.openai_model_rfp_analysis,
+            "section_titles": self.openai_model_section_titles,
+            "text_edit": self.openai_model_text_edit,
+            "generate_content": self.openai_model_generate_content,
+            "proposal_sections": self.openai_model_proposal_sections,
+            "buyer_enrichment": self.openai_model_buyer_enrichment,
+        }
+        ov = override_map.get(purpose)
+        if ov and str(ov).strip():
+            return str(ov).strip()
+        return str(self.openai_model or "gpt-4o-mini").strip() or "gpt-4o-mini"
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

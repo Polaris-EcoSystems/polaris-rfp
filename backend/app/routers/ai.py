@@ -58,7 +58,7 @@ def edit_text(body: dict):
 
     try:
         completion = _client().chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.openai_model_for("text_edit"),
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -122,7 +122,7 @@ def generate_content(body: dict):
 
     try:
         completion = _client().chat.completions.create(
-            model="gpt-4o-mini",
+            model=settings.openai_model_for("generate_content"),
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},

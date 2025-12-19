@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 from typing import Any
 
 import httpx
@@ -83,6 +84,67 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
     if not raw_text:
         raise RuntimeError("No extractable text found")
 
+    # Many “scanned PDFs” yield a tiny amount of garbage text. Treat that as non-extractable.
+    if len(raw_text) < 80:
+        raise RuntimeError("No extractable text found")
+
+    def _normalize_analysis(*, data: dict[str, Any] | None, used_ai: bool, model: str | None) -> dict[str, Any]:
+        """
+        Ensure a stable schema regardless of model output.
+        We do not trust the model to return all keys or correct types.
+        """
+        d = dict(data or {})
+
+        def _s(v: Any, max_len: int = 5000) -> str:
+            s = str(v or "").strip()
+            if len(s) > max_len:
+                s = s[:max_len]
+            return s
+
+        def _arr(v: Any, max_items: int = 50, max_len: int = 300) -> list[str]:
+            xs = v if isinstance(v, list) else []
+            out: list[str] = []
+            for x in xs:
+                s = _s(x, max_len=max_len)
+                if not s:
+                    continue
+                if s not in out:
+                    out.append(s)
+                if len(out) >= max_items:
+                    break
+            return out
+
+        # Always prefer extracted raw_text over any model-provided rawText.
+        d["rawText"] = raw_text[:200000]
+
+        # Required-ish fields (keep conservative defaults).
+        d["title"] = _s(d.get("title") or source_name, max_len=300) or "RFP"
+        d["clientName"] = _s(d.get("clientName"), max_len=300)
+        d["submissionDeadline"] = _s(d.get("submissionDeadline"), max_len=120) or "Not available"
+        d["questionsDeadline"] = _s(d.get("questionsDeadline"), max_len=120) or "Not available"
+        d["bidMeetingDate"] = _s(d.get("bidMeetingDate"), max_len=120) or "Not available"
+        d["bidRegistrationDate"] = _s(d.get("bidRegistrationDate"), max_len=120) or "Not available"
+        d["projectDeadline"] = _s(d.get("projectDeadline"), max_len=120) or "Not available"
+        d["budgetRange"] = _s(d.get("budgetRange"), max_len=300)
+        d["projectType"] = _s(d.get("projectType"), max_len=120)
+        d["location"] = _s(d.get("location"), max_len=300)
+        d["contactInformation"] = _s(d.get("contactInformation"), max_len=2000)
+        d["timeline"] = _arr(d.get("timeline"), max_items=30, max_len=400)
+        d["keyRequirements"] = _arr(d.get("keyRequirements"), max_items=40, max_len=400)
+        d["deliverables"] = _arr(d.get("deliverables"), max_items=30, max_len=400)
+        d["criticalInformation"] = _arr(d.get("criticalInformation"), max_items=30, max_len=500)
+        d["clarificationQuestions"] = _arr(d.get("clarificationQuestions"), max_items=30, max_len=400)
+
+        d["_analysis"] = {
+            "version": 1,
+            "usedAi": bool(used_ai),
+            "model": str(model) if model else None,
+            "sourceName": str(source_name or ""),
+            "extractedChars": len(raw_text),
+            "ts": int(time.time()),
+        }
+        return d
+
     def _fallback_analysis() -> dict[str, Any]:
         """
         Heuristic-only analysis used when AI isn't configured or fails.
@@ -143,7 +205,8 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
             if submission_deadline != "Not available" and questions_deadline != "Not available":
                 break
 
-        return {
+        return _normalize_analysis(
+            data={
             "title": _clean_title(source_name),
             "clientName": "",
             "submissionDeadline": submission_deadline,
@@ -160,8 +223,10 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
             "timeline": [],
             "contactInformation": "",
             "clarificationQuestions": [],
-            "rawText": raw_text[:200000],
-        }
+            },
+            used_ai=False,
+            model=None,
+        )
 
     prompt = (
         "Extract key information from the following RFP text and return JSON only.\n\n"
@@ -191,16 +256,27 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
     if not client:
         return _fallback_analysis()
 
+    chosen_model = settings.openai_model_for("rfp_analysis")
     try:
         completion = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model=chosen_model,
             temperature=0.2,
             max_tokens=3000,
             messages=[{"role": "user", "content": prompt}],
         )
     except Exception:
-        # Keep the upload flow working even if OpenAI is down/misconfigured.
-        return _fallback_analysis()
+        # If a newer model name is misconfigured/not available, fall back once.
+        try:
+            completion = client.chat.completions.create(
+                model="gpt-4o-mini",  # hard fallback if configured model name is invalid
+                temperature=0.2,
+                max_tokens=3000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            chosen_model = "gpt-4o-mini"
+        except Exception:
+            # Keep the upload flow working even if OpenAI is down/misconfigured.
+            return _fallback_analysis()
 
     content = (completion.choices[0].message.content or "").strip()
 
@@ -219,5 +295,4 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise RuntimeError("AI analysis JSON was not an object")
 
-    data["rawText"] = str(data.get("rawText") or raw_text[:200000])
-    return data
+    return _normalize_analysis(data=data, used_ai=True, model=chosen_model)

@@ -151,7 +151,7 @@ def format_experience_section(company: dict[str, Any] | None, rfp: dict[str, Any
             )
 
             completion = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=settings.openai_model_for("proposal_sections"),
                 temperature=0.3,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}],

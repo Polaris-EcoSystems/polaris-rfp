@@ -25,7 +25,7 @@ def generate_section_titles(rfp: dict[str, Any]) -> list[str]:
     )
 
     completion = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model=settings.openai_model_for("section_titles"),
         temperature=0.2,
         max_tokens=400,
         messages=[{"role": "user", "content": prompt}],
