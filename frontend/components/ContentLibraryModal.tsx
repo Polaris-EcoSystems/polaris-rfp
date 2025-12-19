@@ -1,6 +1,6 @@
 import { CheckIcon, XMarkIcon } from '@heroicons/react/24/outline'
 import { useCallback, useEffect, useState } from 'react'
-import api from '../lib/api'
+import api, { proxyUrl } from '../lib/api'
 import type {
   Company,
   ContentLibraryModalProps,
@@ -29,11 +29,11 @@ export default function ContentLibraryModal({
     try {
       let response
       if (type === 'team') {
-        response = await api.get('/api/content/team')
+        response = await api.get(proxyUrl('/api/content/team'))
       } else if (type === 'references') {
-        response = await api.get('/api/content/references')
+        response = await api.get(proxyUrl('/api/content/references'))
       } else if (type === 'company') {
-        response = await api.get('/api/content/companies')
+        response = await api.get(proxyUrl('/api/content/companies'))
       }
       if (response) {
         setItems(response.data)

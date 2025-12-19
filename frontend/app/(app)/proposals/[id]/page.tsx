@@ -12,6 +12,7 @@ import api, {
   extractList,
   proposalApi,
   proposalApiPdf,
+  proxyUrl,
 } from '@/lib/api'
 import {
   formatTitleObjectToText,
@@ -37,8 +38,9 @@ import {
   TrashIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline'
+import Link from 'next/link'
 import { useParams, useRouter } from 'next/navigation'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 export default function ProposalDetailPage() {
   const router = useRouter()
@@ -87,6 +89,22 @@ export default function ProposalDetailPage() {
   const [reviewScore, setReviewScore] = useState<string>('')
   const [reviewNotes, setReviewNotes] = useState<string>('')
   const [savingReview, setSavingReview] = useState(false)
+  const [rubric, setRubric] = useState<{
+    rebuttalItems: { id: string; text: string; done: boolean }[]
+    submissionChecklist: { id: string; text: string; done: boolean }[]
+  }>({ rebuttalItems: [], submissionChecklist: [] })
+  const [rubricBaseline, setRubricBaseline] = useState<string>('')
+  const [savingRubric, setSavingRubric] = useState(false)
+  const [newRebuttalText, setNewRebuttalText] = useState('')
+  const [newSubmissionText, setNewSubmissionText] = useState('')
+
+  const rubricDirty = useMemo(() => {
+    try {
+      return JSON.stringify(rubric) !== (rubricBaseline || '')
+    } catch {
+      return true
+    }
+  }, [rubric, rubricBaseline])
 
   const openInfo = (
     title: string,
@@ -149,6 +167,65 @@ export default function ProposalDetailPage() {
           : String(existingScore),
       )
       setReviewNotes(String((proposalData as any)?.review?.notes || ''))
+
+      const rawRubric = (proposalData as any)?.review?.rubric
+      const defaultRubric = {
+        rebuttalItems: [
+          {
+            id: 'r1',
+            text: 'Confirm compliance gaps are addressed',
+            done: false,
+          },
+          {
+            id: 'r2',
+            text: 'Run a red-team pass for clarity and risks',
+            done: false,
+          },
+        ],
+        submissionChecklist: [
+          { id: 's1', text: 'Final narrative edit complete', done: false },
+          { id: 's2', text: 'Formatting/branding checked', done: false },
+          { id: 's3', text: 'Exported final PDF/DOCX', done: false },
+          { id: 's4', text: 'Submitted to client', done: false },
+        ],
+      }
+
+      const nextRubric =
+        rawRubric && typeof rawRubric === 'object'
+          ? {
+              rebuttalItems: Array.isArray((rawRubric as any).rebuttalItems)
+                ? (rawRubric as any).rebuttalItems
+                    .filter((x: any) => x && typeof x === 'object')
+                    .map((x: any, idx: number) => ({
+                      id: String(x.id || `r_${idx}`).slice(0, 80),
+                      text: String(x.text || '').trim(),
+                      done: Boolean(x.done),
+                    }))
+                    .filter((x: any) => x.text)
+                    .slice(0, 100)
+                : defaultRubric.rebuttalItems,
+              submissionChecklist: Array.isArray(
+                (rawRubric as any).submissionChecklist,
+              )
+                ? (rawRubric as any).submissionChecklist
+                    .filter((x: any) => x && typeof x === 'object')
+                    .map((x: any, idx: number) => ({
+                      id: String(x.id || `s_${idx}`).slice(0, 80),
+                      text: String(x.text || '').trim(),
+                      done: Boolean(x.done),
+                    }))
+                    .filter((x: any) => x.text)
+                    .slice(0, 100)
+                : defaultRubric.submissionChecklist,
+            }
+          : defaultRubric
+
+      setRubric(nextRubric)
+      try {
+        setRubricBaseline(JSON.stringify(nextRubric))
+      } catch {
+        setRubricBaseline('')
+      }
     } catch (error) {
       console.error('Error loading proposal:', error)
       setError('Failed to load proposal details')
@@ -196,6 +273,28 @@ export default function ProposalDetailPage() {
       openInfo('Save failed', 'Failed to save review.', 'error')
     } finally {
       setSavingReview(false)
+    }
+  }
+
+  const saveRubric = async () => {
+    if (!proposal) return
+    setSavingRubric(true)
+    try {
+      const resp = await proposalApi.updateReview(proposal._id, {
+        rubric,
+      })
+      setProposal(resp.data as any)
+      try {
+        setRubricBaseline(JSON.stringify(rubric))
+      } catch {
+        setRubricBaseline('')
+      }
+      openInfo('Saved', 'Review/rebuttal checklist updated.', 'success')
+    } catch (error) {
+      console.error('Error saving rubric:', error)
+      openInfo('Save failed', 'Failed to save review checklist.', 'error')
+    } finally {
+      setSavingRubric(false)
     }
   }
 
@@ -325,7 +424,7 @@ export default function ProposalDetailPage() {
       )}_Proposal.json`
 
       const response = await api.post(
-        `/googledrive/upload-proposal/${proposal._id}`,
+        proxyUrl(`/googledrive/upload-proposal/${proposal._id}`),
         {
           fileName,
         },
@@ -486,7 +585,7 @@ export default function ProposalDetailPage() {
     setGenerating(true)
     try {
       const response = await api.post(
-        `/api/proposals/${proposal._id}/generate-sections`,
+        proxyUrl(`/api/proposals/${proposal._id}/generate-sections`),
       )
       setProposal(response.data.proposal)
       openInfo('AI sections', 'AI sections generated successfully!', 'success')
@@ -570,7 +669,9 @@ export default function ProposalDetailPage() {
     setIsContentLibraryLoading(true)
     try {
       const response = await api.put(
-        `/api/proposals/${proposal._id}/content-library/${contentLibrarySection}`,
+        proxyUrl(
+          `/api/proposals/${proposal._id}/content-library/${contentLibrarySection}`,
+        ),
         {
           selectedIds,
           type: contentLibraryType,
@@ -602,6 +703,95 @@ export default function ProposalDetailPage() {
     setContentLibrarySection(null)
   }
 
+  const sectionEntries = useMemo(() => {
+    return Object.entries((proposal?.sections as any) || {})
+  }, [proposal])
+
+  const contentLibraryIssues = useMemo(() => {
+    return sectionEntries
+      .filter(([_, sectionData]) => isContentLibrarySection(sectionData))
+      .map(([sectionName, sectionData]: [string, any]) => {
+        const t = getContentLibraryType(sectionName)
+        const selected = getSelectedIds(sectionData)
+        const content = sectionData?.content
+        const contentStr = typeof content === 'string' ? content : ''
+
+        const problems: string[] = []
+
+        if (t === 'team' && selected.length === 0) {
+          problems.push(`No team members selected for "${sectionName}".`)
+        }
+        if (t === 'references' && selected.length === 0) {
+          problems.push(`No references selected for "${sectionName}".`)
+        }
+        if (
+          t === 'company' &&
+          selected.length === 0 &&
+          !isTitleSectionName(sectionName)
+        ) {
+          problems.push(`No company profile selected for "${sectionName}".`)
+        }
+
+        if (
+          contentStr.includes('No team members available') ||
+          contentStr.includes('No suitable team members') ||
+          contentStr.includes('No project references available') ||
+          contentStr.includes('No suitable project references') ||
+          contentStr.includes('No company information available') ||
+          contentStr.includes('Selected company not found')
+        ) {
+          problems.push(
+            `"${sectionName}" is missing required content library data.`,
+          )
+        }
+
+        return problems
+      })
+      .flat()
+  }, [sectionEntries])
+
+  const compliance = useMemo(() => {
+    const rfp = (proposal as any)?.rfp
+    const reqs = Array.isArray(rfp?.review?.requirements)
+      ? rfp.review.requirements
+      : []
+    const counts = { ok: 0, risk: 0, gap: 0, unknown: 0 }
+    const items = reqs
+      .map((r: any) => ({
+        text: String(r?.text || '').trim(),
+        status: String(r?.status || 'unknown').toLowerCase(),
+        notes: String(r?.notes || ''),
+        mappedSections: Array.isArray(r?.mappedSections)
+          ? r.mappedSections
+              .map((x: any) => String(x || '').trim())
+              .filter(Boolean)
+          : [],
+      }))
+      .filter((x: any) => x.text)
+      .slice(0, 200)
+    items.forEach((x: any) => {
+      if (x.status === 'ok') counts.ok += 1
+      else if (x.status === 'risk') counts.risk += 1
+      else if (x.status === 'gap') counts.gap += 1
+      else counts.unknown += 1
+    })
+    const gaps = items.filter((x: any) => x.status === 'gap')
+    const risks = items.filter((x: any) => x.status === 'risk')
+    return { counts, items, gaps, risks }
+  }, [proposal])
+
+  const derivedReady = useMemo(() => {
+    const noContentIssues = contentLibraryIssues.length === 0
+    const noGaps = (compliance?.gaps || []).length === 0
+    const hasScore = reviewScore.trim() !== ''
+    return {
+      noContentIssues,
+      noGaps,
+      hasScore,
+      ok: noContentIssues && noGaps,
+    }
+  }, [contentLibraryIssues.length, compliance?.gaps, reviewScore])
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -631,48 +821,6 @@ export default function ProposalDetailPage() {
       </div>
     )
   }
-
-  const sectionEntries = Object.entries(proposal.sections || {})
-  const contentLibraryIssues = sectionEntries
-    .filter(([_, sectionData]) => isContentLibrarySection(sectionData))
-    .map(([sectionName, sectionData]: [string, any]) => {
-      const t = getContentLibraryType(sectionName)
-      const selected = getSelectedIds(sectionData)
-      const content = sectionData?.content
-      const contentStr = typeof content === 'string' ? content : ''
-
-      const problems: string[] = []
-
-      if (t === 'team' && selected.length === 0) {
-        problems.push(`No team members selected for "${sectionName}".`)
-      }
-      if (t === 'references' && selected.length === 0) {
-        problems.push(`No references selected for "${sectionName}".`)
-      }
-      if (
-        t === 'company' &&
-        selected.length === 0 &&
-        !isTitleSectionName(sectionName)
-      ) {
-        problems.push(`No company profile selected for "${sectionName}".`)
-      }
-
-      if (
-        contentStr.includes('No team members available') ||
-        contentStr.includes('No suitable team members') ||
-        contentStr.includes('No project references available') ||
-        contentStr.includes('No suitable project references') ||
-        contentStr.includes('No company information available') ||
-        contentStr.includes('Selected company not found')
-      ) {
-        problems.push(
-          `"${sectionName}" is missing required content library data.`,
-        )
-      }
-
-      return problems
-    })
-    .flat()
 
   return (
     <div>
@@ -949,6 +1097,340 @@ export default function ProposalDetailPage() {
               </div>
             </div>
           )}
+
+          {/* Review / rebuttal / submission */}
+          <div className="mb-6 bg-white overflow-hidden shadow rounded-lg">
+            <div className="px-6 py-5 border-b border-gray-200">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg leading-6 font-medium text-gray-900">
+                    Review / rebuttal / submission
+                  </h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Track compliance gaps, rebuttal items, and submission
+                    readiness.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={saveRubric}
+                    disabled={savingRubric || !rubricDirty}
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                  >
+                    {savingRubric
+                      ? 'Saving…'
+                      : rubricDirty
+                      ? 'Save checklist'
+                      : 'Saved'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-4 space-y-6">
+              {/* Compliance summary */}
+              <div className="rounded-lg border border-gray-200 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">
+                      Compliance summary
+                    </div>
+                    <div className="mt-1 text-xs text-gray-600">
+                      Derived from RFP requirement assessments.
+                    </div>
+                  </div>
+                  {(proposal as any)?.rfp?._id ? (
+                    <Link
+                      href={`/rfps/${(proposal as any).rfp._id}`}
+                      className="text-sm text-primary-600 hover:text-primary-800"
+                    >
+                      Open RFP →
+                    </Link>
+                  ) : null}
+                </div>
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <span className="px-2 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-800">
+                    OK {compliance.counts.ok}
+                  </span>
+                  <span className="px-2 py-1 rounded-full text-xs font-semibold bg-amber-100 text-amber-900">
+                    Risk {compliance.counts.risk}
+                  </span>
+                  <span className="px-2 py-1 rounded-full text-xs font-semibold bg-red-100 text-red-800">
+                    Gap {compliance.counts.gap}
+                  </span>
+                  <span className="px-2 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-800">
+                    Unknown {compliance.counts.unknown}
+                  </span>
+                  <span
+                    className={`px-2 py-1 rounded-full text-xs font-semibold border ${
+                      derivedReady.ok
+                        ? 'bg-green-50 text-green-800 border-green-200'
+                        : 'bg-amber-50 text-amber-900 border-amber-200'
+                    }`}
+                    title="Derived readiness: no content-library issues + no GAP requirements."
+                  >
+                    Derived readiness: {derivedReady.ok ? 'OK' : 'Needs work'}
+                  </span>
+                </div>
+
+                {(compliance.gaps.length > 0 ||
+                  compliance.risks.length > 0) && (
+                  <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        Gaps
+                      </div>
+                      {compliance.gaps.length === 0 ? (
+                        <div className="mt-2 text-sm text-gray-500">None.</div>
+                      ) : (
+                        <ul className="mt-2 space-y-2">
+                          {compliance.gaps
+                            .slice(0, 8)
+                            .map((g: any, idx: number) => (
+                              <li
+                                key={`${idx}-${g.text}`}
+                                className="rounded-md border border-red-200 bg-red-50 p-3"
+                              >
+                                <div className="text-sm font-semibold text-red-900">
+                                  {g.text}
+                                </div>
+                                {g.notes ? (
+                                  <div className="mt-1 text-xs text-red-800">
+                                    {g.notes}
+                                  </div>
+                                ) : null}
+                                {g.mappedSections?.length ? (
+                                  <div className="mt-1 text-xs text-red-800">
+                                    Sections: {g.mappedSections.join(', ')}
+                                  </div>
+                                ) : null}
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        Risks
+                      </div>
+                      {compliance.risks.length === 0 ? (
+                        <div className="mt-2 text-sm text-gray-500">None.</div>
+                      ) : (
+                        <ul className="mt-2 space-y-2">
+                          {compliance.risks
+                            .slice(0, 8)
+                            .map((g: any, idx: number) => (
+                              <li
+                                key={`${idx}-${g.text}`}
+                                className="rounded-md border border-amber-200 bg-amber-50 p-3"
+                              >
+                                <div className="text-sm font-semibold text-amber-900">
+                                  {g.text}
+                                </div>
+                                {g.notes ? (
+                                  <div className="mt-1 text-xs text-amber-800">
+                                    {g.notes}
+                                  </div>
+                                ) : null}
+                                {g.mappedSections?.length ? (
+                                  <div className="mt-1 text-xs text-amber-800">
+                                    Sections: {g.mappedSections.join(', ')}
+                                  </div>
+                                ) : null}
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Rebuttal checklist */}
+              <div className="rounded-lg border border-gray-200 p-4">
+                <div className="text-sm font-semibold text-gray-900">
+                  Rebuttal / action items
+                </div>
+                <div className="mt-2 space-y-2">
+                  {rubric.rebuttalItems.length === 0 ? (
+                    <div className="text-sm text-gray-500">No items yet.</div>
+                  ) : (
+                    rubric.rebuttalItems.map((it) => (
+                      <div
+                        key={it.id}
+                        className="flex items-center gap-2 rounded-md border border-gray-200 p-2"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={it.done}
+                          onChange={() =>
+                            setRubric((prev) => ({
+                              ...prev,
+                              rebuttalItems: prev.rebuttalItems.map((x) =>
+                                x.id === it.id ? { ...x, done: !x.done } : x,
+                              ),
+                            }))
+                          }
+                        />
+                        <input
+                          value={it.text}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            setRubric((prev) => ({
+                              ...prev,
+                              rebuttalItems: prev.rebuttalItems.map((x) =>
+                                x.id === it.id ? { ...x, text: v } : x,
+                              ),
+                            }))
+                          }}
+                          className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRubric((prev) => ({
+                              ...prev,
+                              rebuttalItems: prev.rebuttalItems.filter(
+                                (x) => x.id !== it.id,
+                              ),
+                            }))
+                          }
+                          className="px-2 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                          title="Remove"
+                        >
+                          <XMarkIcon className="h-4 w-4" />
+                        </button>
+                      </div>
+                    ))
+                  )}
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={newRebuttalText}
+                      onChange={(e) => setNewRebuttalText(e.target.value)}
+                      placeholder="Add an item…"
+                      className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const t = newRebuttalText.trim()
+                        if (!t) return
+                        setRubric((prev) => ({
+                          ...prev,
+                          rebuttalItems: [
+                            ...prev.rebuttalItems,
+                            { id: `r_${Date.now()}`, text: t, done: false },
+                          ],
+                        }))
+                        setNewRebuttalText('')
+                      }}
+                      className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Submission checklist */}
+              <div className="rounded-lg border border-gray-200 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">
+                      Submission readiness checklist
+                    </div>
+                    <div className="mt-1 text-xs text-gray-600">
+                      Tip: derived readiness does not include
+                      narrative/formatting work.
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    {rubric.submissionChecklist.filter((x) => x.done).length}/
+                    {rubric.submissionChecklist.length} done
+                  </div>
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {rubric.submissionChecklist.map((it) => (
+                    <div
+                      key={it.id}
+                      className="flex items-center gap-2 rounded-md border border-gray-200 p-2"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={it.done}
+                        onChange={() =>
+                          setRubric((prev) => ({
+                            ...prev,
+                            submissionChecklist: prev.submissionChecklist.map(
+                              (x) =>
+                                x.id === it.id ? { ...x, done: !x.done } : x,
+                            ),
+                          }))
+                        }
+                      />
+                      <input
+                        value={it.text}
+                        onChange={(e) => {
+                          const v = e.target.value
+                          setRubric((prev) => ({
+                            ...prev,
+                            submissionChecklist: prev.submissionChecklist.map(
+                              (x) => (x.id === it.id ? { ...x, text: v } : x),
+                            ),
+                          }))
+                        }}
+                        className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setRubric((prev) => ({
+                            ...prev,
+                            submissionChecklist:
+                              prev.submissionChecklist.filter(
+                                (x) => x.id !== it.id,
+                              ),
+                          }))
+                        }
+                        className="px-2 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                        title="Remove"
+                      >
+                        <XMarkIcon className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={newSubmissionText}
+                      onChange={(e) => setNewSubmissionText(e.target.value)}
+                      placeholder="Add a checklist item…"
+                      className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const t = newSubmissionText.trim()
+                        if (!t) return
+                        setRubric((prev) => ({
+                          ...prev,
+                          submissionChecklist: [
+                            ...prev.submissionChecklist,
+                            { id: `s_${Date.now()}`, text: t, done: false },
+                          ],
+                        }))
+                        setNewSubmissionText('')
+                      }}
+                      className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Add Section Button */}
           <div className="mb-6">
@@ -1241,4 +1723,3 @@ export default function ProposalDetailPage() {
     </div>
   )
 }
-

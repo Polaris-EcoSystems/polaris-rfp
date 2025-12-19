@@ -19,6 +19,36 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  async headers() {
+    const isProd = process.env.NODE_ENV === 'production'
+    /** @type {import('next').Header[]} */
+    const securityHeaders = [
+      { key: 'X-Content-Type-Options', value: 'nosniff' },
+      { key: 'X-Frame-Options', value: 'DENY' },
+      { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+      {
+        key: 'Permissions-Policy',
+        value:
+          'camera=(), microphone=(), geolocation=(), interest-cohort=(), payment=()',
+      },
+      // HSTS only makes sense on HTTPS + production.
+      ...(isProd
+        ? [
+            {
+              key: 'Strict-Transport-Security',
+              value: 'max-age=31536000; includeSubDomains',
+            },
+          ]
+        : []),
+    ]
+
+    return [
+      {
+        source: '/:path*',
+        headers: securityHeaders,
+      },
+    ]
+  },
 }
 
 module.exports = nextConfig

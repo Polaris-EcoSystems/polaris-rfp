@@ -1,39 +1,40 @@
-import { TrashIcon } from "@heroicons/react/24/outline";
-import React from "react";
+import { TrashIcon } from '@heroicons/react/24/outline'
 
 type AddProjectModalProps = {
-  open: boolean;
-  projectForm: any;
-  setProjectForm: (v: any) => void;
-  addArrayItem: (field: string, setState: any, state: any) => void;
+  open: boolean
+  projectForm: any
+  setProjectForm: (v: any) => void
+  companies?: any[]
+  addArrayItem: (field: string, setState: any, state: any) => void
   updateArrayItem: (
     field: string,
     index: number,
     value: string,
     setState: any,
-    state: any
-  ) => void;
+    state: any,
+  ) => void
   removeArrayItem: (
     field: string,
     index: number,
     setState: any,
-    state: any
-  ) => void;
-  onAdd: () => void;
-  onClose: () => void;
-};
+    state: any,
+  ) => void
+  onAdd: () => void
+  onClose: () => void
+}
 
 export default function AddProjectModal({
   open,
   projectForm,
   setProjectForm,
+  companies = [],
   addArrayItem,
   updateArrayItem,
   removeArrayItem,
   onAdd,
   onClose,
 }: AddProjectModalProps) {
-  if (!open) return null;
+  if (!open) return null
 
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
@@ -43,6 +44,33 @@ export default function AddProjectModal({
             Add Past Project
           </h3>
           <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Company
+              </label>
+              <select
+                value={projectForm.companyId || ''}
+                onChange={(e) =>
+                  setProjectForm({
+                    ...projectForm,
+                    companyId: e.target.value || null,
+                  })
+                }
+                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 bg-white"
+              >
+                <option value="">Unassigned</option>
+                {(companies || []).map((c: any) => (
+                  <option key={c.companyId} value={c.companyId}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                Projects roll up to the selected company for capability
+                generation.
+              </p>
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">
@@ -148,11 +176,11 @@ export default function AddProjectModal({
                     value={outcome}
                     onChange={(e) =>
                       updateArrayItem(
-                        "keyOutcomes",
+                        'keyOutcomes',
                         index,
                         e.target.value,
                         setProjectForm,
-                        projectForm
+                        projectForm,
                       )
                     }
                     className="flex-1 border border-gray-300 rounded-md px-3 py-2"
@@ -161,10 +189,10 @@ export default function AddProjectModal({
                   <button
                     onClick={() =>
                       removeArrayItem(
-                        "keyOutcomes",
+                        'keyOutcomes',
                         index,
                         setProjectForm,
-                        projectForm
+                        projectForm,
                       )
                     }
                     className="ml-2 text-red-600 hover:text-red-800"
@@ -175,7 +203,7 @@ export default function AddProjectModal({
               ))}
               <button
                 onClick={() =>
-                  addArrayItem("keyOutcomes", setProjectForm, projectForm)
+                  addArrayItem('keyOutcomes', setProjectForm, projectForm)
                 }
                 className="text-primary-600 hover:text-primary-800 text-sm"
               >
@@ -194,11 +222,11 @@ export default function AddProjectModal({
                     value={tech}
                     onChange={(e) =>
                       updateArrayItem(
-                        "technologies",
+                        'technologies',
                         index,
                         e.target.value,
                         setProjectForm,
-                        projectForm
+                        projectForm,
                       )
                     }
                     className="flex-1 border border-gray-300 rounded-md px-3 py-2"
@@ -207,10 +235,10 @@ export default function AddProjectModal({
                   <button
                     onClick={() =>
                       removeArrayItem(
-                        "technologies",
+                        'technologies',
                         index,
                         setProjectForm,
-                        projectForm
+                        projectForm,
                       )
                     }
                     className="ml-2 text-red-600 hover:text-red-800"
@@ -221,7 +249,7 @@ export default function AddProjectModal({
               ))}
               <button
                 onClick={() =>
-                  addArrayItem("technologies", setProjectForm, projectForm)
+                  addArrayItem('technologies', setProjectForm, projectForm)
                 }
                 className="text-primary-600 hover:text-primary-800 text-sm"
               >
@@ -247,5 +275,5 @@ export default function AddProjectModal({
         </div>
       </div>
     </div>
-  );
+  )
 }

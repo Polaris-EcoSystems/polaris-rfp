@@ -3,6 +3,7 @@
 import {
   Bars3Icon,
   BellIcon,
+  ChartBarIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   CogIcon,
@@ -15,7 +16,7 @@ import {
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { ReactNode, useEffect, useRef, useState } from 'react'
-import api, { extractList, rfpApi, type RFP } from '../lib/api'
+import api, { extractList, proxyUrl, rfpApi, type RFP } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import GlobalSearch from './GlobalSearch'
 
@@ -89,7 +90,7 @@ export default function Layout({ children }: LayoutProps) {
     const check = async () => {
       try {
         // Backend responds at "/" with JSON health data.
-        await api.get('/')
+        await api.get(proxyUrl(''))
         if (!mounted) return
         setBackendUp(true)
         setBackendLastCheckedAt(new Date())
@@ -197,6 +198,12 @@ export default function Layout({ children }: LayoutProps) {
       current: pathname === '/',
     },
     {
+      name: 'Pipeline',
+      href: '/pipeline',
+      icon: ChartBarIcon,
+      current: pathname.startsWith('/pipeline'),
+    },
+    {
       name: 'RFPs',
       href: '/rfps',
       icon: DocumentTextIcon,
@@ -238,12 +245,7 @@ export default function Layout({ children }: LayoutProps) {
       icon: UserCircleIcon,
       current: pathname === '/profile',
     },
-    {
-      name: 'Integrations',
-      href: '/integrations/canva',
-      icon: CogIcon,
-      current: pathname.startsWith('/integrations'),
-    },
+    // Canva workflow lives under /templates now.
     // { name: 'Google Drive', href: '/googledrive', icon: CloudIcon, current: router.pathname === '/googledrive' },
   ]
 

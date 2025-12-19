@@ -24,6 +24,7 @@ export interface TeamMember {
 
 export interface ProjectReference {
   _id: string
+  companyId?: string
   organizationName: string
   timePeriod?: string
   contactName: string
@@ -42,6 +43,21 @@ export interface Company {
   email?: string
   phone?: string
   coverLetter?: string
+  capabilitiesStatement?: string
+  capabilitiesStatementMeta?: {
+    generatedAt?: string
+    generator?: string
+    model?: string
+    projectIds?: string[]
+    referenceIds?: string[]
+    capabilities?: string[]
+    limitations?: string[]
+    evidenceItems?: Array<{
+      type: 'project' | 'reference'
+      id: string
+      label: string
+    }>
+  }
 }
 
 export interface ContentLibraryModalProps {

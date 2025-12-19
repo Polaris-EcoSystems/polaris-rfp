@@ -1,7 +1,26 @@
 'use client'
 
 import React, { createContext, useContext, useEffect, useState } from 'react'
-import api from './api'
+
+const ALLOWED_EMAIL_DOMAIN = String(
+  process.env.NEXT_PUBLIC_ALLOWED_EMAIL_DOMAIN || 'polariseco.com',
+)
+  .trim()
+  .toLowerCase()
+
+export function normalizeEmail(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+}
+
+export function isAllowedEmail(raw: string): boolean {
+  const email = normalizeEmail(raw)
+  const parts = email.split('@')
+  if (parts.length !== 2) return false
+  const domain = parts[1]
+  return domain === ALLOWED_EMAIL_DOMAIN
+}
 
 interface User {
   username: string
@@ -19,33 +38,26 @@ interface AuthContextType {
     code: string,
     remember?: boolean,
   ) => Promise<{ ok: boolean; returnTo?: string }>
-  setToken: (token: string, remember?: boolean) => Promise<void>
-  logout: () => void
+  logout: () => Promise<void>
   loading: boolean
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-function readStoredToken(): string | null {
-  if (typeof window === 'undefined') return null
-  return localStorage.getItem('token') || sessionStorage.getItem('token')
-}
-
-function storeToken(token: string, remember: boolean) {
-  if (typeof window === 'undefined') return
-  if (remember) {
-    localStorage.setItem('token', token)
-    sessionStorage.removeItem('token')
-  } else {
-    sessionStorage.setItem('token', token)
-    localStorage.removeItem('token')
-  }
-}
-
-function clearStoredToken() {
-  if (typeof window === 'undefined') return
-  localStorage.removeItem('token')
-  sessionStorage.removeItem('token')
+async function fetchJson<T = any>(
+  input: string,
+  init?: RequestInit,
+): Promise<{ ok: boolean; status: number; data?: T }> {
+  const resp = await fetch(input, {
+    ...init,
+    headers: {
+      'content-type': 'application/json',
+      ...(init?.headers || {}),
+    },
+  })
+  const status = resp.status
+  const data = (await resp.json().catch(() => undefined)) as any
+  return { ok: resp.ok, status, data }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -53,35 +65,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const token = readStoredToken()
-    if (token) {
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`
-      fetchCurrentUser()
-    } else {
-      setLoading(false)
-    }
+    void fetchCurrentUser()
   }, [])
 
   const fetchCurrentUser = async () => {
     try {
-      const response = await api.get(`/api/auth/me`)
-      setUser(response.data)
+      const resp = await fetch('/api/session/me', { cache: 'no-store' })
+      if (!resp.ok) {
+        setUser(null)
+        return
+      }
+      const u = await resp.json().catch(() => null)
+      setUser(u as any)
     } catch (error) {
-      clearStoredToken()
-      delete api.defaults.headers.common['Authorization']
+      setUser(null)
     } finally {
       setLoading(false)
-    }
-  }
-
-  const setToken = async (token: string, remember: boolean = true) => {
-    try {
-      storeToken(token, remember)
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`
-      // fetch and set current user
-      await fetchCurrentUser()
-    } catch (err) {
-      console.error('setToken error', err)
     }
   }
 
@@ -90,11 +89,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     opts?: { username?: string; returnTo?: string },
   ): Promise<boolean> => {
     try {
-      await api.post(`/api/auth/magic-link/request`, {
-        email,
-        username: opts?.username,
-        returnTo: opts?.returnTo,
+      const normalizedEmail = normalizeEmail(email)
+      if (!isAllowedEmail(normalizedEmail)) return false
+      const resp = await fetchJson('/api/session/magic-link/request', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: normalizedEmail,
+          username: opts?.username,
+          returnTo: opts?.returnTo,
+        }),
       })
+      if (!resp.ok) return false
       return true
     } catch (_e) {
       return false
@@ -112,20 +117,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (val.includes('@')) payload.email = val
       else payload.magicId = val
 
-      const resp = await api.post(`/api/auth/magic-link/verify`, payload)
-      const token = resp.data?.access_token
-      const returnTo = resp.data?.returnTo
-      if (!token) return { ok: false }
-      await setToken(token, remember)
-      return { ok: true, returnTo }
+      payload.remember = Boolean(remember)
+      const resp = await fetchJson<{ ok: boolean; returnTo?: string | null }>(
+        '/api/session/magic-link/verify',
+        {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        },
+      )
+      if (!resp.ok || !resp.data?.ok) return { ok: false }
+      await fetchCurrentUser()
+      return {
+        ok: true,
+        returnTo:
+          typeof resp.data?.returnTo === 'string'
+            ? resp.data.returnTo
+            : undefined,
+      }
     } catch (_e) {
       return { ok: false }
     }
   }
 
-  const logout = () => {
-    clearStoredToken()
-    delete api.defaults.headers.common['Authorization']
+  const logout = async () => {
+    try {
+      await fetch('/api/session/logout', { method: 'POST' })
+    } catch {
+      // ignore
+    }
     setUser(null)
   }
 
@@ -135,7 +154,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         requestMagicLink: login,
         verifyMagicLink,
-        setToken,
         logout,
         loading,
       }}

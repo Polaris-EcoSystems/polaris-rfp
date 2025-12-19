@@ -1,12 +1,5 @@
 'use client'
 
-import {
-  BuildingOfficeIcon,
-  ClipboardDocumentListIcon,
-  FolderIcon,
-  UserGroupIcon,
-} from '@heroicons/react/24/outline'
-import { useEffect, useState } from 'react'
 import CompanySection from '@/components/content/CompanySection'
 import AddMemberModal from '@/components/content/modals/AddMemberModal'
 import AddProjectModal from '@/components/content/modals/AddProjectModal'
@@ -21,6 +14,12 @@ import DeleteConfirmationModal from '@/components/ui/DeleteConfirmationModal'
 import Modal from '@/components/ui/Modal'
 import { useToast } from '@/components/ui/Toast'
 import { contentApi } from '@/lib/api'
+import {
+  ClipboardDocumentListIcon,
+  FolderIcon,
+  UserGroupIcon,
+} from '@heroicons/react/24/outline'
+import { useEffect, useState } from 'react'
 
 export default function ContentLibraryPage() {
   const toast = useToast()
@@ -29,9 +28,6 @@ export default function ContentLibraryPage() {
   const [team, setTeam] = useState<any[]>([])
   const [selectedMember, setSelectedMember] = useState<any>(null)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<
-    'company' | 'team' | 'projects' | 'references'
-  >('company')
   const [editingCompany, setEditingCompany] = useState(false)
   const [editingMember, setEditingMember] = useState<any>(null)
   const [showAddMember, setShowAddMember] = useState(false)
@@ -94,6 +90,72 @@ export default function ContentLibraryPage() {
   useEffect(() => {
     loadContent()
   }, [])
+
+  const selectedCompanyId = selectedCompany?.companyId || null
+  const [teamScope, setTeamScope] = useState<'company' | 'unassigned' | 'all'>(
+    selectedCompanyId ? 'company' : 'all',
+  )
+  const [projectsScope, setProjectsScope] = useState<
+    'company' | 'unassigned' | 'all'
+  >(selectedCompanyId ? 'company' : 'all')
+  const [referencesScope, setReferencesScope] = useState<
+    'company' | 'unassigned' | 'all'
+  >(selectedCompanyId ? 'company' : 'all')
+
+  useEffect(() => {
+    // If no company is selected, "company" scope makes no sense.
+    if (!selectedCompanyId) {
+      setTeamScope((s) => (s === 'company' ? 'all' : s))
+      setProjectsScope((s) => (s === 'company' ? 'all' : s))
+      setReferencesScope((s) => (s === 'company' ? 'all' : s))
+    }
+  }, [selectedCompanyId])
+
+  const unassignedTeam = Array.isArray(team)
+    ? team.filter((m: any) => !String(m?.companyId || '').trim())
+    : []
+  const unassignedProjects = Array.isArray(projects)
+    ? projects.filter((p: any) => !String(p?.companyId || '').trim())
+    : []
+  const unassignedReferences = Array.isArray(references)
+    ? references.filter((r: any) => !String(r?.companyId || '').trim())
+    : []
+  const teamForCompany = Array.isArray(team)
+    ? team.filter(
+        (m: any) =>
+          String(m?.companyId || '') === String(selectedCompanyId || ''),
+      )
+    : []
+  const projectsForCompany = Array.isArray(projects)
+    ? projects.filter(
+        (p: any) =>
+          String(p?.companyId || '') === String(selectedCompanyId || ''),
+      )
+    : []
+  const referencesForCompany = Array.isArray(references)
+    ? references.filter(
+        (r: any) =>
+          String(r?.companyId || '') === String(selectedCompanyId || ''),
+      )
+    : []
+
+  const refreshCompanyById = async (companyId: string) => {
+    if (!companyId) return
+    try {
+      const latestResp = await contentApi.getCompanyById(companyId)
+      const latest = latestResp.data
+      setCompanies((prev) =>
+        (Array.isArray(prev) ? prev : []).map((c: any) =>
+          c.companyId === companyId ? latest : c,
+        ),
+      )
+      if (selectedCompany?.companyId === companyId) {
+        setSelectedCompany(latest)
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
 
   const loadContent = async () => {
     try {
@@ -268,6 +330,9 @@ export default function ContentLibraryPage() {
           setReferences(
             references.filter((r) => r._id !== deleteTarget.item._id),
           )
+          if (deleteTarget.item?.companyId) {
+            await refreshCompanyById(String(deleteTarget.item.companyId))
+          }
           toast.success('Reference deleted successfully!')
           break
         case 'member':
@@ -277,7 +342,14 @@ export default function ContentLibraryPage() {
           )
           toast.success('Team member deleted successfully!')
           break
-        // Add other cases for project deletion here
+        case 'project':
+          await contentApi.deleteProject(deleteTarget.item._id)
+          setProjects(projects.filter((p) => p._id !== deleteTarget.item._id))
+          if (deleteTarget.item?.companyId) {
+            await refreshCompanyById(String(deleteTarget.item.companyId))
+          }
+          toast.success('Project deleted successfully!')
+          break
       }
 
       setShowDeleteModal(false)
@@ -332,13 +404,28 @@ export default function ContentLibraryPage() {
     }
   }
 
+  const assignMemberToSelectedCompany = async (member: any) => {
+    if (!selectedCompanyId) return
+    try {
+      const memberId = member?.memberId
+      if (!memberId) return
+      const payload = { ...member, companyId: selectedCompanyId }
+      const { data } = await contentApi.updateTeamMember(memberId, payload)
+      setTeam(team.map((m) => (m.memberId === memberId ? data : m)))
+      toast.success('Assigned team member to selected company')
+    } catch (e) {
+      console.error('Error assigning member to company:', e)
+      toast.error('Failed to assign team member')
+    }
+  }
+
   const openAddMemberModal = () => {
     // Reset the form to empty state
     setMemberForm({
       nameWithCredentials: '',
       position: '',
       email: '',
-      companyId: null,
+      companyId: selectedCompanyId,
       biography: '',
       headshotUrl: '',
       headshotS3Key: null,
@@ -413,7 +500,11 @@ export default function ContentLibraryPage() {
   // Project handlers
   const handleAddProject = async () => {
     try {
-      const { data } = await contentApi.createProject(projectForm)
+      const payload = {
+        ...projectForm,
+        companyId: projectForm.companyId ?? selectedCompanyId,
+      }
+      const { data } = await contentApi.createProject(payload)
       setProjects([...projects, data])
       setProjectForm({
         title: '',
@@ -428,8 +519,10 @@ export default function ContentLibraryPage() {
         challenges: [''],
         solutions: [''],
         files: [],
+        companyId: selectedCompanyId,
       })
       setShowAddProject(false)
+      if (payload.companyId) await refreshCompanyById(String(payload.companyId))
       toast.success('Project added successfully!')
     } catch (error) {
       console.error('Error adding project:', error)
@@ -447,10 +540,15 @@ export default function ContentLibraryPage() {
     try {
       const id = editingProject?._id || projectForm?._id || editingProject?.id
       if (!id) throw new Error('Missing project id')
-      const { data } = await contentApi.updateProject(id, projectForm)
+      const payload = {
+        ...projectForm,
+        companyId: projectForm.companyId ?? selectedCompanyId,
+      }
+      const { data } = await contentApi.updateProject(id, payload)
       setProjects(projects.map((p) => (p._id === id ? data : p)))
       setSelectedProject(data)
       setEditingProject(null)
+      if (payload.companyId) await refreshCompanyById(String(payload.companyId))
       toast.success('Project updated successfully!')
     } catch (error) {
       console.error('Error updating project:', error)
@@ -473,6 +571,23 @@ export default function ContentLibraryPage() {
     }
   }
 
+  const assignProjectToSelectedCompany = async (project: any) => {
+    if (!selectedCompanyId) return
+    try {
+      const id = project?._id || project?.projectId
+      if (!id) return
+      const payload = { ...project, companyId: selectedCompanyId }
+      const { data } = await contentApi.updateProject(id, payload)
+      setProjects(projects.map((p) => (p._id === id ? data : p)))
+      setSelectedProject(data)
+      await refreshCompanyById(String(selectedCompanyId))
+      toast.success('Assigned project to selected company')
+    } catch (e) {
+      console.error('Error assigning project to company:', e)
+      toast.error('Failed to assign project')
+    }
+  }
+
   const handleDeleteProject = (projectToDelete: any) => {
     setDeleteTarget({ type: 'project', item: projectToDelete })
     setShowDeleteModal(true)
@@ -481,7 +596,11 @@ export default function ContentLibraryPage() {
   // Reference handlers
   const handleAddReference = async () => {
     try {
-      const { data } = await contentApi.createReference(referenceForm)
+      const payload = {
+        ...referenceForm,
+        companyId: referenceForm.companyId ?? selectedCompanyId,
+      }
+      const { data } = await contentApi.createReference(payload)
       setReferences([...references, data])
       setReferenceForm({
         organizationName: '',
@@ -493,8 +612,10 @@ export default function ContentLibraryPage() {
         contactPhone: '',
         scopeOfWork: '',
         isPublic: true,
+        companyId: selectedCompanyId,
       })
       setShowAddReference(false)
+      if (payload.companyId) await refreshCompanyById(String(payload.companyId))
       toast.success('Reference added successfully!')
     } catch (error) {
       console.error('Error adding reference:', error)
@@ -518,10 +639,15 @@ export default function ContentLibraryPage() {
       const id =
         editingReference?._id || referenceForm?._id || editingReference?.id
       if (!id) throw new Error('Missing reference id')
-      const { data } = await contentApi.updateReference(id, referenceForm)
+      const payload = {
+        ...referenceForm,
+        companyId: referenceForm.companyId ?? selectedCompanyId,
+      }
+      const { data } = await contentApi.updateReference(id, payload)
       setReferences(references.map((r) => (r._id === id ? data : r)))
       setSelectedReference(data)
       setEditingReference(null)
+      if (payload.companyId) await refreshCompanyById(String(payload.companyId))
       toast.success('Reference updated successfully!')
     } catch (error) {
       console.error('Error updating reference:', error)
@@ -545,9 +671,287 @@ export default function ContentLibraryPage() {
     }
   }
 
+  const assignReferenceToSelectedCompany = async (reference: any) => {
+    if (!selectedCompanyId) return
+    try {
+      const id = reference?._id || reference?.referenceId
+      if (!id) return
+      const payload = { ...reference, companyId: selectedCompanyId }
+      const { data } = await contentApi.updateReference(id, payload)
+      setReferences(references.map((r) => (r._id === id ? data : r)))
+      setSelectedReference(data)
+      await refreshCompanyById(String(selectedCompanyId))
+      toast.success('Assigned reference to selected company')
+    } catch (e) {
+      console.error('Error assigning reference to company:', e)
+      toast.error('Failed to assign reference')
+    }
+  }
+
   const handleDeleteReference = (referenceToDelete: any) => {
     setDeleteTarget({ type: 'reference', item: referenceToDelete })
     setShowDeleteModal(true)
+  }
+
+  async function runWithConcurrency<T>(
+    items: T[],
+    concurrency: number,
+    worker: (item: T) => Promise<void>,
+  ) {
+    const limit = Math.max(1, Math.min(10, Number(concurrency) || 5))
+    const queue = [...items]
+    const runners = Array.from({ length: Math.min(limit, queue.length) }).map(
+      async () => {
+        while (queue.length) {
+          const next = queue.shift()
+          if (typeof next === 'undefined') break
+          await worker(next)
+        }
+      },
+    )
+    await Promise.all(runners)
+  }
+
+  type BulkResult = { total: number; done: number; failed: number }
+
+  const assignManyMembersToSelectedCompany = async (
+    members: any[],
+    opts?: { onProgress?: (r: BulkResult) => void; suppressToast?: boolean },
+  ): Promise<BulkResult> => {
+    if (!selectedCompanyId) {
+      return { total: 0, done: 0, failed: 0 }
+    }
+    const list = Array.isArray(members) ? members : []
+    if (list.length === 0) {
+      return { total: 0, done: 0, failed: 0 }
+    }
+    const res: BulkResult = { total: list.length, done: 0, failed: 0 }
+    try {
+      await runWithConcurrency(list, 5, async (m) => {
+        try {
+          const memberId = m?.memberId
+          if (!memberId) {
+            res.failed += 1
+            return
+          }
+          const payload = { ...m, companyId: selectedCompanyId }
+          const { data } = await contentApi.updateTeamMember(memberId, payload)
+          setTeam((prev) =>
+            (Array.isArray(prev) ? prev : []).map((x: any) =>
+              x.memberId === memberId ? data : x,
+            ),
+          )
+          res.done += 1
+        } catch (_e) {
+          res.failed += 1
+        } finally {
+          opts?.onProgress?.({ ...res })
+        }
+      })
+      if (!opts?.suppressToast) {
+        toast.success(`Assigned ${res.done} team members`)
+      }
+      return res
+    } catch (e) {
+      console.error('Bulk assign members failed:', e)
+      if (!opts?.suppressToast) {
+        toast.error('Failed to bulk-assign team members')
+      }
+      return res
+    }
+  }
+
+  const assignManyProjectsToSelectedCompany = async (
+    items: any[],
+    opts?: { onProgress?: (r: BulkResult) => void; suppressToast?: boolean },
+  ): Promise<BulkResult> => {
+    if (!selectedCompanyId) {
+      return { total: 0, done: 0, failed: 0 }
+    }
+    const list = Array.isArray(items) ? items : []
+    if (list.length === 0) {
+      return { total: 0, done: 0, failed: 0 }
+    }
+    const res: BulkResult = { total: list.length, done: 0, failed: 0 }
+    try {
+      await runWithConcurrency(list, 5, async (p) => {
+        try {
+          const id = p?._id || p?.projectId
+          if (!id) {
+            res.failed += 1
+            return
+          }
+          const payload = { ...p, companyId: selectedCompanyId }
+          const { data } = await contentApi.updateProject(id, payload)
+          setProjects((prev) =>
+            (Array.isArray(prev) ? prev : []).map((x: any) =>
+              x._id === id ? data : x,
+            ),
+          )
+          res.done += 1
+        } catch (_e) {
+          res.failed += 1
+        } finally {
+          opts?.onProgress?.({ ...res })
+        }
+      })
+      await refreshCompanyById(String(selectedCompanyId))
+      if (!opts?.suppressToast) {
+        toast.success(`Assigned ${res.done} projects`)
+      }
+      return res
+    } catch (e) {
+      console.error('Bulk assign projects failed:', e)
+      if (!opts?.suppressToast) {
+        toast.error('Failed to bulk-assign projects')
+      }
+      return res
+    }
+  }
+
+  const assignManyReferencesToSelectedCompany = async (
+    items: any[],
+    opts?: { onProgress?: (r: BulkResult) => void; suppressToast?: boolean },
+  ): Promise<BulkResult> => {
+    if (!selectedCompanyId) {
+      return { total: 0, done: 0, failed: 0 }
+    }
+    const list = Array.isArray(items) ? items : []
+    if (list.length === 0) {
+      return { total: 0, done: 0, failed: 0 }
+    }
+    const res: BulkResult = { total: list.length, done: 0, failed: 0 }
+    try {
+      await runWithConcurrency(list, 5, async (r) => {
+        try {
+          const id = r?._id || r?.referenceId
+          if (!id) {
+            res.failed += 1
+            return
+          }
+          const payload = { ...r, companyId: selectedCompanyId }
+          const { data } = await contentApi.updateReference(id, payload)
+          setReferences((prev) =>
+            (Array.isArray(prev) ? prev : []).map((x: any) =>
+              x._id === id ? data : x,
+            ),
+          )
+          res.done += 1
+        } catch (_e) {
+          res.failed += 1
+        } finally {
+          opts?.onProgress?.({ ...res })
+        }
+      })
+      await refreshCompanyById(String(selectedCompanyId))
+      if (!opts?.suppressToast) {
+        toast.success(`Assigned ${res.done} references`)
+      }
+      return res
+    } catch (e) {
+      console.error('Bulk assign references failed:', e)
+      if (!opts?.suppressToast) {
+        toast.error('Failed to bulk-assign references')
+      }
+      return res
+    }
+  }
+
+  const [inboxBulk, setInboxBulk] = useState<{
+    type: 'team' | 'projects' | 'references' | 'all' | null
+    phase?: 'team' | 'projects' | 'references' | null
+    running: boolean
+    total: number
+    done: number
+    failed: number
+  }>({ type: null, running: false, total: 0, done: 0, failed: 0 })
+  const [showRemaining, setShowRemaining] = useState(false)
+
+  const runAssignEverything = async () => {
+    if (!selectedCompanyId) return
+    const total =
+      (unassignedTeam?.length || 0) +
+      (unassignedProjects?.length || 0) +
+      (unassignedReferences?.length || 0)
+    if (!total) return
+
+    if (
+      !confirm(
+        `Assign all unassigned items to the selected company?\n\nTeam: ${unassignedTeam.length}\nProjects: ${unassignedProjects.length}\nReferences: ${unassignedReferences.length}`,
+      )
+    )
+      return
+
+    setInboxBulk({
+      type: 'all',
+      phase: 'team',
+      running: true,
+      total,
+      done: 0,
+      failed: 0,
+    })
+
+    let baseDone = 0
+    let baseFailed = 0
+
+    const runStep = async (
+      phase: 'team' | 'projects' | 'references',
+      fn: (items: any[], opts?: any) => Promise<BulkResult>,
+      items: any[],
+    ) => {
+      if (!Array.isArray(items) || items.length === 0) return
+      setInboxBulk((prev) => ({ ...prev, type: 'all', phase }))
+      const r = await fn(items, {
+        suppressToast: true,
+        onProgress: (p: BulkResult) =>
+          setInboxBulk((prev) => ({
+            ...prev,
+            type: 'all',
+            phase,
+            running: true,
+            total,
+            done: baseDone + p.done,
+            failed: baseFailed + p.failed,
+          })),
+      })
+      baseDone += r.done
+      baseFailed += r.failed
+      setInboxBulk((prev) => ({
+        ...prev,
+        type: 'all',
+        phase,
+        running: true,
+        total,
+        done: baseDone,
+        failed: baseFailed,
+      }))
+    }
+
+    try {
+      await runStep('team', assignManyMembersToSelectedCompany, unassignedTeam)
+      await runStep(
+        'projects',
+        assignManyProjectsToSelectedCompany,
+        unassignedProjects,
+      )
+      await runStep(
+        'references',
+        assignManyReferencesToSelectedCompany,
+        unassignedReferences,
+      )
+
+      setInboxBulk((prev) => ({ ...prev, running: false }))
+      if (baseFailed) setShowRemaining(true)
+      toast.success(
+        `Assigned ${baseDone}/${total} items${
+          baseFailed ? ` (failed: ${baseFailed})` : ''
+        }`,
+      )
+    } catch (e) {
+      console.error('Assign everything failed:', e)
+      setInboxBulk((prev) => ({ ...prev, running: false }))
+      toast.error('Failed to assign all unassigned items')
+    }
   }
 
   if (loading) {
@@ -566,70 +970,587 @@ export default function ContentLibraryPage() {
             Content Library
           </h2>
           <p className="mt-1 text-sm text-gray-500">
-            Manage company information and team member profiles
+            Company is the top-level container; team members, past projects, and
+            references roll up to it.
           </p>
         </div>
       </div>
 
-      {/* Tab Navigation */}
-      <div className="mt-8">
-        <div className="border-b border-gray-200">
-          <nav className="-mb-px flex space-x-8">
-            <button
-              onClick={() => setActiveTab('company')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'company'
-                  ? 'border-primary-500 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <BuildingOfficeIcon className="h-4 w-4 mr-2 inline" />
-              Company Information
-            </button>
-            <button
-              onClick={() => setActiveTab('team')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'team'
-                  ? 'border-primary-500 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <UserGroupIcon className="h-4 w-4 mr-2 inline" />
-              Team Members ({team.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('projects')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'projects'
-                  ? 'border-primary-500 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <FolderIcon className="h-4 w-4 mr-2 inline" />
-              Past Projects ({projects.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('references')}
-              className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'references'
-                  ? 'border-primary-500 text-primary-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              <ClipboardDocumentListIcon className="h-4 w-4 mr-2 inline" />
-              References ({references.length})
-            </button>
-          </nav>
+      {/* Unassigned Inbox */}
+      <div className="mt-6 rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-gray-900">
+              Unassigned inbox
+            </div>
+            <div className="text-xs text-gray-500">
+              Items not tied to a company won’t inform capabilities until
+              assigned.
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-gray-600">
+            <span className="rounded bg-gray-100 px-2 py-1">
+              Team: {unassignedTeam.length}
+            </span>
+            <span className="rounded bg-gray-100 px-2 py-1">
+              Projects: {unassignedProjects.length}
+            </span>
+            <span className="rounded bg-gray-100 px-2 py-1">
+              References: {unassignedReferences.length}
+            </span>
+          </div>
         </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setTeamScope('unassigned')
+              setProjectsScope('unassigned')
+              setReferencesScope('unassigned')
+              const el = document.getElementById('section-team')
+              el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+            }}
+            className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
+          >
+            View all unassigned
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTeamScope(selectedCompanyId ? 'company' : 'all')
+              setProjectsScope(selectedCompanyId ? 'company' : 'all')
+              setReferencesScope(selectedCompanyId ? 'company' : 'all')
+            }}
+            className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
+          >
+            Back to company view
+          </button>
+
+          {unassignedTeam.length +
+            unassignedProjects.length +
+            unassignedReferences.length >
+          0 ? (
+            <button
+              type="button"
+              onClick={() => setShowRemaining((v) => !v)}
+              className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
+            >
+              {showRemaining ? 'Hide remaining' : 'Review remaining'}
+            </button>
+          ) : null}
+        </div>
+
+        {selectedCompanyId ? (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={
+                inboxBulk.running ||
+                (!unassignedTeam.length &&
+                  !unassignedProjects.length &&
+                  !unassignedReferences.length)
+              }
+              onClick={runAssignEverything}
+              className="px-3 py-2 text-sm rounded border border-primary-200 bg-primary-50 hover:bg-primary-100 text-primary-700 disabled:opacity-60"
+              title="Assign all unassigned items to the selected company"
+            >
+              Assign everything
+            </button>
+            <button
+              type="button"
+              disabled={
+                inboxBulk.running ||
+                (!unassignedTeam.length &&
+                  !unassignedProjects.length &&
+                  !unassignedReferences.length)
+              }
+              onClick={async () => {
+                // Retry remaining simply re-runs the full pass on whatever is still unassigned.
+                await runAssignEverything()
+              }}
+              className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-60"
+              title="Retry assigning items that are still unassigned"
+            >
+              Retry remaining
+            </button>
+            <button
+              type="button"
+              disabled={
+                inboxBulk.running ||
+                !unassignedTeam.length ||
+                !selectedCompanyId
+              }
+              onClick={async () => {
+                if (
+                  !confirm(
+                    `Assign ${unassignedTeam.length} unassigned team member(s) to the selected company?`,
+                  )
+                )
+                  return
+                setInboxBulk({
+                  type: 'team',
+                  phase: null,
+                  running: true,
+                  total: unassignedTeam.length,
+                  done: 0,
+                  failed: 0,
+                })
+                const r = await assignManyMembersToSelectedCompany(
+                  unassignedTeam,
+                  {
+                    suppressToast: true,
+                    onProgress: (p) =>
+                      setInboxBulk((prev) => ({ ...prev, ...p })),
+                  },
+                )
+                setInboxBulk((prev) => ({ ...prev, running: false, ...r }))
+                if (r.failed) setShowRemaining(true)
+                toast.success(
+                  `Assigned ${r.done}/${r.total} team members${
+                    r.failed ? ` (failed: ${r.failed})` : ''
+                  }`,
+                )
+              }}
+              className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-60"
+            >
+              Assign all team
+            </button>
+            <button
+              type="button"
+              disabled={
+                inboxBulk.running ||
+                !unassignedProjects.length ||
+                !selectedCompanyId
+              }
+              onClick={async () => {
+                if (
+                  !confirm(
+                    `Assign ${unassignedProjects.length} unassigned project(s) to the selected company?`,
+                  )
+                )
+                  return
+                setInboxBulk({
+                  type: 'projects',
+                  phase: null,
+                  running: true,
+                  total: unassignedProjects.length,
+                  done: 0,
+                  failed: 0,
+                })
+                const r = await assignManyProjectsToSelectedCompany(
+                  unassignedProjects,
+                  {
+                    suppressToast: true,
+                    onProgress: (p) =>
+                      setInboxBulk((prev) => ({ ...prev, ...p })),
+                  },
+                )
+                setInboxBulk((prev) => ({ ...prev, running: false, ...r }))
+                if (r.failed) setShowRemaining(true)
+                toast.success(
+                  `Assigned ${r.done}/${r.total} projects${
+                    r.failed ? ` (failed: ${r.failed})` : ''
+                  }`,
+                )
+              }}
+              className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-60"
+            >
+              Assign all projects
+            </button>
+            <button
+              type="button"
+              disabled={
+                inboxBulk.running ||
+                !unassignedReferences.length ||
+                !selectedCompanyId
+              }
+              onClick={async () => {
+                if (
+                  !confirm(
+                    `Assign ${unassignedReferences.length} unassigned reference(s) to the selected company?`,
+                  )
+                )
+                  return
+                setInboxBulk({
+                  type: 'references',
+                  phase: null,
+                  running: true,
+                  total: unassignedReferences.length,
+                  done: 0,
+                  failed: 0,
+                })
+                const r = await assignManyReferencesToSelectedCompany(
+                  unassignedReferences,
+                  {
+                    suppressToast: true,
+                    onProgress: (p) =>
+                      setInboxBulk((prev) => ({ ...prev, ...p })),
+                  },
+                )
+                setInboxBulk((prev) => ({ ...prev, running: false, ...r }))
+                if (r.failed) setShowRemaining(true)
+                toast.success(
+                  `Assigned ${r.done}/${r.total} references${
+                    r.failed ? ` (failed: ${r.failed})` : ''
+                  }`,
+                )
+              }}
+              className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-60"
+            >
+              Assign all references
+            </button>
+          </div>
+        ) : null}
+
+        {inboxBulk.running ? (
+          <div className="mt-3">
+            <div className="flex items-center justify-between text-xs text-gray-600">
+              <div>
+                Assigning{' '}
+                {inboxBulk.type === 'all'
+                  ? inboxBulk.phase
+                    ? `all (${inboxBulk.phase})`
+                    : 'all'
+                  : inboxBulk.type}
+                : {inboxBulk.done}/{inboxBulk.total}
+                {inboxBulk.failed ? ` (failed: ${inboxBulk.failed})` : ''}
+              </div>
+              <div>
+                {inboxBulk.total
+                  ? Math.round((inboxBulk.done / inboxBulk.total) * 100)
+                  : 0}
+                %
+              </div>
+            </div>
+            <div className="mt-2 h-2 w-full rounded bg-gray-100 overflow-hidden">
+              <div
+                className="h-2 bg-primary-600"
+                style={{
+                  width: `${
+                    inboxBulk.total
+                      ? Math.round((inboxBulk.done / inboxBulk.total) * 100)
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {showRemaining &&
+        (unassignedTeam.length ||
+          unassignedProjects.length ||
+          unassignedReferences.length) ? (
+          <div className="mt-4 rounded border border-gray-200 bg-gray-50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-semibold text-gray-900">
+                Remaining unassigned (
+                {unassignedTeam.length +
+                  unassignedProjects.length +
+                  unassignedReferences.length}
+                )
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTeamScope('unassigned')
+                    const el = document.getElementById('section-team')
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }}
+                  className="px-3 py-1.5 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                >
+                  Show Team list
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProjectsScope('unassigned')
+                    const el = document.getElementById('section-projects')
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }}
+                  className="px-3 py-1.5 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                >
+                  Show Projects list
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReferencesScope('unassigned')
+                    const el = document.getElementById('section-references')
+                    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }}
+                  className="px-3 py-1.5 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                >
+                  Show References list
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className="rounded border border-gray-200 bg-white p-3">
+                <div className="text-xs font-semibold text-gray-700">
+                  Team (up to 10)
+                </div>
+                {(unassignedTeam || []).slice(0, 10).map((m: any) => (
+                  <div
+                    key={m.memberId}
+                    className="mt-2 flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm text-gray-900 truncate">
+                        {m.nameWithCredentials || m.name}
+                      </div>
+                      <div className="text-xs text-gray-500 truncate">
+                        {m.position || m.title || ''}
+                      </div>
+                    </div>
+                    {selectedCompanyId ? (
+                      <button
+                        type="button"
+                        onClick={() => assignMemberToSelectedCompany(m)}
+                        className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200"
+                      >
+                        Retry
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+                {!unassignedTeam.length ? (
+                  <div className="mt-2 text-xs text-gray-500">None</div>
+                ) : null}
+              </div>
+
+              <div className="rounded border border-gray-200 bg-white p-3">
+                <div className="text-xs font-semibold text-gray-700">
+                  Projects (up to 10)
+                </div>
+                {(unassignedProjects || []).slice(0, 10).map((p: any) => (
+                  <div
+                    key={p._id}
+                    className="mt-2 flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm text-gray-900 truncate">
+                        {p.title}
+                      </div>
+                      <div className="text-xs text-gray-500 truncate">
+                        {p.clientName || ''}
+                      </div>
+                    </div>
+                    {selectedCompanyId ? (
+                      <button
+                        type="button"
+                        onClick={() => assignProjectToSelectedCompany(p)}
+                        className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200"
+                      >
+                        Retry
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+                {!unassignedProjects.length ? (
+                  <div className="mt-2 text-xs text-gray-500">None</div>
+                ) : null}
+              </div>
+
+              <div className="rounded border border-gray-200 bg-white p-3">
+                <div className="text-xs font-semibold text-gray-700">
+                  References (up to 10)
+                </div>
+                {(unassignedReferences || []).slice(0, 10).map((r: any) => (
+                  <div
+                    key={r._id}
+                    className="mt-2 flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm text-gray-900 truncate">
+                        {r.organizationName}
+                      </div>
+                      <div className="text-xs text-gray-500 truncate">
+                        {r.contactName || ''}
+                      </div>
+                    </div>
+                    {selectedCompanyId ? (
+                      <button
+                        type="button"
+                        onClick={() => assignReferenceToSelectedCompany(r)}
+                        className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200"
+                      >
+                        Retry
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+                {!unassignedReferences.length ? (
+                  <div className="mt-2 text-xs text-gray-500">None</div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {!selectedCompanyId ? (
+          <div className="mt-4 text-sm text-gray-600">
+            Select a company above to enable one-click assignment.
+          </div>
+        ) : (
+          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <div className="rounded border border-gray-200 p-3">
+              <div className="text-xs font-semibold text-gray-700">
+                Team (top 3)
+              </div>
+              {(unassignedTeam || []).slice(0, 3).map((m: any) => (
+                <div
+                  key={m.memberId}
+                  className="mt-2 flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm text-gray-900 truncate">
+                      {m.nameWithCredentials || m.name}
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">
+                      {m.position || m.title || ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => assignMemberToSelectedCompany(m)}
+                    className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200"
+                  >
+                    Assign
+                  </button>
+                </div>
+              ))}
+              {unassignedTeam.length === 0 ? (
+                <div className="mt-2 text-xs text-gray-500">None</div>
+              ) : null}
+            </div>
+
+            <div className="rounded border border-gray-200 p-3">
+              <div className="text-xs font-semibold text-gray-700">
+                Projects (top 3)
+              </div>
+              {(unassignedProjects || []).slice(0, 3).map((p: any) => (
+                <div
+                  key={p._id}
+                  className="mt-2 flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm text-gray-900 truncate">
+                      {p.title}
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">
+                      {p.clientName || ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => assignProjectToSelectedCompany(p)}
+                    className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200"
+                  >
+                    Assign
+                  </button>
+                </div>
+              ))}
+              {unassignedProjects.length === 0 ? (
+                <div className="mt-2 text-xs text-gray-500">None</div>
+              ) : null}
+            </div>
+
+            <div className="rounded border border-gray-200 p-3">
+              <div className="text-xs font-semibold text-gray-700">
+                References (top 3)
+              </div>
+              {(unassignedReferences || []).slice(0, 3).map((r: any) => (
+                <div
+                  key={r._id}
+                  className="mt-2 flex items-center justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm text-gray-900 truncate">
+                      {r.organizationName}
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">
+                      {r.contactName || ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => assignReferenceToSelectedCompany(r)}
+                    className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200"
+                  >
+                    Assign
+                  </button>
+                </div>
+              ))}
+              {unassignedReferences.length === 0 ? (
+                <div className="mt-2 text-xs text-gray-500">None</div>
+              ) : null}
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="mt-8">
-        {activeTab === 'company' && (
+      {/* Jump links */}
+      <div className="mt-6 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            const el = document.getElementById('section-company')
+            el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
+          className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
+        >
+          Company
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const el = document.getElementById('section-team')
+            el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
+          className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
+        >
+          Team ({selectedCompanyId ? teamForCompany.length : team.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const el = document.getElementById('section-projects')
+            el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
+          className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
+        >
+          Projects (
+          {selectedCompanyId ? projectsForCompany.length : projects.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const el = document.getElementById('section-references')
+            el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }}
+          className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
+        >
+          References (
+          {selectedCompanyId ? referencesForCompany.length : references.length})
+        </button>
+      </div>
+
+      <div className="mt-8 space-y-12">
+        <section id="section-company" className="scroll-mt-24">
           <CompanySection
             ctx={{
               companies,
+              setCompanies,
               selectedCompany,
               setSelectedCompany,
+              projects: selectedCompanyId ? projectsForCompany : projects,
+              references: selectedCompanyId ? referencesForCompany : references,
+              setSelectedProject,
+              setSelectedReference,
               editingCompany,
               companyForm,
               setCompanyForm,
@@ -642,12 +1563,24 @@ export default function ContentLibraryPage() {
               handleDeleteCompany,
             }}
           />
-        )}
+        </section>
 
-        {activeTab === 'team' && (
+        <section id="section-team" className="scroll-mt-24">
+          <div className="flex items-center gap-2 mb-4">
+            <UserGroupIcon className="h-5 w-5 text-gray-400" />
+            <h3 className="text-lg font-semibold text-gray-900">Team</h3>
+          </div>
           <TeamSection
             ctx={{
-              team,
+              teamForCompany,
+              unassignedTeam,
+              allTeam: team,
+              selectedCompanyId,
+              assignMemberToSelectedCompany,
+              scope: teamScope,
+              setScope: setTeamScope,
+              assignManyToSelectedCompany: assignManyMembersToSelectedCompany,
+              team: selectedCompanyId ? teamForCompany : team,
               selectedMember,
               setSelectedMember,
               showAddMember,
@@ -666,12 +1599,26 @@ export default function ContentLibraryPage() {
               handleDeleteMember,
             }}
           />
-        )}
+        </section>
 
-        {activeTab === 'projects' && (
+        <section id="section-projects" className="scroll-mt-24">
+          <div className="flex items-center gap-2 mb-4">
+            <FolderIcon className="h-5 w-5 text-gray-400" />
+            <h3 className="text-lg font-semibold text-gray-900">
+              Past Projects
+            </h3>
+          </div>
           <ProjectsSection
             ctx={{
-              projects,
+              projectsForCompany,
+              unassignedProjects,
+              allProjects: projects,
+              selectedCompanyId,
+              assignProjectToSelectedCompany,
+              scope: projectsScope,
+              setScope: setProjectsScope,
+              assignManyToSelectedCompany: assignManyProjectsToSelectedCompany,
+              projects: selectedCompanyId ? projectsForCompany : projects,
               selectedProject,
               setSelectedProject,
               showAddProject,
@@ -689,12 +1636,25 @@ export default function ContentLibraryPage() {
               handleDeleteProject,
             }}
           />
-        )}
+        </section>
 
-        {activeTab === 'references' && (
+        <section id="section-references" className="scroll-mt-24">
+          <div className="flex items-center gap-2 mb-4">
+            <ClipboardDocumentListIcon className="h-5 w-5 text-gray-400" />
+            <h3 className="text-lg font-semibold text-gray-900">References</h3>
+          </div>
           <ReferencesSection
             ctx={{
-              references,
+              referencesForCompany,
+              unassignedReferences,
+              allReferences: references,
+              selectedCompanyId,
+              assignReferenceToSelectedCompany,
+              scope: referencesScope,
+              setScope: setReferencesScope,
+              assignManyToSelectedCompany:
+                assignManyReferencesToSelectedCompany,
+              references: selectedCompanyId ? referencesForCompany : references,
               selectedReference,
               setSelectedReference,
               handleViewReference,
@@ -713,7 +1673,7 @@ export default function ContentLibraryPage() {
               handleDeleteReference,
             }}
           />
-        )}
+        </section>
       </div>
 
       <Modal
@@ -820,7 +1780,11 @@ export default function ContentLibraryPage() {
 
       <AddProjectModal
         open={showAddProject}
-        projectForm={projectForm}
+        companies={companies}
+        projectForm={{
+          ...projectForm,
+          companyId: projectForm.companyId ?? selectedCompanyId,
+        }}
         setProjectForm={setProjectForm}
         addArrayItem={addArrayItem}
         updateArrayItem={updateArrayItem}
@@ -831,6 +1795,7 @@ export default function ContentLibraryPage() {
 
       <EditProjectModal
         open={Boolean(editingProject)}
+        companies={companies}
         projectForm={projectForm}
         setProjectForm={setProjectForm}
         onSave={handleSaveProject}
@@ -839,7 +1804,11 @@ export default function ContentLibraryPage() {
 
       <AddReferenceModal
         open={showAddReference}
-        referenceForm={referenceForm}
+        companies={companies}
+        referenceForm={{
+          ...referenceForm,
+          companyId: referenceForm.companyId ?? selectedCompanyId,
+        }}
         setReferenceForm={setReferenceForm}
         addArrayItem={addArrayItem}
         updateArrayItem={updateArrayItem}
@@ -850,6 +1819,7 @@ export default function ContentLibraryPage() {
 
       <EditReferenceModal
         open={Boolean(editingReference)}
+        companies={companies}
         referenceForm={referenceForm}
         setReferenceForm={setReferenceForm}
         onSave={handleSaveReference}
@@ -880,6 +1850,7 @@ export default function ContentLibraryPage() {
         }
         itemName={
           deleteTarget?.item?.name ||
+          deleteTarget?.item?.organizationName ||
           deleteTarget?.item?.clientName ||
           deleteTarget?.item?.title
         }
@@ -888,4 +1859,3 @@ export default function ContentLibraryPage() {
     </div>
   )
 }
-

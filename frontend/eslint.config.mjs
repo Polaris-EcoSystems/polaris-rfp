@@ -11,6 +11,7 @@ export default [
   {
     ignores: [
       '**/.next/**',
+      '**/.amplify-hosting/**',
       '**/node_modules/**',
       '**/out/**',
       '**/dist/**',

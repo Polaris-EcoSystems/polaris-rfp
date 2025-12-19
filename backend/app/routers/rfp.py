@@ -12,6 +12,7 @@ from ..services.rfps_repo import (
     get_rfp_by_id,
     list_rfp_proposal_summaries,
     list_rfps,
+    now_iso,
     update_rfp,
 )
 from ..services.attachments_repo import list_attachments
@@ -193,6 +194,135 @@ def update_one(id: str, body: dict):
         raise
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to update RFP")
+
+
+@router.put("/{id}/review")
+def update_review(id: str, request: Request, body: dict = Body(...)):
+    """
+    Persist human review for bid/no-bid decisions and review artifacts.
+
+    Body:
+      - decision: "" | "bid" | "no_bid" | "maybe" (optional)
+      - notes: string (optional)
+      - reasons: string[] (optional)
+      - blockers: { id?: string, text: string, status: "open"|"resolved"|"waived" }[] (optional)
+      - requirements: {
+            text: string,
+            status: "unknown"|"ok"|"risk"|"gap",
+            notes?: string,
+            mappedSections?: string[]
+        }[] (optional)
+    """
+    rfp = get_rfp_by_id(id)
+    if not rfp:
+        raise HTTPException(status_code=404, detail="RFP not found")
+
+    b = body or {}
+    existing_review = rfp.get("review")
+    base_review: dict[str, Any] = (
+        dict(existing_review) if isinstance(existing_review, dict) else {}
+    )
+
+    # Only validate/apply fields that were provided (PATCH semantics).
+    if "decision" in b:
+        decision = str(b.get("decision") or "").strip().lower()
+        allowed = {"", "bid", "no_bid", "maybe"}
+        if decision not in allowed:
+            raise HTTPException(status_code=400, detail="Invalid decision")
+        base_review["decision"] = decision
+
+    if "notes" in b:
+        notes_raw = b.get("notes")
+        notes = str(notes_raw or "")
+        if len(notes) > 20000:
+            raise HTTPException(status_code=400, detail="notes is too long")
+        base_review["notes"] = notes
+
+    if "reasons" in b:
+        reasons_in = b.get("reasons")
+        reasons: list[str] = []
+        if isinstance(reasons_in, list):
+            for x in reasons_in[:50]:
+                s = str(x or "").strip()
+                if not s:
+                    continue
+                if len(s) > 140:
+                    continue
+                reasons.append(s)
+        base_review["reasons"] = reasons
+
+    if "blockers" in b:
+        blockers_in = b.get("blockers")
+        blockers: list[dict[str, Any]] = []
+        if isinstance(blockers_in, list):
+            for x in blockers_in[:100]:
+                if not isinstance(x, dict):
+                    continue
+                text = str(x.get("text") or "").strip()
+                if not text:
+                    continue
+                if len(text) > 300:
+                    continue
+                status = str(x.get("status") or "open").strip().lower()
+                if status not in {"open", "resolved", "waived"}:
+                    status = "open"
+                bid = str(x.get("id") or "").strip()
+                obj: dict[str, Any] = {"text": text, "status": status}
+                if bid and len(bid) <= 80:
+                    obj["id"] = bid
+                blockers.append(obj)
+        base_review["blockers"] = blockers
+
+    if "requirements" in b:
+        req_in = b.get("requirements")
+        reqs: list[dict[str, Any]] = []
+        if isinstance(req_in, list):
+            for x in req_in[:250]:
+                if not isinstance(x, dict):
+                    continue
+                text = str(x.get("text") or "").strip()
+                if not text:
+                    continue
+                if len(text) > 600:
+                    continue
+                status = str(x.get("status") or "unknown").strip().lower()
+                if status not in {"unknown", "ok", "risk", "gap"}:
+                    status = "unknown"
+                notes = str(x.get("notes") or "")
+                if len(notes) > 20000:
+                    notes = notes[:20000]
+                mapped_in = x.get("mappedSections")
+                mapped: list[str] = []
+                if isinstance(mapped_in, list):
+                    for m in mapped_in[:20]:
+                        s = str(m or "").strip()
+                        if s and len(s) <= 80:
+                            mapped.append(s)
+                obj = {"text": text, "status": status, "notes": notes, "mappedSections": mapped}
+                reqs.append(obj)
+        base_review["requirements"] = reqs
+
+    user = getattr(getattr(request, "state", None), "user", None)
+    user_sub = str(getattr(user, "sub", "") or "").strip() if user else ""
+
+    review: dict[str, Any] = dict(base_review)
+    review["updatedAt"] = now_iso()
+    if user_sub:
+        review["updatedBy"] = user_sub
+
+    updated = update_rfp(id, {"review": review})
+    if not updated:
+        raise HTTPException(status_code=404, detail="RFP not found")
+
+    # Keep compatibility with frontend expecting embedded attachments.
+    try:
+        out = dict(updated)
+        out["attachments"] = list_attachments(id)
+        return out
+    except Exception:
+        out = dict(updated)
+        out["attachments"] = []
+        return out
 
 
 @router.get("/{id}/proposals")

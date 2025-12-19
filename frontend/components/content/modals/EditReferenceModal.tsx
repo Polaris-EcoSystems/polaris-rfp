@@ -1,21 +1,21 @@
-import React from "react";
-
 type EditReferenceModalProps = {
-  open: boolean;
-  referenceForm: any;
-  setReferenceForm: (v: any) => void;
-  onSave: () => void;
-  onClose: () => void;
-};
+  open: boolean
+  referenceForm: any
+  setReferenceForm: (v: any) => void
+  companies?: any[]
+  onSave: () => void
+  onClose: () => void
+}
 
 export default function EditReferenceModal({
   open,
   referenceForm,
   setReferenceForm,
+  companies = [],
   onSave,
   onClose,
 }: EditReferenceModalProps) {
-  if (!open) return null;
+  if (!open) return null
 
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
@@ -25,6 +25,29 @@ export default function EditReferenceModal({
             Edit Reference
           </h3>
           <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Company
+              </label>
+              <select
+                value={referenceForm.companyId || ''}
+                onChange={(e) =>
+                  setReferenceForm({
+                    ...referenceForm,
+                    companyId: e.target.value || null,
+                  })
+                }
+                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 bg-white"
+              >
+                <option value="">Unassigned</option>
+                {(companies || []).map((c: any) => (
+                  <option key={c.companyId} value={c.companyId}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">
@@ -208,5 +231,5 @@ export default function EditReferenceModal({
         </div>
       </div>
     </div>
-  );
+  )
 }

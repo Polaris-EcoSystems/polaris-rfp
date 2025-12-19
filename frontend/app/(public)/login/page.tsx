@@ -1,7 +1,7 @@
 'use client'
 
 import { useToast } from '@/components/ui/Toast'
-import { useAuth } from '@/lib/auth'
+import { isAllowedEmail, normalizeEmail, useAuth } from '@/lib/auth'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import React, { useState } from 'react'
@@ -30,6 +30,7 @@ export default function LoginPage() {
     const e: { email?: string } = {}
     if (!email) e.email = 'Email is required'
     else if (!/^\S+@\S+\.\S+$/.test(email)) e.email = 'Invalid email'
+    else if (!isAllowedEmail(email)) e.email = 'Use your @polariseco.com email'
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -40,7 +41,9 @@ export default function LoginPage() {
     if (!validate()) return
     setLoading(true)
     try {
-      const ok = await requestMagicLink(email, { returnTo: from || '/' })
+      const ok = await requestMagicLink(normalizeEmail(email), {
+        returnTo: from || '/',
+      })
       if (ok) {
         setSent(true)
         toast.success('Magic link sent (check your email)')
@@ -125,4 +128,3 @@ export default function LoginPage() {
     </div>
   )
 }
-

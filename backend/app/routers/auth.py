@@ -22,6 +22,22 @@ from ..settings import settings
 router = APIRouter(tags=["auth"])
 log = get_logger("auth")
 
+def _is_allowed_email(email: str) -> bool:
+    raw = str(email or "").strip().lower()
+    if not raw or "@" not in raw:
+        return False
+    dom = raw.split("@", 1)[1]
+    allowed = str(settings.allowed_email_domain or "").strip().lower()
+    return bool(allowed) and dom == allowed
+
+def _reject_if_disallowed_email(email: str) -> None:
+    if _is_allowed_email(email):
+        return
+    raise HTTPException(
+        status_code=400,
+        detail=f"Email must be a @{settings.allowed_email_domain} address",
+    )
+
 
 def _sanitize_return_to(raw: str | None) -> str:
     """
@@ -86,6 +102,7 @@ def request_magic_link(body: MagicLinkRequest):
         raise HTTPException(status_code=500, detail="Magic link is not configured")
 
     email = str(body.email).strip().lower()
+    _reject_if_disallowed_email(email)
     preferred_username = str(body.username).strip() if body.username else None
     return_to = _sanitize_return_to(body.returnTo)
 
@@ -215,6 +232,7 @@ def verify_magic_link(body: MagicLinkVerify):
     # Prefer email-based lookup (works even if Cognito triggers can't include magicId)
     if body.email:
         email = str(body.email).strip().lower()
+        _reject_if_disallowed_email(email)
         sess = get_latest_magic_session_for_email(email=email)
         if sess:
             sk = str(sess.get("sk") or "")
@@ -225,6 +243,7 @@ def verify_magic_link(body: MagicLinkVerify):
     if not sess or not email:
         raise HTTPException(status_code=400, detail="Invalid or expired magic link")
 
+    _reject_if_disallowed_email(email)
     session = str(sess.get("session") or "")
     return_to = str(sess.get("returnTo") or "/")
     if not email or not session:
@@ -265,6 +284,7 @@ def request_password_reset(body: dict):
     raw_email = str((body or {}).get("email") or "").strip().lower()
     if not raw_email or "@" not in raw_email:
         raise HTTPException(status_code=400, detail="Valid email is required")
+    _reject_if_disallowed_email(raw_email)
 
     try:
         token = create_password_reset(raw_email)

@@ -1,4 +1,4 @@
-import api from '@/lib/api'
+import api, { proxyUrl } from '@/lib/api'
 import { TrashIcon } from '@heroicons/react/24/outline'
 import Image from 'next/image'
 import { useEffect, useState } from 'react'
@@ -70,7 +70,7 @@ export default function AddMemberModal({
   const fetchCompanies = async () => {
     try {
       setLoadingCompanies(true)
-      const response = await api.get('/api/content/companies')
+      const response = await api.get(proxyUrl('/api/content/companies'))
       setCompanies(response.data || [])
     } catch (error) {
       console.error('Error fetching companies:', error)
@@ -113,10 +113,13 @@ export default function AddMemberModal({
 
     try {
       const contentType = file.type || 'application/octet-stream'
-      const resp = await api.post('/api/content/team/headshot/presign', {
-        fileName: file.name,
-        contentType,
-      })
+      const resp = await api.post(
+        proxyUrl('/api/content/team/headshot/presign'),
+        {
+          fileName: file.name,
+          contentType,
+        },
+      )
       const { putUrl, key, s3Uri } = resp.data || {}
       if (!putUrl || !key) throw new Error('Upload URL missing from response')
 

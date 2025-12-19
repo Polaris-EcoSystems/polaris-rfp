@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from ..services import content_repo
+from ..services.company_capabilities import regenerate_company_capabilities
 from ..services.s3_assets import (
     get_assets_bucket_name,
     get_cached_headshot_url,
@@ -236,6 +237,17 @@ def update_company(companyId: str, body: dict):
     return {"company": updated, "affectedCompanies": [updated]}
 
 
+@router.post("/companies/{companyId}/capabilities/regenerate")
+def regenerate_capabilities(companyId: str):
+    c = content_repo.get_company_by_company_id(companyId)
+    if not c:
+        raise HTTPException(status_code=404, detail="Company not found")
+    updated = regenerate_company_capabilities(companyId)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Company not found")
+    return updated
+
+
 @router.put("/company")
 def update_company_compat(body: dict):
     company_id = str((body or {}).get("companyId") or "").strip()
@@ -413,10 +425,17 @@ def delete_team_member(memberId: str):
 
 
 @router.get("/projects")
-def projects(project_type: str | None = None, industry: str | None = None, count: int = 20):
+def projects(
+    project_type: str | None = None,
+    industry: str | None = None,
+    companyId: str | None = None,
+    count: int = 20,
+):
     items = content_repo.list_past_projects(limit=500)
     filtered = [p for p in items if p.get("isActive", True) is True]
     filtered = [p for p in filtered if p.get("isPublic", True) is True]
+    if companyId:
+        filtered = [p for p in filtered if str(p.get("companyId") or "") == str(companyId)]
     if project_type:
         filtered = [p for p in filtered if str(p.get("projectType")) == str(project_type)]
     if industry:
@@ -433,7 +452,7 @@ def project_by_id(id: str):
 
 
 @router.post("/projects", status_code=201)
-def create_project(body: dict):
+def create_project(body: dict, background_tasks: BackgroundTasks):
     required = ["title", "clientName", "description", "industry", "projectType", "duration"]
     for f in required:
         if not _clean_string((body or {}).get(f), max_len=20000):
@@ -442,6 +461,7 @@ def create_project(body: dict):
     doc = dict(body or {})
     doc.update(
         {
+            "companyId": _clean_nullable_string((body or {}).get("companyId"), max_len=80),
             "title": _clean_string((body or {}).get("title"), max_len=200),
             "clientName": _clean_string((body or {}).get("clientName"), max_len=200),
             "description": _clean_string((body or {}).get("description"), max_len=20000),
@@ -457,11 +477,15 @@ def create_project(body: dict):
             "version": 1,
         }
     )
-    return content_repo.upsert_past_project(doc)
+    created = content_repo.upsert_past_project(doc)
+    cid = str(created.get("companyId") or "").strip()
+    if cid:
+        background_tasks.add_task(regenerate_company_capabilities, cid)
+    return created
 
 
 @router.put("/projects/{id}")
-def update_project(id: str, body: dict):
+def update_project(id: str, body: dict, background_tasks: BackgroundTasks):
     existing = content_repo.get_past_project_by_id(id)
     if not existing:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -479,6 +503,9 @@ def update_project(id: str, body: dict):
         if f in updates:
             updates[f] = _clean_string(updates.get(f), max_len=ml)
 
+    if "companyId" in updates:
+        updates["companyId"] = _clean_nullable_string(updates.get("companyId"), max_len=80)
+
     if "keyOutcomes" in updates:
         updates["keyOutcomes"] = _clean_string_array(updates.get("keyOutcomes"), max_items=50, max_len=300)
     if "technologies" in updates:
@@ -488,15 +515,25 @@ def update_project(id: str, body: dict):
     if "solutions" in updates:
         updates["solutions"] = _clean_string_array(updates.get("solutions"), max_items=50, max_len=300)
 
-    return content_repo.upsert_past_project({**existing, **updates})
+    updated = content_repo.upsert_past_project({**existing, **updates})
+    prev_cid = str(existing.get("companyId") or "").strip()
+    next_cid = str(updated.get("companyId") or "").strip()
+    if prev_cid and prev_cid != next_cid:
+        background_tasks.add_task(regenerate_company_capabilities, prev_cid)
+    if next_cid:
+        background_tasks.add_task(regenerate_company_capabilities, next_cid)
+    return updated
 
 
 @router.delete("/projects/{id}")
-def delete_project(id: str):
+def delete_project(id: str, background_tasks: BackgroundTasks):
     existing = content_repo.get_past_project_by_id(id)
     if not existing:
         raise HTTPException(status_code=404, detail="Project not found")
     content_repo.upsert_past_project({**existing, "isActive": False, "projectId": id})
+    cid = str(existing.get("companyId") or "").strip()
+    if cid:
+        background_tasks.add_task(regenerate_company_capabilities, cid)
     return {"success": True}
 
 
@@ -504,10 +541,12 @@ def delete_project(id: str):
 
 
 @router.get("/references")
-def references(project_type: str | None = None, count: int = 10):
+def references(project_type: str | None = None, companyId: str | None = None, count: int = 10):
     items = content_repo.list_project_references(limit=500)
     filtered = [r for r in items if r.get("isActive", True) is True]
     filtered = [r for r in filtered if r.get("isPublic", True) is True]
+    if companyId:
+        filtered = [r for r in filtered if str(r.get("companyId") or "") == str(companyId)]
     if project_type:
         filtered = [r for r in filtered if str(r.get("projectType")) == str(project_type)]
     return filtered[: max(1, int(count or 10))]
@@ -522,7 +561,7 @@ def reference_by_id(id: str):
 
 
 @router.post("/references", status_code=201)
-def create_reference(body: dict):
+def create_reference(body: dict, background_tasks: BackgroundTasks):
     required = ["organizationName", "contactName", "contactEmail", "scopeOfWork"]
     for f in required:
         if not _clean_string((body or {}).get(f), max_len=20000):
@@ -531,6 +570,7 @@ def create_reference(body: dict):
     doc = dict(body or {})
     doc.update(
         {
+            "companyId": _clean_nullable_string((body or {}).get("companyId"), max_len=80),
             "organizationName": _clean_string((body or {}).get("organizationName"), max_len=200),
             "contactName": _clean_string((body or {}).get("contactName"), max_len=200),
             "contactEmail": _clean_string((body or {}).get("contactEmail"), max_len=200),
@@ -545,11 +585,15 @@ def create_reference(body: dict):
             "version": 1,
         }
     )
-    return content_repo.upsert_project_reference(doc)
+    created = content_repo.upsert_project_reference(doc)
+    cid = str(created.get("companyId") or "").strip()
+    if cid:
+        background_tasks.add_task(regenerate_company_capabilities, cid)
+    return created
 
 
 @router.put("/references/{id}")
-def update_reference(id: str, body: dict):
+def update_reference(id: str, body: dict, background_tasks: BackgroundTasks):
     existing = content_repo.get_project_reference_by_id(id)
     if not existing:
         raise HTTPException(status_code=404, detail="Reference not found")
@@ -577,17 +621,30 @@ def update_reference(id: str, body: dict):
         if f in updates:
             updates[f] = _clean_string(updates.get(f), max_len=ml)
 
+    if "companyId" in updates:
+        updates["companyId"] = _clean_nullable_string(updates.get("companyId"), max_len=80)
+
     if "isActive" in updates:
         updates["isActive"] = updates.get("isActive") is not False
 
-    return content_repo.upsert_project_reference({**existing, **updates})
+    updated = content_repo.upsert_project_reference({**existing, **updates})
+    prev_cid = str(existing.get("companyId") or "").strip()
+    next_cid = str(updated.get("companyId") or "").strip()
+    if prev_cid and prev_cid != next_cid:
+        background_tasks.add_task(regenerate_company_capabilities, prev_cid)
+    if next_cid:
+        background_tasks.add_task(regenerate_company_capabilities, next_cid)
+    return updated
 
 
 @router.delete("/references/{id}")
-def delete_reference(id: str):
+def delete_reference(id: str, background_tasks: BackgroundTasks):
     existing = content_repo.get_project_reference_by_id(id)
     if not existing:
         raise HTTPException(status_code=404, detail="Reference not found")
 
     content_repo.upsert_project_reference({**existing, "referenceId": id, "isActive": False})
+    cid = str(existing.get("companyId") or "").strip()
+    if cid:
+        background_tasks.add_task(regenerate_company_capabilities, cid)
     return {"success": True}

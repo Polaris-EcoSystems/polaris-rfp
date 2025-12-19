@@ -1,21 +1,21 @@
-import React from "react";
-
 type EditProjectModalProps = {
-  open: boolean;
-  projectForm: any;
-  setProjectForm: (v: any) => void;
-  onSave: () => void;
-  onClose: () => void;
-};
+  open: boolean
+  projectForm: any
+  setProjectForm: (v: any) => void
+  companies?: any[]
+  onSave: () => void
+  onClose: () => void
+}
 
 export default function EditProjectModal({
   open,
   projectForm,
   setProjectForm,
+  companies = [],
   onSave,
   onClose,
 }: EditProjectModalProps) {
-  if (!open) return null;
+  if (!open) return null
 
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
@@ -25,6 +25,29 @@ export default function EditProjectModal({
             Edit Project
           </h3>
           <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Company
+              </label>
+              <select
+                value={projectForm.companyId || ''}
+                onChange={(e) =>
+                  setProjectForm({
+                    ...projectForm,
+                    companyId: e.target.value || null,
+                  })
+                }
+                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 bg-white"
+              >
+                <option value="">Unassigned</option>
+                {(companies || []).map((c: any) => (
+                  <option key={c.companyId} value={c.companyId}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">
@@ -137,5 +160,5 @@ export default function EditProjectModal({
         </div>
       </div>
     </div>
-  );
+  )
 }

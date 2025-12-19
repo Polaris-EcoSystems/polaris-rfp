@@ -1,5 +1,10 @@
 'use client'
 
+import Badge from '@/components/ui/Badge'
+import Button from '@/components/ui/Button'
+import Card, { CardBody, CardHeader } from '@/components/ui/Card'
+import { LoadingScreen } from '@/components/ui/LoadingSpinner'
+import api, { proxyUrl } from '@/lib/api'
 import {
   ArrowDownTrayIcon,
   CheckCircleIcon,
@@ -15,11 +20,6 @@ import {
   XCircleIcon,
 } from '@heroicons/react/24/outline'
 import { useEffect, useState } from 'react'
-import Badge from '@/components/ui/Badge'
-import Button from '@/components/ui/Button'
-import Card, { CardBody, CardHeader } from '@/components/ui/Card'
-import { LoadingScreen } from '@/components/ui/LoadingSpinner'
-import api from '@/lib/api'
 
 interface DriveFile {
   id: string
@@ -59,7 +59,7 @@ export default function GoogleDrivePage() {
 
   const checkStatus = async () => {
     try {
-      const response = await api.get('/googledrive/status')
+      const response = await api.get(proxyUrl('/googledrive/status'))
       setStatus(response.data)
     } catch (error) {
       console.error('Failed to check Google Drive status:', error)
@@ -69,7 +69,7 @@ export default function GoogleDrivePage() {
 
   const setupProposalsFolder = async () => {
     try {
-      const response = await api.post('/googledrive/folder/proposals')
+      const response = await api.post(proxyUrl('/googledrive/folder/proposals'))
       setProposalsFolderId(response.data.folderId)
     } catch (error) {
       console.error('Failed to setup proposals folder:', error)
@@ -79,7 +79,7 @@ export default function GoogleDrivePage() {
   const loadFiles = async () => {
     setLoading(true)
     try {
-      const response = await api.get('/googledrive/files')
+      const response = await api.get(proxyUrl('/googledrive/files'))
       setFiles(response.data.files)
     } catch (error) {
       console.error('Failed to load files:', error)
@@ -106,7 +106,7 @@ export default function GoogleDrivePage() {
         formData.append('parentFolderId', proposalsFolderId)
       }
 
-      await api.post('/googledrive/upload', formData, {
+      await api.post(proxyUrl('/googledrive/upload'), formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
@@ -132,7 +132,7 @@ export default function GoogleDrivePage() {
     if (!confirm('Are you sure you want to delete this file?')) return
 
     try {
-      await api.delete(`/googledrive/files/${fileId}`)
+      await api.delete(proxyUrl(`/googledrive/files/${fileId}`))
       await loadFiles()
     } catch (error) {
       console.error('Failed to delete file:', error)
@@ -143,7 +143,7 @@ export default function GoogleDrivePage() {
   const downloadFile = async (fileId: string, fileName: string) => {
     try {
       const response = await api.get(
-        `/googledrive/download/${fileId}?fileName=${fileName}`,
+        proxyUrl(`/googledrive/download/${fileId}?fileName=${fileName}`),
         {
           responseType: 'blob',
         },
@@ -165,7 +165,7 @@ export default function GoogleDrivePage() {
 
   const shareFile = async (fileId: string) => {
     try {
-      await api.post(`/googledrive/files/${fileId}/share`, {
+      await api.post(proxyUrl(`/googledrive/files/${fileId}/share`), {
         email: shareEmail || undefined,
         role: 'reader',
       })
@@ -691,4 +691,3 @@ export default function GoogleDrivePage() {
     </div>
   )
 }
-

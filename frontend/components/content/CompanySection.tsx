@@ -1,15 +1,67 @@
+import { contentApi } from '@/lib/api'
 import {
-  CheckIcon,
-  XMarkIcon,
   BuildingOfficeIcon,
-  StarIcon,
+  CheckIcon,
+  PencilIcon,
   PlusIcon,
   TrashIcon,
-  PencilIcon,
-} from "@heroicons/react/24/outline";
-import Link from "next/link";
-import AddCompanyModal from "./modals/AddCompanyModal";
-import { useState } from "react";
+  XMarkIcon,
+} from '@heroicons/react/24/outline'
+import { useState } from 'react'
+import AddCompanyModal from './modals/AddCompanyModal'
+
+function parseEvidenceTokens(
+  input: string,
+): Array<
+  | { kind: 'text'; value: string }
+  | { kind: 'token'; tokenType: 'project' | 'reference'; id: string }
+> {
+  const s = String(input || '')
+  if (!s) return [{ kind: 'text', value: '' }]
+
+  const re = /\[\[(project|reference):([^\]]+)\]\]/g
+  const parts: Array<
+    | { kind: 'text'; value: string }
+    | { kind: 'token'; tokenType: 'project' | 'reference'; id: string }
+  > = []
+
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s))) {
+    const start = m.index
+    const end = start + m[0].length
+    if (start > last) {
+      parts.push({ kind: 'text', value: s.slice(last, start) })
+    }
+    parts.push({
+      kind: 'token',
+      tokenType: (m[1] as any) === 'reference' ? 'reference' : 'project',
+      id: String(m[2] || '').trim(),
+    })
+    last = end
+  }
+  if (last < s.length) {
+    parts.push({ kind: 'text', value: s.slice(last) })
+  }
+  return parts
+}
+
+function resolveEvidenceLabel(
+  meta: any,
+  tokenType: 'project' | 'reference',
+  id: string,
+) {
+  const items = Array.isArray(meta?.evidenceItems) ? meta.evidenceItems : []
+  const match = items.find(
+    (x: any) =>
+      String(x?.type || '').toLowerCase() === tokenType &&
+      String(x?.id || '').trim() === String(id || '').trim(),
+  )
+  const label = String(match?.label || '').trim()
+  return (
+    label || (tokenType === 'project' ? `Project ${id}` : `Reference ${id}`)
+  )
+}
 
 // Using a single ctx prop to keep wiring simple during extraction
 export default function CompanySection({ ctx }: { ctx: any }) {
@@ -27,71 +79,166 @@ export default function CompanySection({ ctx }: { ctx: any }) {
     handleCancelCompanyEdit,
     handleAddCompany,
     handleDeleteCompany,
-  } = ctx;
-  const [isSaving, setIsSaving] = useState(false);
+    projects,
+    references,
+    setSelectedProject,
+    setSelectedReference,
+  } = ctx
+  const [isSaving, setIsSaving] = useState(false)
+  const [isRegenerating, setIsRegenerating] = useState(false)
   const addArrayItem = (field: string) => {
     setCompanyForm({
       ...companyForm,
-      [field]: [...(companyForm[field] || []), ""],
-    });
-  };
+      [field]: [...(companyForm[field] || []), ''],
+    })
+  }
 
   const updateArrayItem = (field: string, index: number, value: string) => {
-    const updated = [...(companyForm[field] || [])];
-    updated[index] = value;
+    const updated = [...(companyForm[field] || [])]
+    updated[index] = value
     setCompanyForm({
       ...companyForm,
       [field]: updated,
-    });
-  };
+    })
+  }
 
   const removeArrayItem = (field: string, index: number) => {
     setCompanyForm({
       ...companyForm,
-      [field]: (companyForm[field] || []).filter((_: any, i: number) => i !== index),
-    });
-  };
+      [field]: (companyForm[field] || []).filter(
+        (_: any, i: number) => i !== index,
+      ),
+    })
+  }
 
   const handleAddNewCompany = () => {
     setCompanyForm({
-      name: "",
-      tagline: "",
-      description: "",
-      founded: "",
-      location: "",
-      website: "",
-      email: "",
-      phone: "",
-      coreCapabilities: [""],
-      certifications: [""],
-      industryFocus: [""],
-      missionStatement: "",
-      visionStatement: "",
-      values: [""],
+      name: '',
+      tagline: '',
+      description: '',
+      founded: '',
+      location: '',
+      website: '',
+      email: '',
+      phone: '',
+      coreCapabilities: [''],
+      certifications: [''],
+      industryFocus: [''],
+      missionStatement: '',
+      visionStatement: '',
+      values: [''],
       statistics: {
-        yearsInBusiness: "",
-        projectsCompleted: "",
-        clientsSatisfied: "",
-        teamMembers: "",
+        yearsInBusiness: '',
+        projectsCompleted: '',
+        clientsSatisfied: '',
+        teamMembers: '',
       },
       socialMedia: {
-        linkedin: "",
-        twitter: "",
-        facebook: "",
+        linkedin: '',
+        twitter: '',
+        facebook: '',
       },
-      coverLetter: "",
-      firmQualificationsAndExperience: "",
-    });
-    setShowAddCompany(true);
-  };
-  const onSaveCompany=async()=>{
-    try{
-      setIsSaving(true);
-      await handleSaveCompany();
-    }catch(error){
-      console.error("Error saving company:", error);
-    }finally{
-      setIsSaving(false);
+      coverLetter: '',
+      firmQualificationsAndExperience: '',
+    })
+    setShowAddCompany(true)
+  }
+  const onSaveCompany = async () => {
+    try {
+      setIsSaving(true)
+      await handleSaveCompany()
+    } catch (error) {
+      console.error('Error saving company:', error)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const onRegenerateCapabilities = async () => {
+    const companyId = selectedCompany?.companyId
+    if (!companyId) return
+    try {
+      setIsRegenerating(true)
+      const resp = await contentApi.regenerateCompanyCapabilities(companyId)
+      const updated = resp.data
+
+      // update company list + selected company (keep wiring local to avoid prop explosion)
+      if (typeof setSelectedCompany === 'function') {
+        setSelectedCompany(updated)
+      }
+      if (Array.isArray(companies)) {
+        const next = companies.map((c: any) =>
+          c.companyId === companyId ? updated : c,
+        )
+        if (typeof ctx?.setCompanies === 'function') {
+          ctx.setCompanies(next)
+        }
+      }
+    } catch (e) {
+      console.error('Failed to regenerate capabilities statement:', e)
+    } finally {
+      setIsRegenerating(false)
+    }
+  }
+
+  const onClickEvidenceToken = async (
+    tokenType: 'project' | 'reference',
+    id: string,
+  ) => {
+    const targetId = String(id || '').trim()
+    if (!targetId) return
+
+    const scrollTo = (anchorId: string) => {
+      try {
+        if (typeof window === 'undefined') return
+        const el = window.document?.getElementById(anchorId)
+        if (!el) return
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      } catch (_e) {
+        // ignore
+      }
+    }
+
+    if (tokenType === 'project') {
+      scrollTo('section-projects')
+      const list = Array.isArray(projects) ? projects : []
+      const found =
+        list.find(
+          (p: any) => String(p?._id || p?.projectId || '') === targetId,
+        ) || null
+      if (found && typeof setSelectedProject === 'function') {
+        setSelectedProject(found)
+        return
+      }
+      // fallback fetch
+      try {
+        const resp = await contentApi.getProjectById(targetId)
+        if (typeof setSelectedProject === 'function')
+          setSelectedProject(resp.data)
+        scrollTo('section-projects')
+      } catch (_e) {
+        // ignore
+      }
+      return
+    }
+
+    scrollTo('section-references')
+    const list = Array.isArray(references) ? references : []
+    const found =
+      list.find(
+        (r: any) => String(r?._id || r?.referenceId || '') === targetId,
+      ) || null
+    if (found && typeof setSelectedReference === 'function') {
+      setSelectedReference(found)
+      return
+    }
+    try {
+      const resp = await contentApi.getReferenceById(targetId)
+      if (typeof setSelectedReference === 'function')
+        setSelectedReference(resp.data)
+      scrollTo('section-references')
+    } catch (_e) {
+      // ignore
     }
   }
   return (
@@ -127,8 +274,8 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                   key={company.companyId}
                   className={`p-4 border rounded-lg cursor-pointer transition-colors ${
                     selectedCompany?.companyId === company.companyId
-                      ? "border-primary-500 bg-primary-50"
-                      : "border-gray-200 hover:border-gray-300"
+                      ? 'border-primary-500 bg-primary-50'
+                      : 'border-gray-200 hover:border-gray-300'
                   }`}
                   onClick={() => setSelectedCompany(company)}
                 >
@@ -138,15 +285,18 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                         {company.name}
                       </h4>
                       <p className="text-sm text-gray-500 mt-1">
-                        {company.location} • Founded {company.founded ? new Date(company.founded).getFullYear() : 'N/A'}
+                        {company.location} • Founded{' '}
+                        {company.founded
+                          ? new Date(company.founded).getFullYear()
+                          : 'N/A'}
                       </p>
                     </div>
                     <div className="flex space-x-2">
                       <button
                         onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedCompany(company);
-                          handleEditCompany();
+                          e.stopPropagation()
+                          setSelectedCompany(company)
+                          handleEditCompany()
                         }}
                         className="p-1 text-gray-400 hover:text-primary-600"
                       >
@@ -154,8 +304,8 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                       </button>
                       <button
                         onClick={(e) => {
-                          e.stopPropagation();
-                          handleDeleteCompany(company);
+                          e.stopPropagation()
+                          handleDeleteCompany(company)
                         }}
                         className="p-1 text-gray-400 hover:text-red-600"
                       >
@@ -169,7 +319,9 @@ export default function CompanySection({ ctx }: { ctx: any }) {
           ) : (
             <div className="text-center py-8">
               <BuildingOfficeIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <h3 className="mt-2 text-sm font-medium text-gray-900">No companies</h3>
+              <h3 className="mt-2 text-sm font-medium text-gray-900">
+                No companies
+              </h3>
               <p className="mt-1 text-sm text-gray-500">
                 Get started by adding your first company.
               </p>
@@ -202,7 +354,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                 {editingCompany ? (
                   <>
                     <button
-                      onClick={handleSaveCompany}
+                      onClick={onSaveCompany}
                       disabled={isSaving}
                       className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-white bg-green-600 hover:bg-green-700"
                     >
@@ -218,13 +370,25 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     </button>
                   </>
                 ) : (
-                  <button
-                    onClick={handleEditCompany}
-                    className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-primary-600 bg-primary-100 hover:bg-primary-200"
-                  >
-                    <PencilIcon className="h-3 w-3 mr-1" />
-                    Edit
-                  </button>
+                  <>
+                    <button
+                      onClick={onRegenerateCapabilities}
+                      disabled={isRegenerating}
+                      className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-60"
+                      title="Regenerate the capabilities statement from projects and references"
+                    >
+                      {isRegenerating
+                        ? 'Regenerating…'
+                        : 'Regenerate capabilities'}
+                    </button>
+                    <button
+                      onClick={handleEditCompany}
+                      className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-primary-600 bg-primary-100 hover:bg-primary-200"
+                    >
+                      <PencilIcon className="h-3 w-3 mr-1" />
+                      Edit
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -241,7 +405,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     </label>
                     <input
                       type="text"
-                      value={companyForm.companyName || companyForm.name || ""}
+                      value={companyForm.companyName || companyForm.name || ''}
                       onChange={(e) =>
                         setCompanyForm({
                           ...companyForm,
@@ -258,7 +422,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     </label>
                     <input
                       type="text"
-                      value={companyForm.tagline || ""}
+                      value={companyForm.tagline || ''}
                       onChange={(e) =>
                         setCompanyForm({
                           ...companyForm,
@@ -275,7 +439,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     Description *
                   </label>
                   <textarea
-                    value={companyForm.description || ""}
+                    value={companyForm.description || ''}
                     onChange={(e) =>
                       setCompanyForm({
                         ...companyForm,
@@ -295,7 +459,13 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     </label>
                     <input
                       type="date"
-                      value={companyForm.founded ? new Date(companyForm.founded).toISOString().split('T')[0] : ""}
+                      value={
+                        companyForm.founded
+                          ? new Date(companyForm.founded)
+                              .toISOString()
+                              .split('T')[0]
+                          : ''
+                      }
                       onChange={(e) =>
                         setCompanyForm({
                           ...companyForm,
@@ -311,7 +481,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     </label>
                     <input
                       type="text"
-                      value={companyForm.location || ""}
+                      value={companyForm.location || ''}
                       onChange={(e) =>
                         setCompanyForm({
                           ...companyForm,
@@ -331,7 +501,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     </label>
                     <input
                       type="url"
-                      value={companyForm.website || ""}
+                      value={companyForm.website || ''}
                       onChange={(e) =>
                         setCompanyForm({
                           ...companyForm,
@@ -347,7 +517,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     </label>
                     <input
                       type="email"
-                      value={companyForm.email || ""}
+                      value={companyForm.email || ''}
                       onChange={(e) =>
                         setCompanyForm({
                           ...companyForm,
@@ -363,7 +533,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     </label>
                     <input
                       type="tel"
-                      value={companyForm.phone || ""}
+                      value={companyForm.phone || ''}
                       onChange={(e) =>
                         setCompanyForm({
                           ...companyForm,
@@ -381,25 +551,35 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     Core Capabilities
                   </label>
                   <div className="space-y-2">
-                    {(companyForm.coreCapabilities || []).map((capability: string, index: number) => (
-                      <div key={index} className="flex space-x-2">
-                        <input
-                          type="text"
-                          value={capability}
-                          onChange={(e) => updateArrayItem("coreCapabilities", index, e.target.value)}
-                          className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                          placeholder="Enter capability"
-                        />
-                        <button
-                          onClick={() => removeArrayItem("coreCapabilities", index)}
-                          className="px-3 py-2 text-red-600 hover:text-red-800"
-                        >
-                          <XMarkIcon className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
+                    {(companyForm.coreCapabilities || []).map(
+                      (capability: string, index: number) => (
+                        <div key={index} className="flex space-x-2">
+                          <input
+                            type="text"
+                            value={capability}
+                            onChange={(e) =>
+                              updateArrayItem(
+                                'coreCapabilities',
+                                index,
+                                e.target.value,
+                              )
+                            }
+                            className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                            placeholder="Enter capability"
+                          />
+                          <button
+                            onClick={() =>
+                              removeArrayItem('coreCapabilities', index)
+                            }
+                            className="px-3 py-2 text-red-600 hover:text-red-800"
+                          >
+                            <XMarkIcon className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ),
+                    )}
                     <button
-                      onClick={() => addArrayItem("coreCapabilities")}
+                      onClick={() => addArrayItem('coreCapabilities')}
                       className="text-primary-600 hover:text-primary-800 text-sm"
                     >
                       + Add Capability
@@ -413,25 +593,35 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     Certifications
                   </label>
                   <div className="space-y-2">
-                    {(companyForm.certifications || []).map((cert: string, index: number) => (
-                      <div key={index} className="flex space-x-2">
-                        <input
-                          type="text"
-                          value={cert}
-                          onChange={(e) => updateArrayItem("certifications", index, e.target.value)}
-                          className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                          placeholder="Enter certification"
-                        />
-                        <button
-                          onClick={() => removeArrayItem("certifications", index)}
-                          className="px-3 py-2 text-red-600 hover:text-red-800"
-                        >
-                          <XMarkIcon className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
+                    {(companyForm.certifications || []).map(
+                      (cert: string, index: number) => (
+                        <div key={index} className="flex space-x-2">
+                          <input
+                            type="text"
+                            value={cert}
+                            onChange={(e) =>
+                              updateArrayItem(
+                                'certifications',
+                                index,
+                                e.target.value,
+                              )
+                            }
+                            className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                            placeholder="Enter certification"
+                          />
+                          <button
+                            onClick={() =>
+                              removeArrayItem('certifications', index)
+                            }
+                            className="px-3 py-2 text-red-600 hover:text-red-800"
+                          >
+                            <XMarkIcon className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ),
+                    )}
                     <button
-                      onClick={() => addArrayItem("certifications")}
+                      onClick={() => addArrayItem('certifications')}
                       className="text-primary-600 hover:text-primary-800 text-sm"
                     >
                       + Add Certification
@@ -445,25 +635,35 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     Industry Focus
                   </label>
                   <div className="space-y-2">
-                    {(companyForm.industryFocus || []).map((industry: string, index: number) => (
-                      <div key={index} className="flex space-x-2">
-                        <input
-                          type="text"
-                          value={industry}
-                          onChange={(e) => updateArrayItem("industryFocus", index, e.target.value)}
-                          className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                          placeholder="Enter industry"
-                        />
-                        <button
-                          onClick={() => removeArrayItem("industryFocus", index)}
-                          className="px-3 py-2 text-red-600 hover:text-red-800"
-                        >
-                          <XMarkIcon className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
+                    {(companyForm.industryFocus || []).map(
+                      (industry: string, index: number) => (
+                        <div key={index} className="flex space-x-2">
+                          <input
+                            type="text"
+                            value={industry}
+                            onChange={(e) =>
+                              updateArrayItem(
+                                'industryFocus',
+                                index,
+                                e.target.value,
+                              )
+                            }
+                            className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                            placeholder="Enter industry"
+                          />
+                          <button
+                            onClick={() =>
+                              removeArrayItem('industryFocus', index)
+                            }
+                            className="px-3 py-2 text-red-600 hover:text-red-800"
+                          >
+                            <XMarkIcon className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ),
+                    )}
                     <button
-                      onClick={() => addArrayItem("industryFocus")}
+                      onClick={() => addArrayItem('industryFocus')}
                       className="text-primary-600 hover:text-primary-800 text-sm"
                     >
                       + Add Industry
@@ -478,7 +678,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                       Mission Statement
                     </label>
                     <textarea
-                      value={companyForm.missionStatement || ""}
+                      value={companyForm.missionStatement || ''}
                       onChange={(e) =>
                         setCompanyForm({
                           ...companyForm,
@@ -494,7 +694,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                       Vision Statement
                     </label>
                     <textarea
-                      value={companyForm.visionStatement || ""}
+                      value={companyForm.visionStatement || ''}
                       onChange={(e) =>
                         setCompanyForm({
                           ...companyForm,
@@ -513,25 +713,29 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     Core Values
                   </label>
                   <div className="space-y-2">
-                    {(companyForm.values || []).map((value: string, index: number) => (
-                      <div key={index} className="flex space-x-2">
-                        <input
-                          type="text"
-                          value={value}
-                          onChange={(e) => updateArrayItem("values", index, e.target.value)}
-                          className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
-                          placeholder="Enter value"
-                        />
-                        <button
-                          onClick={() => removeArrayItem("values", index)}
-                          className="px-3 py-2 text-red-600 hover:text-red-800"
-                        >
-                          <XMarkIcon className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))}
+                    {(companyForm.values || []).map(
+                      (value: string, index: number) => (
+                        <div key={index} className="flex space-x-2">
+                          <input
+                            type="text"
+                            value={value}
+                            onChange={(e) =>
+                              updateArrayItem('values', index, e.target.value)
+                            }
+                            className="flex-1 border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                            placeholder="Enter value"
+                          />
+                          <button
+                            onClick={() => removeArrayItem('values', index)}
+                            className="px-3 py-2 text-red-600 hover:text-red-800"
+                          >
+                            <XMarkIcon className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ),
+                    )}
                     <button
-                      onClick={() => addArrayItem("values")}
+                      onClick={() => addArrayItem('values')}
                       className="text-primary-600 hover:text-primary-800 text-sm"
                     >
                       + Add Value
@@ -551,7 +755,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                       </label>
                       <input
                         type="number"
-                        value={companyForm.statistics?.yearsInBusiness || ""}
+                        value={companyForm.statistics?.yearsInBusiness || ''}
                         onChange={(e) =>
                           setCompanyForm({
                             ...companyForm,
@@ -570,7 +774,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                       </label>
                       <input
                         type="number"
-                        value={companyForm.statistics?.projectsCompleted || ""}
+                        value={companyForm.statistics?.projectsCompleted || ''}
                         onChange={(e) =>
                           setCompanyForm({
                             ...companyForm,
@@ -589,7 +793,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                       </label>
                       <input
                         type="number"
-                        value={companyForm.statistics?.clientsSatisfied || ""}
+                        value={companyForm.statistics?.clientsSatisfied || ''}
                         onChange={(e) =>
                           setCompanyForm({
                             ...companyForm,
@@ -608,7 +812,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                       </label>
                       <input
                         type="number"
-                        value={companyForm.statistics?.teamMembers || ""}
+                        value={companyForm.statistics?.teamMembers || ''}
                         onChange={(e) =>
                           setCompanyForm({
                             ...companyForm,
@@ -636,7 +840,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                       </label>
                       <input
                         type="url"
-                        value={companyForm.socialMedia?.linkedin || ""}
+                        value={companyForm.socialMedia?.linkedin || ''}
                         onChange={(e) =>
                           setCompanyForm({
                             ...companyForm,
@@ -655,7 +859,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                       </label>
                       <input
                         type="url"
-                        value={companyForm.socialMedia?.twitter || ""}
+                        value={companyForm.socialMedia?.twitter || ''}
                         onChange={(e) =>
                           setCompanyForm({
                             ...companyForm,
@@ -674,7 +878,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                       </label>
                       <input
                         type="url"
-                        value={companyForm.socialMedia?.facebook || ""}
+                        value={companyForm.socialMedia?.facebook || ''}
                         onChange={(e) =>
                           setCompanyForm({
                             ...companyForm,
@@ -696,7 +900,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     Cover Letter
                   </label>
                   <textarea
-                    value={companyForm.coverLetter || ""}
+                    value={companyForm.coverLetter || ''}
                     onChange={(e) =>
                       setCompanyForm({
                         ...companyForm,
@@ -715,7 +919,7 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     Firm Qualifications and Experience
                   </label>
                   <textarea
-                    value={companyForm.firmQualificationsAndExperience || ""}
+                    value={companyForm.firmQualificationsAndExperience || ''}
                     onChange={(e) =>
                       setCompanyForm({
                         ...companyForm,
@@ -744,13 +948,65 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                   </p>
                 </div>
 
+                <div className="rounded-md border border-gray-200 bg-gray-50 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <h5 className="text-sm font-medium text-gray-900">
+                      Capabilities Statement
+                    </h5>
+                    <div className="text-xs text-gray-500">
+                      {selectedCompany?.capabilitiesStatementMeta?.generatedAt
+                        ? `Updated ${new Date(
+                            selectedCompany.capabilitiesStatementMeta.generatedAt,
+                          ).toLocaleString()}`
+                        : 'Not generated yet'}
+                    </div>
+                  </div>
+                  <div className="mt-3 text-sm text-gray-700 whitespace-pre-wrap">
+                    {(selectedCompany.capabilitiesStatement
+                      ? parseEvidenceTokens(
+                          selectedCompany.capabilitiesStatement,
+                        )
+                      : [
+                          {
+                            kind: 'text' as const,
+                            value:
+                              'Add past projects and references to generate a capabilities statement for this company.',
+                          },
+                        ]
+                    ).map((p, idx) => {
+                      if (p.kind === 'text')
+                        return <span key={idx}>{p.value}</span>
+                      const label = resolveEvidenceLabel(
+                        selectedCompany?.capabilitiesStatementMeta,
+                        p.tokenType,
+                        p.id,
+                      )
+                      return (
+                        <button
+                          key={`${p.tokenType}:${p.id}:${idx}`}
+                          type="button"
+                          onClick={() =>
+                            onClickEvidenceToken(p.tokenType, p.id)
+                          }
+                          className="mx-0.5 inline-flex items-center rounded border border-gray-300 bg-white px-2 py-0.5 text-xs text-gray-700 hover:bg-gray-100"
+                          title={`Jump to ${p.tokenType} ${p.id}`}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
                   <div>
                     <h5 className="text-sm font-medium text-gray-700 mb-2">
                       Founded
                     </h5>
                     <p className="text-sm text-gray-900">
-                      {selectedCompany.founded ? new Date(selectedCompany.founded).getFullYear() : 'N/A'}
+                      {selectedCompany.founded
+                        ? new Date(selectedCompany.founded).getFullYear()
+                        : 'N/A'}
                     </p>
                   </div>
                   <div>
@@ -763,7 +1019,9 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                   </div>
                 </div>
 
-                {(selectedCompany.website || selectedCompany.email || selectedCompany.phone) && (
+                {(selectedCompany.website ||
+                  selectedCompany.email ||
+                  selectedCompany.phone) && (
                   <div>
                     <h5 className="text-sm font-medium text-gray-700 mb-2">
                       Contact Information
@@ -771,24 +1029,35 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     <div className="space-y-1">
                       {selectedCompany.website && (
                         <p className="text-sm text-gray-900">
-                          <span className="font-medium">Website:</span> 
-                          <a href={selectedCompany.website} target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:text-primary-800 ml-1">
+                          <span className="font-medium">Website:</span>
+                          <a
+                            href={selectedCompany.website}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-primary-600 hover:text-primary-800 ml-1"
+                          >
                             {selectedCompany.website}
                           </a>
                         </p>
                       )}
                       {selectedCompany.email && (
                         <p className="text-sm text-gray-900">
-                          <span className="font-medium">Email:</span> 
-                          <a href={`mailto:${selectedCompany.email}`} className="text-primary-600 hover:text-primary-800 ml-1">
+                          <span className="font-medium">Email:</span>
+                          <a
+                            href={`mailto:${selectedCompany.email}`}
+                            className="text-primary-600 hover:text-primary-800 ml-1"
+                          >
                             {selectedCompany.email}
                           </a>
                         </p>
                       )}
                       {selectedCompany.phone && (
                         <p className="text-sm text-gray-900">
-                          <span className="font-medium">Phone:</span> 
-                          <a href={`tel:${selectedCompany.phone}`} className="text-primary-600 hover:text-primary-800 ml-1">
+                          <span className="font-medium">Phone:</span>
+                          <a
+                            href={`tel:${selectedCompany.phone}`}
+                            className="text-primary-600 hover:text-primary-800 ml-1"
+                          >
                             {selectedCompany.phone}
                           </a>
                         </p>
@@ -797,59 +1066,68 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                   </div>
                 )}
 
-                {selectedCompany.coreCapabilities && selectedCompany.coreCapabilities.length > 0 && (
-                  <div>
-                    <h5 className="text-sm font-medium text-gray-700 mb-2">
-                      Core Capabilities
-                    </h5>
-                    <div className="flex flex-wrap gap-2">
-                      {selectedCompany.coreCapabilities.map((capability: string, index: number) => (
-                        <span
-                          key={index}
-                          className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full"
-                        >
-                          {capability}
-                        </span>
-                      ))}
+                {selectedCompany.coreCapabilities &&
+                  selectedCompany.coreCapabilities.length > 0 && (
+                    <div>
+                      <h5 className="text-sm font-medium text-gray-700 mb-2">
+                        Core Capabilities
+                      </h5>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedCompany.coreCapabilities.map(
+                          (capability: string, index: number) => (
+                            <span
+                              key={index}
+                              className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full"
+                            >
+                              {capability}
+                            </span>
+                          ),
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {selectedCompany.certifications && selectedCompany.certifications.length > 0 && (
-                  <div>
-                    <h5 className="text-sm font-medium text-gray-700 mb-2">
-                      Certifications
-                    </h5>
-                    <div className="flex flex-wrap gap-2">
-                      {selectedCompany.certifications.map((cert: string, index: number) => (
-                        <span
-                          key={index}
-                          className="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full"
-                        >
-                          {cert}
-                        </span>
-                      ))}
+                {selectedCompany.certifications &&
+                  selectedCompany.certifications.length > 0 && (
+                    <div>
+                      <h5 className="text-sm font-medium text-gray-700 mb-2">
+                        Certifications
+                      </h5>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedCompany.certifications.map(
+                          (cert: string, index: number) => (
+                            <span
+                              key={index}
+                              className="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full"
+                            >
+                              {cert}
+                            </span>
+                          ),
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {selectedCompany.industryFocus && selectedCompany.industryFocus.length > 0 && (
-                  <div>
-                    <h5 className="text-sm font-medium text-gray-700 mb-2">
-                      Industry Focus
-                    </h5>
-                    <div className="flex flex-wrap gap-2">
-                      {selectedCompany.industryFocus.map((industry: string, index: number) => (
-                        <span
-                          key={index}
-                          className="px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 rounded-full"
-                        >
-                          {industry}
-                        </span>
-                      ))}
+                {selectedCompany.industryFocus &&
+                  selectedCompany.industryFocus.length > 0 && (
+                    <div>
+                      <h5 className="text-sm font-medium text-gray-700 mb-2">
+                        Industry Focus
+                      </h5>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedCompany.industryFocus.map(
+                          (industry: string, index: number) => (
+                            <span
+                              key={index}
+                              className="px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 rounded-full"
+                            >
+                              {industry}
+                            </span>
+                          ),
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
                 {selectedCompany.missionStatement && (
                   <div>
@@ -873,21 +1151,29 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                   </div>
                 )}
 
-                {selectedCompany.values && selectedCompany.values.length > 0 && (
-                  <div>
-                    <h5 className="text-sm font-medium text-gray-700 mb-2">
-                      Core Values
-                    </h5>
-                    <ul className="space-y-1">
-                      {selectedCompany.values.map((value: string, index: number) => (
-                        <li key={index} className="flex items-start space-x-2">
-                          <div className="w-2 h-2 bg-primary-600 rounded-full mt-2 flex-shrink-0"></div>
-                          <span className="text-sm text-gray-700">{value}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                {selectedCompany.values &&
+                  selectedCompany.values.length > 0 && (
+                    <div>
+                      <h5 className="text-sm font-medium text-gray-700 mb-2">
+                        Core Values
+                      </h5>
+                      <ul className="space-y-1">
+                        {selectedCompany.values.map(
+                          (value: string, index: number) => (
+                            <li
+                              key={index}
+                              className="flex items-start space-x-2"
+                            >
+                              <div className="w-2 h-2 bg-primary-600 rounded-full mt-2 flex-shrink-0"></div>
+                              <span className="text-sm text-gray-700">
+                                {value}
+                              </span>
+                            </li>
+                          ),
+                        )}
+                      </ul>
+                    </div>
+                  )}
 
                 {selectedCompany.statistics && (
                   <div>
@@ -897,65 +1183,99 @@ export default function CompanySection({ ctx }: { ctx: any }) {
                     <div className="grid grid-cols-2 gap-4">
                       {selectedCompany.statistics.yearsInBusiness && (
                         <div>
-                          <span className="text-sm font-medium text-gray-600">Years in Business:</span>
-                          <span className="text-sm text-gray-900 ml-1">{selectedCompany.statistics.yearsInBusiness}</span>
+                          <span className="text-sm font-medium text-gray-600">
+                            Years in Business:
+                          </span>
+                          <span className="text-sm text-gray-900 ml-1">
+                            {selectedCompany.statistics.yearsInBusiness}
+                          </span>
                         </div>
                       )}
                       {selectedCompany.statistics.projectsCompleted && (
                         <div>
-                          <span className="text-sm font-medium text-gray-600">Projects Completed:</span>
-                          <span className="text-sm text-gray-900 ml-1">{selectedCompany.statistics.projectsCompleted}</span>
+                          <span className="text-sm font-medium text-gray-600">
+                            Projects Completed:
+                          </span>
+                          <span className="text-sm text-gray-900 ml-1">
+                            {selectedCompany.statistics.projectsCompleted}
+                          </span>
                         </div>
                       )}
                       {selectedCompany.statistics.clientsSatisfied && (
                         <div>
-                          <span className="text-sm font-medium text-gray-600">Clients Satisfied:</span>
-                          <span className="text-sm text-gray-900 ml-1">{selectedCompany.statistics.clientsSatisfied}</span>
+                          <span className="text-sm font-medium text-gray-600">
+                            Clients Satisfied:
+                          </span>
+                          <span className="text-sm text-gray-900 ml-1">
+                            {selectedCompany.statistics.clientsSatisfied}
+                          </span>
                         </div>
                       )}
                       {selectedCompany.statistics.teamMembers && (
                         <div>
-                          <span className="text-sm font-medium text-gray-600">Team Members:</span>
-                          <span className="text-sm text-gray-900 ml-1">{selectedCompany.statistics.teamMembers}</span>
+                          <span className="text-sm font-medium text-gray-600">
+                            Team Members:
+                          </span>
+                          <span className="text-sm text-gray-900 ml-1">
+                            {selectedCompany.statistics.teamMembers}
+                          </span>
                         </div>
                       )}
                     </div>
                   </div>
                 )}
 
-                {selectedCompany.socialMedia && (selectedCompany.socialMedia.linkedin || selectedCompany.socialMedia.twitter || selectedCompany.socialMedia.facebook) && (
-                  <div>
-                    <h5 className="text-sm font-medium text-gray-700 mb-2">
-                      Social Media
-                    </h5>
-                    <div className="space-y-1">
-                      {selectedCompany.socialMedia.linkedin && (
-                        <p className="text-sm text-gray-900">
-                          <span className="font-medium">LinkedIn:</span> 
-                          <a href={selectedCompany.socialMedia.linkedin} target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:text-primary-800 ml-1">
-                            {selectedCompany.socialMedia.linkedin}
-                          </a>
-                        </p>
-                      )}
-                      {selectedCompany.socialMedia.twitter && (
-                        <p className="text-sm text-gray-900">
-                          <span className="font-medium">Twitter:</span> 
-                          <a href={selectedCompany.socialMedia.twitter} target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:text-primary-800 ml-1">
-                            {selectedCompany.socialMedia.twitter}
-                          </a>
-                        </p>
-                      )}
-                      {selectedCompany.socialMedia.facebook && (
-                        <p className="text-sm text-gray-900">
-                          <span className="font-medium">Facebook:</span> 
-                          <a href={selectedCompany.socialMedia.facebook} target="_blank" rel="noopener noreferrer" className="text-primary-600 hover:text-primary-800 ml-1">
-                            {selectedCompany.socialMedia.facebook}
-                          </a>
-                        </p>
-                      )}
+                {selectedCompany.socialMedia &&
+                  (selectedCompany.socialMedia.linkedin ||
+                    selectedCompany.socialMedia.twitter ||
+                    selectedCompany.socialMedia.facebook) && (
+                    <div>
+                      <h5 className="text-sm font-medium text-gray-700 mb-2">
+                        Social Media
+                      </h5>
+                      <div className="space-y-1">
+                        {selectedCompany.socialMedia.linkedin && (
+                          <p className="text-sm text-gray-900">
+                            <span className="font-medium">LinkedIn:</span>
+                            <a
+                              href={selectedCompany.socialMedia.linkedin}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary-600 hover:text-primary-800 ml-1"
+                            >
+                              {selectedCompany.socialMedia.linkedin}
+                            </a>
+                          </p>
+                        )}
+                        {selectedCompany.socialMedia.twitter && (
+                          <p className="text-sm text-gray-900">
+                            <span className="font-medium">Twitter:</span>
+                            <a
+                              href={selectedCompany.socialMedia.twitter}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary-600 hover:text-primary-800 ml-1"
+                            >
+                              {selectedCompany.socialMedia.twitter}
+                            </a>
+                          </p>
+                        )}
+                        {selectedCompany.socialMedia.facebook && (
+                          <p className="text-sm text-gray-900">
+                            <span className="font-medium">Facebook:</span>
+                            <a
+                              href={selectedCompany.socialMedia.facebook}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary-600 hover:text-primary-800 ml-1"
+                            >
+                              {selectedCompany.socialMedia.facebook}
+                            </a>
+                          </p>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
                 {selectedCompany.coverLetter && (
                   <div>
@@ -996,5 +1316,5 @@ export default function CompanySection({ ctx }: { ctx: any }) {
         removeArrayItem={removeArrayItem}
       />
     </div>
-  );
+  )
 }

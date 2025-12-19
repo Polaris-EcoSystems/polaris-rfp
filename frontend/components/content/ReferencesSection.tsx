@@ -12,6 +12,14 @@ import { useMemo, useState } from 'react'
 export default function ReferencesSection({ ctx }: { ctx: any }) {
   const {
     references,
+    referencesForCompany,
+    unassignedReferences,
+    allReferences,
+    selectedCompanyId,
+    assignReferenceToSelectedCompany,
+    assignManyToSelectedCompany,
+    scope: controlledScope,
+    setScope: setControlledScope,
     selectedReference,
     setSelectedReference,
     handleViewReference,
@@ -29,17 +37,39 @@ export default function ReferencesSection({ ctx }: { ctx: any }) {
     handleDeleteReference,
   } = ctx
 
+  const [localScope, setLocalScope] = useState<
+    'company' | 'unassigned' | 'all'
+  >(selectedCompanyId ? 'company' : 'all')
+  const scope: 'company' | 'unassigned' | 'all' = controlledScope ?? localScope
+  const setScope =
+    typeof setControlledScope === 'function'
+      ? setControlledScope
+      : setLocalScope
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState<'org' | 'contact' | 'time'>('org')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
   const pageSize = 20
+  const [bulkAssigning, setBulkAssigning] = useState(false)
 
   const filteredSorted = useMemo(() => {
     const q = String(search || '')
       .trim()
       .toLowerCase()
-    const list = Array.isArray(references) ? references : []
+    const list =
+      scope === 'unassigned'
+        ? Array.isArray(unassignedReferences)
+          ? unassignedReferences
+          : []
+        : scope === 'company'
+        ? Array.isArray(referencesForCompany)
+          ? referencesForCompany
+          : []
+        : Array.isArray(allReferences)
+        ? allReferences
+        : Array.isArray(references)
+        ? references
+        : []
 
     const filtered = q
       ? list.filter((r: any) => {
@@ -80,7 +110,16 @@ export default function ReferencesSection({ ctx }: { ctx: any }) {
     })
 
     return sorted
-  }, [references, search, sortBy, sortDir])
+  }, [
+    references,
+    referencesForCompany,
+    unassignedReferences,
+    allReferences,
+    scope,
+    search,
+    sortBy,
+    sortDir,
+  ])
 
   const totalPages = Math.max(1, Math.ceil(filteredSorted.length / pageSize))
   const currentPage = Math.min(Math.max(1, page), totalPages)
@@ -99,12 +138,66 @@ export default function ReferencesSection({ ctx }: { ctx: any }) {
               <h3 className="text-lg leading-6 font-medium text-gray-900">
                 Client References
               </h3>
-              <button
-                onClick={() => setShowAddReference(true)}
-                className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-white bg-primary-600 hover:bg-primary-700"
-              >
-                + Add Reference
-              </button>
+              <div className="flex items-center gap-2">
+                {selectedCompanyId &&
+                scope === 'unassigned' &&
+                filteredSorted.length > 0 &&
+                typeof assignManyToSelectedCompany === 'function' ? (
+                  <button
+                    type="button"
+                    disabled={bulkAssigning}
+                    onClick={async () => {
+                      if (
+                        !confirm(
+                          `Assign ${filteredSorted.length} reference(s) to the selected company?`,
+                        )
+                      )
+                        return
+                      try {
+                        setBulkAssigning(true)
+                        await assignManyToSelectedCompany(filteredSorted)
+                      } finally {
+                        setBulkAssigning(false)
+                      }
+                    }}
+                    className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-60"
+                  >
+                    {bulkAssigning
+                      ? 'Assigning…'
+                      : `Assign all (${filteredSorted.length})`}
+                  </button>
+                ) : null}
+                <button
+                  onClick={() => setShowAddReference(true)}
+                  className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-white bg-primary-600 hover:bg-primary-700"
+                >
+                  + Add Reference
+                </button>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-500">Scope</span>
+                <select
+                  value={scope}
+                  onChange={(e) => {
+                    setScope(e.target.value as any)
+                    setPage(1)
+                  }}
+                  className="border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+                >
+                  <option value="company" disabled={!selectedCompanyId}>
+                    This company
+                  </option>
+                  <option value="unassigned">Unassigned</option>
+                  <option value="all">All</option>
+                </select>
+              </div>
+              {!selectedCompanyId ? (
+                <div className="text-xs text-gray-500">
+                  Select a company to work “company-first”.
+                </div>
+              ) : null}
             </div>
             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex-1 sm:max-w-md">
@@ -179,6 +272,20 @@ export default function ReferencesSection({ ctx }: { ctx: any }) {
                       </div>
                     </div>
                     <div className="flex space-x-1">
+                      {selectedCompanyId &&
+                      !String(reference?.companyId || '').trim() &&
+                      typeof assignReferenceToSelectedCompany === 'function' ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            assignReferenceToSelectedCompany(reference)
+                          }}
+                          className="inline-flex items-center px-2 py-1 text-xs font-medium text-gray-700 bg-gray-100 rounded hover:bg-gray-200"
+                          title="Assign this item to the selected company"
+                        >
+                          Assign
+                        </button>
+                      ) : null}
                       <button
                         onClick={(e) => {
                           e.stopPropagation()

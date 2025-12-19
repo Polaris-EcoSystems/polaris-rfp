@@ -1,10 +1,10 @@
 'use client'
 
+import { useToast } from '@/components/ui/Toast'
+import { isAllowedEmail, normalizeEmail, useAuth } from '@/lib/auth'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import React, { useState } from 'react'
-import { useToast } from '@/components/ui/Toast'
-import { useAuth } from '@/lib/auth'
 
 export default function SignupPage() {
   const router = useRouter()
@@ -33,6 +33,7 @@ export default function SignupPage() {
     if (!name.trim()) e.name = 'Name is required'
     if (!email.trim()) e.email = 'Email is required'
     else if (!/^\S+@\S+\.\S+$/.test(email)) e.email = 'Invalid email'
+    else if (!isAllowedEmail(email)) e.email = 'Use your @polariseco.com email'
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -44,7 +45,7 @@ export default function SignupPage() {
 
     setLoading(true)
     try {
-      const ok = await requestMagicLink(email, {
+      const ok = await requestMagicLink(normalizeEmail(email), {
         username: name,
         returnTo: from || '/',
       })
@@ -155,4 +156,3 @@ export default function SignupPage() {
     </div>
   )
 }
-

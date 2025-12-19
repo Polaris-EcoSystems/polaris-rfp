@@ -1,39 +1,38 @@
-import { TrashIcon } from "@heroicons/react/24/outline";
-import React from "react";
-
 type AddReferenceModalProps = {
-  open: boolean;
-  referenceForm: any;
-  setReferenceForm: (v: any) => void;
-  addArrayItem: (field: string, setState: any, state: any) => void;
+  open: boolean
+  referenceForm: any
+  setReferenceForm: (v: any) => void
+  companies?: any[]
+  addArrayItem: (field: string, setState: any, state: any) => void
   updateArrayItem: (
     field: string,
     index: number,
     value: string,
     setState: any,
-    state: any
-  ) => void;
+    state: any,
+  ) => void
   removeArrayItem: (
     field: string,
     index: number,
     setState: any,
-    state: any
-  ) => void;
-  onAdd: () => void;
-  onClose: () => void;
-};
+    state: any,
+  ) => void
+  onAdd: () => void
+  onClose: () => void
+}
 
 export default function AddReferenceModal({
   open,
   referenceForm,
   setReferenceForm,
+  companies = [],
   addArrayItem,
   updateArrayItem,
   removeArrayItem,
   onAdd,
   onClose,
 }: AddReferenceModalProps) {
-  if (!open) return null;
+  if (!open) return null
 
   return (
     <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
@@ -43,6 +42,33 @@ export default function AddReferenceModal({
             Add Client Reference
           </h3>
           <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">
+                Company
+              </label>
+              <select
+                value={referenceForm.companyId || ''}
+                onChange={(e) =>
+                  setReferenceForm({
+                    ...referenceForm,
+                    companyId: e.target.value || null,
+                  })
+                }
+                className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 bg-white"
+              >
+                <option value="">Unassigned</option>
+                {(companies || []).map((c: any) => (
+                  <option key={c.companyId} value={c.companyId}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">
+                References roll up to the selected company for capability
+                generation.
+              </p>
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">
@@ -226,5 +252,5 @@ export default function AddReferenceModal({
         </div>
       </div>
     </div>
-  );
+  )
 }

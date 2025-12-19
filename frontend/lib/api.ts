@@ -5,26 +5,17 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from 'axios'
 
-function normalizeApiBaseUrl(input: string): string {
-  const raw = String(input || '').trim()
-  if (!raw) return ''
-  // Avoid Mixed Content in production. If someone configured http:// for a non-localhost
-  // API, upgrade to https://.
-  if (raw.startsWith('http://')) {
-    if (raw.includes('localhost') || raw.includes('127.0.0.1')) return raw
-    return raw.replace(/^http:\/\//, 'https://')
-  }
-  if (raw.startsWith('https://')) return raw
-  // If a hostname was provided (common for App Runner ServiceUrl), default to https.
-  if (raw.includes('localhost')) return `http://${raw}`
-  return `https://${raw}`
+/**
+ * Frontend API strategy:
+ * - Browser calls same-origin Next.js routes (BFF) under `/api/**`
+ * - Next route handlers proxy to the FastAPI backend and attach Authorization
+ *   from an httpOnly cookie (set during magic-link verification).
+ */
+export function proxyUrl(path: string): string {
+  const p = String(path || '').trim()
+  if (!p) return '/api/proxy/'
+  return `/api/proxy${p.startsWith('/') ? p : `/${p}`}`
 }
-
-const API_BASE_URL = normalizeApiBaseUrl(
-  process.env.NEXT_PUBLIC_API_BASE_URL ||
-    process.env.API_BASE_URL ||
-    'https://api.rfp.polariseco.com',
-)
 
 // Ensure we only ever have ONE axios instance, even if the module is imported via
 // different path aliases (e.g. "@/lib/api" vs "../lib/api") in different bundles.
@@ -34,62 +25,15 @@ const _g = globalThis as typeof globalThis & {
 const api: AxiosInstance =
   _g.__polaris_api_client ??
   axios.create({
-    baseURL: API_BASE_URL,
+    // Same-origin; calls should use `proxyUrl()` (or other local API routes).
+    baseURL: '',
     timeout: 300000, // 5 minute timeout for PDF generation
   })
 _g.__polaris_api_client = api
 
-// Extra safety: if we’re running in the browser over HTTPS, never keep an http:// baseURL.
-try {
-  if (
-    typeof window !== 'undefined' &&
-    window.location?.protocol === 'https:' &&
-    typeof api.defaults.baseURL === 'string' &&
-    api.defaults.baseURL.startsWith('http://')
-  ) {
-    api.defaults.baseURL = api.defaults.baseURL.replace(
-      /^http:\/\//,
-      'https://',
-    )
-  }
-} catch (_e) {
-  // ignore
-}
-
-// Add request interceptor for debugging
+// Add request interceptor for light normalization
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
-    // Hard guard against Mixed Content in production:
-    // if the page is https:// but the configured baseURL is http://, browsers will block.
-    try {
-      if (typeof window !== 'undefined') {
-        const proto = window.location?.protocol || ''
-        if (proto === 'https:') {
-          // Axios may not always materialize baseURL onto the per-request config,
-          // so also check the instance default.
-          const currentBase =
-            (typeof config.baseURL === 'string' && config.baseURL) ||
-            (typeof api.defaults.baseURL === 'string' &&
-              api.defaults.baseURL) ||
-            ''
-
-          if (currentBase.startsWith('http://')) {
-            const upgraded = currentBase.replace(/^http:\/\//, 'https://')
-            api.defaults.baseURL = upgraded
-            config.baseURL = upgraded
-          }
-
-          if (
-            typeof config.url === 'string' &&
-            config.url.startsWith('http://')
-          ) {
-            config.url = config.url.replace(/^http:\/\//, 'https://')
-          }
-        }
-      }
-    } catch (_e) {
-      // ignore
-    }
     return config
   },
   (error: AxiosError | any) => {
@@ -101,10 +45,6 @@ api.interceptors.request.use(
 // Add response interceptor for debugging
 api.interceptors.response.use(
   (response: AxiosResponse) => {
-    console.log(
-      `Response received from ${response.config.url}:`,
-      response.status,
-    )
     return response
   },
   (error: AxiosError | any) => {
@@ -115,20 +55,19 @@ api.interceptors.response.use(
       message: error.message,
     })
 
-    // If the token is invalid/expired, clear it and bounce to login.
+    // If the session is invalid/expired, clear server cookie and bounce to login.
     try {
       const status = error.response?.status
       const url = String(error.config?.url || '')
-      const isAuthEndpoint =
-        url.includes('/api/auth/login') ||
-        url.includes('/api/auth/signup') ||
-        url.includes('/api/auth/request-password-reset') ||
-        url.includes('/api/auth/reset-password')
+      const isAuthEndpoint = url.includes('/api/session/')
 
       if (status === 401 && !isAuthEndpoint && typeof window !== 'undefined') {
-        localStorage.removeItem('token')
-        sessionStorage.removeItem('token')
-        delete api.defaults.headers.common['Authorization']
+        // best-effort: clear cookie via BFF
+        try {
+          void fetch('/api/session/logout', { method: 'POST' })
+        } catch {
+          // ignore
+        }
 
         const pathname = window.location.pathname || '/'
         const search = window.location.search || ''
@@ -175,6 +114,24 @@ export interface RFP {
   dateMeta?: any
   fitScore?: number
   fitReasons?: string[]
+  review?: {
+    decision?: '' | 'bid' | 'no_bid' | 'maybe'
+    notes?: string
+    reasons?: string[]
+    updatedAt?: string | null
+    updatedBy?: string | null
+    blockers?: {
+      id?: string
+      text: string
+      status: 'open' | 'resolved' | 'waived'
+    }[]
+    requirements?: {
+      text: string
+      status: 'unknown' | 'ok' | 'risk' | 'gap'
+      notes?: string
+      mappedSections?: string[]
+    }[]
+  }
 }
 
 export interface Proposal {
@@ -254,35 +211,58 @@ export const rfpApi = {
   upload: (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    return api.post('/api/rfp/upload', formData)
+    return api.post(proxyUrl('/api/rfp/upload'), formData)
   },
   analyzeUrl: (url: string) => {
-    return api.post('/api/rfp/analyze-url', { url })
+    return api.post(proxyUrl('/api/rfp/analyze-url'), { url })
   },
-  analyzeUrls: (urls: string[]) => api.post('/api/rfp/analyze-urls', { urls }),
+  analyzeUrls: (urls: string[]) =>
+    api.post(proxyUrl('/api/rfp/analyze-urls'), { urls }),
   // Backend routes are defined with a trailing slash; avoid 307 redirects.
   list: (params?: CursorListParams) =>
-    api.get<{ data: RFP[]; nextToken?: string | null }>('/api/rfp/', {
+    api.get<{ data: RFP[]; nextToken?: string | null }>(proxyUrl('/api/rfp/'), {
       params: {
         limit: params?.limit,
         nextToken: params?.nextToken,
       },
     }),
-  get: (id: string) => api.get<RFP>(`/api/rfp/${id}`),
-  update: (id: string, data: any) => api.put<RFP>(`/api/rfp/${id}`, data),
-  delete: (id: string) => api.delete(`/api/rfp/${id}`),
+  get: (id: string) => api.get<RFP>(proxyUrl(`/api/rfp/${id}`)),
+  update: (id: string, data: any) =>
+    api.put<RFP>(proxyUrl(`/api/rfp/${id}`), data),
+  updateReview: (
+    id: string,
+    data: {
+      decision?: '' | 'bid' | 'no_bid' | 'maybe'
+      notes?: string
+      reasons?: string[]
+      blockers?: {
+        id?: string
+        text: string
+        status: 'open' | 'resolved' | 'waived'
+      }[]
+      requirements?: {
+        text: string
+        status: 'unknown' | 'ok' | 'risk' | 'gap'
+        notes?: string
+        mappedSections?: string[]
+      }[]
+    },
+  ) => api.put<RFP>(proxyUrl(`/api/rfp/${id}/review`), data),
+  delete: (id: string) => api.delete(proxyUrl(`/api/rfp/${id}`)),
   getSectionTitles: (id: string) =>
-    api.post<{ titles: string[] }>(`/api/rfp/${id}/ai-section-titles`),
+    api.post<{ titles: string[] }>(
+      proxyUrl(`/api/rfp/${id}/ai-section-titles`),
+    ),
   getProposals: (id: string) =>
-    api.get<{ data: Proposal[] }>(`/api/rfp/${id}/proposals`),
+    api.get<{ data: Proposal[] }>(proxyUrl(`/api/rfp/${id}/proposals`)),
   uploadAttachments: (id: string, data: FormData) =>
-    api.post(`/api/rfp/${id}/upload-attachments`, data),
+    api.post(proxyUrl(`/api/rfp/${id}/upload-attachments`), data),
   deleteAttachment: (rfpId: string, attachmentId: string) =>
-    api.delete(`/api/rfp/${rfpId}/attachments/${attachmentId}`),
+    api.delete(proxyUrl(`/api/rfp/${rfpId}/attachments/${attachmentId}`)),
   removeBuyerProfiles: (
     rfpId: string,
     data: { selected?: string[]; clear?: boolean },
-  ) => api.post(`/api/rfp/${rfpId}/buyer-profiles/remove`, data),
+  ) => api.post(proxyUrl(`/api/rfp/${rfpId}/buyer-profiles/remove`), data),
 }
 
 // Proposal API calls
@@ -293,11 +273,24 @@ export const proposalApi = {
     title: string
     companyId?: string
     customContent?: any
-  }) => api.post<Proposal>('/api/proposals/generate', data),
+  }) => api.post<Proposal>(proxyUrl('/api/proposals/generate'), data),
+  updateContentLibrarySection: (
+    proposalId: string,
+    sectionName: string,
+    data: { type: 'team' | 'references' | 'company'; selectedIds: string[] },
+  ) =>
+    api.put(
+      proxyUrl(
+        `/api/proposals/${encodeURIComponent(
+          proposalId,
+        )}/content-library/${encodeURIComponent(sectionName)}`,
+      ),
+      data,
+    ),
   // Backend routes are defined with a trailing slash; avoid 307 redirects.
   list: (params?: CursorListParams) =>
     api.get<{ data: Proposal[]; nextToken?: string | null }>(
-      '/api/proposals/',
+      proxyUrl('/api/proposals/'),
       {
         params: {
           limit: params?.limit,
@@ -305,11 +298,11 @@ export const proposalApi = {
         },
       },
     ),
-  get: (id: string) => api.get<Proposal>(`/api/proposals/${id}`),
+  get: (id: string) => api.get<Proposal>(proxyUrl(`/api/proposals/${id}`)),
   update: (id: string, data: any) =>
-    api.put<Proposal>(`/api/proposals/${id}`, data),
+    api.put<Proposal>(proxyUrl(`/api/proposals/${id}`), data),
   setCompany: (id: string, companyId: string) =>
-    api.put<Proposal>(`/api/proposals/${id}/company`, { companyId }),
+    api.put<Proposal>(proxyUrl(`/api/proposals/${id}/company`), { companyId }),
   updateReview: (
     id: string,
     data: {
@@ -318,137 +311,182 @@ export const proposalApi = {
       notes?: string
       rubric?: any
     },
-  ) => api.put<Proposal>(`/api/proposals/${id}/review`, data),
-  delete: (id: string) => api.delete(`/api/proposals/${id}`),
+  ) => api.put<Proposal>(proxyUrl(`/api/proposals/${id}/review`), data),
+  delete: (id: string) => api.delete(proxyUrl(`/api/proposals/${id}`)),
   exportPdf: (id: string) =>
-    api.get(`/api/proposals/${id}/export/pdf`, { responseType: 'blob' }),
+    api.get(proxyUrl(`/api/proposals/${id}/export/pdf`), {
+      responseType: 'blob',
+    }),
   exportDocx: (id: string) =>
-    api.get(`/api/proposals/${id}/export-docx`, { responseType: 'blob' }),
+    api.get(proxyUrl(`/api/proposals/${id}/export-docx`), {
+      responseType: 'blob',
+    }),
 }
 
 // Canva integration API calls
 export const canvaApi = {
-  status: () => api.get(`/api/integrations/canva/status`),
-  connectUrl: (returnTo: string = '/integrations/canva') =>
-    api.get(`/api/integrations/canva/connect-url`, { params: { returnTo } }),
-  disconnect: () => api.post(`/api/integrations/canva/disconnect`),
+  status: () => api.get(proxyUrl(`/api/integrations/canva/status`)),
+  connectUrl: (returnTo: string = '/templates') =>
+    api.get(proxyUrl(`/api/integrations/canva/connect-url`), {
+      params: { returnTo },
+    }),
+  disconnect: () => api.post(proxyUrl(`/api/integrations/canva/disconnect`)),
   listBrandTemplates: (query?: string) =>
-    api.get(`/api/integrations/canva/brand-templates`, {
+    api.get(proxyUrl(`/api/integrations/canva/brand-templates`), {
       params: query ? { query } : undefined,
     }),
   getDataset: (brandTemplateId: string) =>
     api.get(
-      `/api/integrations/canva/brand-templates/${brandTemplateId}/dataset`,
+      proxyUrl(
+        `/api/integrations/canva/brand-templates/${brandTemplateId}/dataset`,
+      ),
     ),
   listCompanyMappings: () =>
-    api.get(`/api/integrations/canva/company-mappings`),
+    api.get(proxyUrl(`/api/integrations/canva/company-mappings`)),
   saveCompanyMapping: (companyId: string, data: any) =>
-    api.put(`/api/integrations/canva/company-mappings/${companyId}`, data),
+    api.put(
+      proxyUrl(`/api/integrations/canva/company-mappings/${companyId}`),
+      data,
+    ),
   getCompanyLogoLink: (companyId: string) =>
-    api.get(`/api/integrations/canva/companies/${companyId}/logo`),
+    api.get(proxyUrl(`/api/integrations/canva/companies/${companyId}/logo`)),
   uploadCompanyLogoFromUrl: (companyId: string, url: string, name?: string) =>
-    api.post(`/api/integrations/canva/companies/${companyId}/logo/upload-url`, {
-      url,
-      name,
-    }),
+    api.post(
+      proxyUrl(
+        `/api/integrations/canva/companies/${companyId}/logo/upload-url`,
+      ),
+      { url, name },
+    ),
   getTeamHeadshotLink: (memberId: string) =>
-    api.get(`/api/integrations/canva/team/${memberId}/headshot`),
+    api.get(proxyUrl(`/api/integrations/canva/team/${memberId}/headshot`)),
   uploadTeamHeadshotFromUrl: (memberId: string, url: string, name?: string) =>
-    api.post(`/api/integrations/canva/team/${memberId}/headshot/upload-url`, {
-      url,
-      name,
-    }),
+    api.post(
+      proxyUrl(`/api/integrations/canva/team/${memberId}/headshot/upload-url`),
+      { url, name },
+    ),
   createDesignFromProposal: (proposalId: string, opts?: { force?: boolean }) =>
     api.post(
-      `/api/integrations/canva/proposals/${proposalId}/create-design`,
+      proxyUrl(`/api/integrations/canva/proposals/${proposalId}/create-design`),
       null,
       {
         params: opts?.force ? { force: 1 } : undefined,
       },
     ),
   validateProposal: (proposalId: string) =>
-    api.post(`/api/integrations/canva/proposals/${proposalId}/validate`),
+    api.post(
+      proxyUrl(`/api/integrations/canva/proposals/${proposalId}/validate`),
+    ),
   exportProposalPdf: (proposalId: string) =>
-    api.get(`/api/integrations/canva/proposals/${proposalId}/export-pdf`, {
-      responseType: 'blob',
-    }),
+    api.get(
+      proxyUrl(`/api/integrations/canva/proposals/${proposalId}/export-pdf`),
+      {
+        responseType: 'blob',
+      },
+    ),
 }
 
 // Template API calls
 export const templateApi = {
   // Backend routes are defined with a trailing slash; avoid 307 redirects.
-  list: () => api.get<{ data: Template[] }>('/api/templates/'),
-  get: (id: string) => api.get(`/api/templates/${id}`),
-  create: (data: any) => api.post('/api/templates/', data),
-  update: (id: string, data: any) => api.put(`/api/templates/${id}`, data),
-  delete: (id: string) => api.delete(`/api/templates/${id}`),
+  list: () => api.get<{ data: Template[] }>(proxyUrl('/api/templates/')),
+  get: (id: string) => api.get(proxyUrl(`/api/templates/${id}`)),
+  create: (data: any) => api.post(proxyUrl('/api/templates/'), data),
+  update: (id: string, data: any) =>
+    api.put(proxyUrl(`/api/templates/${id}`), data),
+  delete: (id: string) => api.delete(proxyUrl(`/api/templates/${id}`)),
   preview: (id: string, rfpData?: any) =>
-    api.get(`/api/templates/${id}/preview`, { params: rfpData }),
+    api.get(proxyUrl(`/api/templates/${id}/preview`), { params: rfpData }),
 }
 
 // Content API calls
 export const contentApi = {
-  getCompany: () => api.get('/api/content/company'),
-  getCompanies: () => api.get('/api/content/companies'),
+  getCompany: () => api.get(proxyUrl('/api/content/company')),
+  getCompanies: () => api.get(proxyUrl('/api/content/companies')),
   getCompanyById: (companyId: string) =>
-    api.get(`/api/content/companies/${companyId}`),
-  createCompany: (data: any) => api.post('/api/content/companies', data),
-  updateCompany: (data: any) => api.put('/api/content/company', data),
+    api.get(proxyUrl(`/api/content/companies/${companyId}`)),
+  regenerateCompanyCapabilities: (companyId: string) =>
+    api.post(
+      proxyUrl(`/api/content/companies/${companyId}/capabilities/regenerate`),
+    ),
+  createCompany: (data: any) =>
+    api.post(proxyUrl('/api/content/companies'), data),
+  updateCompany: (data: any) => api.put(proxyUrl('/api/content/company'), data),
   updateCompanyById: (companyId: string, data: any) =>
-    api.put(`/api/content/companies/${companyId}`, data),
+    api.put(proxyUrl(`/api/content/companies/${companyId}`), data),
   deleteCompany: (companyId: string) =>
-    api.delete(`/api/content/companies/${companyId}`),
-  getTeam: () => api.get('/api/content/team'),
-  getTeamMember: (id: string) => api.get(`/api/content/team/${id}`),
+    api.delete(proxyUrl(`/api/content/companies/${companyId}`)),
+  getTeam: () => api.get(proxyUrl('/api/content/team')),
+  getTeamMember: (id: string) => api.get(proxyUrl(`/api/content/team/${id}`)),
   presignTeamHeadshotUpload: (data: {
     fileName: string
     contentType: string
     memberId?: string
-  }) => api.post(`/api/content/team/headshot/presign`, data),
-  createTeamMember: (data: any) => api.post('/api/content/team', data),
+  }) => api.post(proxyUrl(`/api/content/team/headshot/presign`), data),
+  createTeamMember: (data: any) =>
+    api.post(proxyUrl('/api/content/team'), data),
   updateTeamMember: (memberId: string, data: any) =>
-    api.put(`/api/content/team/${memberId}`, data),
+    api.put(proxyUrl(`/api/content/team/${memberId}`), data),
   deleteTeamMember: (memberId: string) =>
-    api.delete(`/api/content/team/${memberId}`),
-  getProjects: () => api.get('/api/content/projects'),
-  getProjectById: (id: string) => api.get(`/api/content/projects/${id}`),
-  createProject: (data: any) => api.post('/api/content/projects', data),
+    api.delete(proxyUrl(`/api/content/team/${memberId}`)),
+  getProjects: (params?: {
+    companyId?: string
+    projectType?: string
+    industry?: string
+    count?: number
+  }) => api.get(proxyUrl('/api/content/projects'), { params }),
+  getProjectById: (id: string) =>
+    api.get(proxyUrl(`/api/content/projects/${id}`)),
+  createProject: (data: any) =>
+    api.post(proxyUrl('/api/content/projects'), data),
   updateProject: (id: string, data: any) =>
-    api.put(`/api/content/projects/${id}`, data),
-  deleteProject: (id: string) => api.delete(`/api/content/projects/${id}`),
-  getReferences: (projectType?: string) =>
-    api.get('/api/content/references', {
-      params: { project_type: projectType },
+    api.put(proxyUrl(`/api/content/projects/${id}`), data),
+  deleteProject: (id: string) =>
+    api.delete(proxyUrl(`/api/content/projects/${id}`)),
+  getReferences: (params?: {
+    projectType?: string
+    companyId?: string
+    count?: number
+  }) =>
+    api.get(proxyUrl('/api/content/references'), {
+      params: {
+        project_type: params?.projectType,
+        companyId: params?.companyId,
+        count: params?.count,
+      },
     }),
-  getReferenceById: (id: string) => api.get(`/api/content/references/${id}`),
-  createReference: (data: any) => api.post('/api/content/references', data),
+  getReferenceById: (id: string) =>
+    api.get(proxyUrl(`/api/content/references/${id}`)),
+  createReference: (data: any) =>
+    api.post(proxyUrl('/api/content/references'), data),
   updateReference: (id: string, data: any) =>
-    api.put(`/api/content/references/${id}`, data),
-  deleteReference: (id: string) => api.delete(`/api/content/references/${id}`),
+    api.put(proxyUrl(`/api/content/references/${id}`), data),
+  deleteReference: (id: string) =>
+    api.delete(proxyUrl(`/api/content/references/${id}`)),
 }
 
 // AI API calls
 export const aiApi = {
   editText: (data: { text?: string; selectedText?: string; prompt: string }) =>
-    api.post('/api/ai/edit-text', data),
+    api.post(proxyUrl('/api/ai/edit-text'), data),
   generateContent: (data: {
     prompt: string
     context?: string
     contentType?: string
-  }) => api.post('/api/ai/generate-content', data),
+  }) => api.post(proxyUrl('/api/ai/generate-content'), data),
 }
 
 // Finder (LinkedIn) API calls
 export const finderApi = {
   getStorageStateStatus: () =>
     api.get<{ connected: boolean }>(
-      '/api/finder/linkedin/storage-state/status',
+      proxyUrl('/api/finder/linkedin/storage-state/status'),
     ),
-  validateSession: () => api.get('/api/finder/linkedin/session/validate'),
+  validateSession: () =>
+    api.get(proxyUrl('/api/finder/linkedin/session/validate')),
   uploadStorageState: (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    return api.post('/api/finder/linkedin/storage-state', formData, {
+    return api.post(proxyUrl('/api/finder/linkedin/storage-state'), formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     })
   },
@@ -458,10 +496,12 @@ export const finderApi = {
     companyLinkedInUrl?: string
     maxPeople?: number
     targetTitles?: string[]
-  }) => api.post('/api/finder/runs', data),
-  getRun: (runId: string) => api.get(`/api/finder/runs/${runId}`),
+  }) => api.post(proxyUrl('/api/finder/runs'), data),
+  getRun: (runId: string) => api.get(proxyUrl(`/api/finder/runs/${runId}`)),
   listProfiles: (runId: string, limit: number = 200) =>
-    api.get(`/api/finder/runs/${runId}/profiles`, { params: { limit } }),
+    api.get(proxyUrl(`/api/finder/runs/${runId}/profiles`), {
+      params: { limit },
+    }),
   saveTopToRfp: (
     runId: string,
     data: {
@@ -470,29 +510,29 @@ export const finderApi = {
       mode?: 'merge' | 'overwrite'
       selected?: string[]
     },
-  ) => api.post(`/api/finder/runs/${runId}/save-to-rfp`, data),
+  ) => api.post(proxyUrl(`/api/finder/runs/${runId}/save-to-rfp`), data),
 }
 
 export const profileApi = {
-  get: () => api.get<CognitoProfileResponse>('/api/profile'),
+  get: () => api.get<CognitoProfileResponse>(proxyUrl('/api/profile')),
   updateAttributes: (attributes: { name: string; value: string | null }[]) =>
-    api.put<CognitoProfileResponse>('/api/profile/attributes', { attributes }),
+    api.put<CognitoProfileResponse>(proxyUrl('/api/profile/attributes'), {
+      attributes,
+    }),
   deleteAttribute: (name: string) =>
     api.delete<CognitoProfileResponse>(
-      `/api/profile/attributes/${encodeURIComponent(name)}`,
+      proxyUrl(`/api/profile/attributes/${encodeURIComponent(name)}`),
     ),
 }
 
 export const magicLinkApi = {
   request: (data: { email: string; username?: string; returnTo?: string }) =>
-    api.post('/api/auth/magic-link/request', data),
+    api.post('/api/session/magic-link/request', data),
   verify: (data: { magicId: string; code: string }) =>
     api.post<{
-      access_token: string
-      token_type: string
-      expires_in: string
-      returnTo?: string
-    }>('/api/auth/magic-link/verify', data),
+      ok: boolean
+      returnTo?: string | null
+    }>('/api/session/magic-link/verify', data),
 }
 export const proposalApiPdf = {
   generate: (data: {
@@ -500,10 +540,10 @@ export const proposalApiPdf = {
     templateId: string
     title: string
     customContent?: any
-  }) => api.post<Proposal>('/api/proposals/generate', data),
+  }) => api.post<Proposal>(proxyUrl('/api/proposals/generate'), data),
   list: (params?: CursorListParams) =>
     api.get<{ data: Proposal[]; nextToken?: string | null }>(
-      '/api/proposals/',
+      proxyUrl('/api/proposals/'),
       {
         params: {
           limit: params?.limit,
@@ -511,16 +551,20 @@ export const proposalApiPdf = {
         },
       },
     ),
-  get: (id: string) => api.get<Proposal>(`/api/proposals/${id}`),
+  get: (id: string) => api.get<Proposal>(proxyUrl(`/api/proposals/${id}`)),
   update: (id: string, data: any) =>
-    api.put<Proposal>(`/api/proposals/${id}`, data),
-  delete: (id: string) => api.delete(`/api/proposals/${id}`),
+    api.put<Proposal>(proxyUrl(`/api/proposals/${id}`), data),
+  delete: (id: string) => api.delete(proxyUrl(`/api/proposals/${id}`)),
 
   // ✅ FIXED ENDPOINT
   exportPdf: (id: string) =>
-    api.get(`/api/proposals/${id}/export-pdf`, { responseType: 'blob' }),
+    api.get(proxyUrl(`/api/proposals/${id}/export-pdf`), {
+      responseType: 'blob',
+    }),
   exportDocx: (id: string) =>
-    api.get(`/api/proposals/${id}/export-docx`, { responseType: 'blob' }),
+    api.get(proxyUrl(`/api/proposals/${id}/export-docx`), {
+      responseType: 'blob',
+    }),
 }
 
 export default api

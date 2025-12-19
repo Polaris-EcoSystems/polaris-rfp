@@ -151,6 +151,8 @@ def update_rfp(rfp_id: str, updates_obj: dict[str, Any]) -> dict[str, Any] | Non
         "clarificationQuestions",
         "sectionTitles",
         "buyerProfiles",
+        # Review workflow (bid/no-bid decision, notes, etc.)
+        "review",
     }
 
     updates = {k: v for k, v in (updates_obj or {}).items() if k in allowed}

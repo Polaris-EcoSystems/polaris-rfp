@@ -41,6 +41,11 @@ class Settings(BaseSettings):
         default=None, validation_alias="MAGIC_LINK_TABLE_NAME"
     )
 
+    # Auth (Email allowlist)
+    allowed_email_domain: str = Field(
+        default="polariseco.com", validation_alias="ALLOWED_EMAIL_DOMAIN"
+    )
+
     # Misc integrations
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_model: str = Field(default="gpt-4o-mini", validation_alias="OPENAI_MODEL")

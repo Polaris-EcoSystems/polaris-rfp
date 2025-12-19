@@ -1,5 +1,6 @@
 # Frontend Environment Variables
 NEXT_PUBLIC_API_BASE_URL=https://api.rfp.polariseco.com
+NEXT_PUBLIC_ALLOWED_EMAIL_DOMAIN=polariseco.com
 NODE_ENV=development
 
 # Backend (FastAPI) Environment Variables
@@ -7,6 +8,7 @@ PORT=8080
 NODE_ENV=development
 FRONTEND_BASE_URL=http://localhost:3000
 FRONTEND_URL=http://localhost:3000
+ALLOWED_EMAIL_DOMAIN=polariseco.com
 
 # DynamoDB
 # For AWS: set DDB_TABLE_NAME to the deployed table name (e.g. polaris-rfp-production)
