@@ -433,7 +433,10 @@ Resources:
                 - Name: OPENAI_API_KEY
                   ValueFrom: !If
                     - UseOpenAiApiKeySecretJsonKey
-                    - !Sub '${OpenAiApiKeySecretArn}:SecretString:${OpenAiApiKeySecretJsonKey}::'
+                    # ECS Secrets Manager JSON key syntax:
+                    # arn:aws:secretsmanager:region:acct:secret:secret-id:json-key:version-stage:version-id
+                    # (note: no "SecretString" segment)
+                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
                     - !Ref OpenAiApiKeySecretArn
                 - !Ref AWS::NoValue
             - - !If
@@ -441,7 +444,7 @@ Resources:
                 - Name: OPENAI_API_KEY
                   ValueFrom: !If
                     - UseOpenAiApiKeySecretJsonKey
-                    - !Sub '${OpenAiApiKeySecretArn}:SecretString:${OpenAiApiKeySecretJsonKey}::'
+                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
                     - !Ref OpenAiApiKeySecretArn
                 - !Ref AWS::NoValue
           LogConfiguration:
