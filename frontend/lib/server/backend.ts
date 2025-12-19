@@ -20,3 +20,4 @@ export function getBackendBaseUrl(): string {
   return base.replace(/\/+$/, '')
 }
 
+

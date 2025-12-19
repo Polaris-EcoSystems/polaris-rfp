@@ -7,3 +7,4 @@ export function sessionCookieName(): string {
   return SESSION_COOKIE_NAME
 }
 
+

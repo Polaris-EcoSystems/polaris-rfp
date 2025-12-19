@@ -53,3 +53,4 @@ class DdbUnavailable(DdbError):
 class DdbInternal(DdbError):
     pass
 
+

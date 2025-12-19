@@ -1734,3 +1734,4 @@ export default function ProposalDetailPage() {
   )
 }
 
+
