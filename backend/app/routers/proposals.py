@@ -8,10 +8,10 @@ from typing import Any
 from docx import Document
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from openai import OpenAI
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
+from ..ai.client import AiError, call_text
 from ..settings import settings
 from ..services import content_repo, templates_repo
 from ..services.proposals_repo import (
@@ -36,12 +36,6 @@ router = APIRouter(tags=["proposals"])
 log = get_logger("proposals")
 
 
-def _openai() -> OpenAI | None:
-    if not settings.openai_api_key:
-        return None
-    return OpenAI(api_key=settings.openai_api_key)
-
-
 def _now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
@@ -50,10 +44,6 @@ def _generate_text_section(
     title: str, rfp: dict[str, Any], company: dict[str, Any] | None
 ) -> str:
     if not settings.openai_api_key:
-        return f"{title}\n\n(This section will be completed in the proposal editor.)"
-
-    client = _openai()
-    if not client:
         return f"{title}\n\n(This section will be completed in the proposal editor.)"
 
     prompt = (
@@ -69,14 +59,17 @@ def _generate_text_section(
         "Return ONLY the section content."
     )
 
-    completion = client.chat.completions.create(
-        model=settings.openai_model_for("proposal_sections"),
-        temperature=0.4,
-        max_tokens=1200,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    return (completion.choices[0].message.content or "").strip() or ""
+    try:
+        out, _meta = call_text(
+            purpose="proposal_sections",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1200,
+            temperature=0.4,
+            retries=2,
+        )
+        return out.strip() or ""
+    except AiError:
+        return f"{title}\n\n(This section will be completed in the proposal editor.)"
 
 
 def _build_team_section(selected_ids: list[str], rfp: dict[str, Any]) -> str:

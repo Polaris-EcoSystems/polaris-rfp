@@ -3,8 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from openai import OpenAI
-
+from ..ai.client import AiError, call_text
 from ..settings import settings
 
 
@@ -129,7 +128,6 @@ def format_experience_section(company: dict[str, Any] | None, rfp: dict[str, Any
     # Optional AI formatting (matches Node's behavior when OpenAI is configured)
     if settings.openai_api_key and company.get("firmQualificationsAndExperience"):
         try:
-            client = OpenAI(api_key=settings.openai_api_key)
             prompt = (
                 "Take the following company qualifications and experience content and format it professionally for an RFP proposal. "
                 "Keep the formatting simple and clean.\n\n"
@@ -150,15 +148,17 @@ def format_experience_section(company: dict[str, Any] | None, rfp: dict[str, Any
                 "Return only the clean, simply formatted content without markdown headings or excessive structure."
             )
 
-            completion = client.chat.completions.create(
-                model=settings.openai_model_for("proposal_sections"),
-                temperature=0.3,
-                max_tokens=2000,
+            formatted, _meta = call_text(
+                purpose="proposal_sections",
                 messages=[{"role": "user", "content": prompt}],
+                max_tokens=2000,
+                temperature=0.3,
+                retries=2,
             )
-            formatted = (completion.choices[0].message.content or "").strip()
             if formatted:
                 return formatted
+        except AiError:
+            pass
         except Exception:
             pass
 

@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
-from openai import OpenAI
-
+from ..ai.client import AiError, call_json
+from ..ai.schemas import BuyerEnrichmentAI
 from ..settings import settings
 
 
@@ -97,12 +96,6 @@ def score_buyer_likelihood(
     return score, reasons
 
 
-def _client() -> OpenAI:
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY not configured")
-    return OpenAI(api_key=settings.openai_api_key)
-
-
 def enrich_buyer_profile_with_ai(
     *,
     person: dict[str, Any],
@@ -138,28 +131,22 @@ def enrich_buyer_profile_with_ai(
         f"Person:\n- name: {name}\n- title: {title}\n- location: {location}\n- profileUrl: {profile_url}\n"
     )
 
-    completion = _client().chat.completions.create(
-        model=settings.openai_model_for("buyer_enrichment"),
-        temperature=0.4,
-        max_tokens=900,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    content = (completion.choices[0].message.content or "").strip()
-
-    import json
-
     try:
-        data = json.loads(content)
-    except Exception:
-        m = re.search(r"\{[\s\S]*\}", content)
-        if not m:
-            return person
-        data = json.loads(m.group(0))
-
-    if isinstance(data, dict):
+        parsed, _meta = call_json(
+            purpose="buyer_enrichment",
+            response_model=BuyerEnrichmentAI,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=900,
+            temperature=0.4,
+            retries=2,
+            # If AI fails, just leave profile un-enriched.
+            fallback=None,
+        )
         person = dict(person)
-        person["ai"] = data
-    return person
+        person["ai"] = parsed.model_dump()
+        return person
+    except AiError:
+        return person
 
 
 

@@ -1,18 +1,26 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
-from openai import OpenAI
-
-from ..settings import settings
+from ..ai.client import AiError, AiNotConfigured, call_json
+from ..ai.schemas import SectionTitlesAI
 
 
 def generate_section_titles(rfp: dict[str, Any]) -> list[str]:
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY not configured")
-
-    client = OpenAI(api_key=settings.openai_api_key)
+    def _fallback() -> list[str]:
+        # A sensible default list that keeps proposal generation usable.
+        return [
+            "Executive Summary",
+            "Understanding of Requirements",
+            "Approach and Methodology",
+            "Project Plan and Schedule",
+            "Team and Qualifications",
+            "Relevant Experience",
+            "Pricing and Budget",
+            "Risk Management",
+            "Deliverables",
+            "Appendices",
+        ]
 
     prompt = (
         "Given the following RFP summary, propose a concise list of proposal section titles.\n"
@@ -24,25 +32,18 @@ def generate_section_titles(rfp: dict[str, Any]) -> list[str]:
         f"DELIVERABLES: {', '.join(rfp.get('deliverables') or [])}\n"
     )
 
-    completion = client.chat.completions.create(
-        model=settings.openai_model_for("section_titles"),
-        temperature=0.2,
-        max_tokens=400,
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    content = (completion.choices[0].message.content or "").strip()
-
     try:
-        data = json.loads(content)
-        titles = data.get("titles")
-        if isinstance(titles, list):
-            out = [str(t).strip() for t in titles if str(t).strip()]
-            return out[:30]
-    except Exception:
-        pass
-
-    # fallback: split lines
-    lines = [ln.strip("-•* \t") for ln in content.splitlines()]
-    lines = [ln for ln in lines if ln]
-    return lines[:30]
+        parsed, _meta = call_json(
+            purpose="section_titles",
+            response_model=SectionTitlesAI,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400,
+            temperature=0.2,
+            retries=2,
+        )
+        out = [str(t).strip() for t in (parsed.titles or []) if str(t).strip()]
+        return out[:30] if out else _fallback()
+    except AiNotConfigured:
+        return _fallback()
+    except AiError:
+        return _fallback()

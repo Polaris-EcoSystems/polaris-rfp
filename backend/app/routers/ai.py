@@ -1,33 +1,35 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from openai import OpenAI
+from pydantic import ValidationError
 
+from ..ai.client import AiNotConfigured, AiUpstreamError, call_text
+from ..ai.schemas import (
+    AiEditTextRequest,
+    AiEditTextResponse,
+    AiGenerateContentRequest,
+    AiGenerateContentResponse,
+)
 from ..settings import settings
 
 router = APIRouter(tags=["ai"])
 
 
-def _client() -> OpenAI:
-    if not settings.openai_api_key:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
-    return OpenAI(api_key=settings.openai_api_key)
-
-
 @router.post("/edit-text")
 def edit_text(body: dict):
-    text = (body or {}).get("text")
-    selected_text = (body or {}).get("selectedText")
-    prompt = str((body or {}).get("prompt") or "").strip()
+    try:
+        req = AiEditTextRequest.model_validate(body or {})
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    if not text and not selected_text:
-        raise HTTPException(
-            status_code=400, detail="Either text or selectedText must be provided"
-        )
+    if not (req.text or req.selectedText):
+        raise HTTPException(status_code=400, detail="Either text or selectedText must be provided")
+
+    prompt = str(req.prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is required")
 
-    text_to_process = str(selected_text or text or "")
+    text_to_process = str(req.selectedText or req.text or "")
 
     system_prompt = (
         "You are an expert proposal writer and editor. Your PRIMARY GOAL is to "
@@ -57,24 +59,27 @@ def edit_text(body: dict):
     )
 
     try:
-        completion = _client().chat.completions.create(
-            model=settings.openai_model_for("text_edit"),
+        edited_text, _meta = call_text(
+            purpose="text_edit",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=4000,
             temperature=0.7,
+            retries=2,
         )
-        edited_text = (completion.choices[0].message.content or "").strip()
-        return {
-            "success": True,
-            "editedText": edited_text,
-            "originalText": text_to_process,
-            "prompt": prompt,
-        }
+        return AiEditTextResponse(
+            editedText=edited_text,
+            originalText=text_to_process,
+            prompt=prompt,
+        ).model_dump()
     except HTTPException:
         raise
+    except AiNotConfigured:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    except AiUpstreamError as e:
+        raise HTTPException(status_code=502, detail={"error": "AI upstream failure", "details": str(e)})
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -84,12 +89,17 @@ def edit_text(body: dict):
 
 @router.post("/generate-content")
 def generate_content(body: dict):
-    prompt = str((body or {}).get("prompt") or "").strip()
-    context = (body or {}).get("context")
-    content_type = str((body or {}).get("contentType") or "general")
+    try:
+        req = AiGenerateContentRequest.model_validate(body or {})
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
+    prompt = str(req.prompt or "").strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt is required")
+
+    context = req.context
+    content_type = str(req.contentType or "general")
 
     system_prompt = (
         "You are an expert proposal writer and business content specialist. Your "
@@ -121,24 +131,27 @@ def generate_content(body: dict):
     )
 
     try:
-        completion = _client().chat.completions.create(
-            model=settings.openai_model_for("generate_content"),
+        generated, _meta = call_text(
+            purpose="generate_content",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=4000,
             temperature=0.6,
+            retries=2,
         )
-        generated = (completion.choices[0].message.content or "").strip()
-        return {
-            "success": True,
-            "content": generated,
-            "prompt": prompt,
-            "contentType": content_type,
-        }
+        return AiGenerateContentResponse(
+            content=generated,
+            prompt=prompt,
+            contentType=content_type,
+        ).model_dump()
     except HTTPException:
         raise
+    except AiNotConfigured:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    except AiUpstreamError as e:
+        raise HTTPException(status_code=502, detail={"error": "AI upstream failure", "details": str(e)})
     except Exception as e:
         raise HTTPException(
             status_code=500,

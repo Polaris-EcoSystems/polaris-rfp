@@ -4,7 +4,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from openai import OpenAI
+from ..ai.client import AiError, AiNotConfigured, call_json
+from ..ai.schemas import CapabilitiesStatementAI
 
 from ..settings import settings
 from . import content_repo
@@ -127,12 +128,6 @@ def _fallback_statement(
     return statement, meta
 
 
-def _openai_client() -> OpenAI:
-    if not settings.openai_api_key:
-        raise RuntimeError("OPENAI_API_KEY not configured")
-    return OpenAI(api_key=settings.openai_api_key)
-
-
 def _generate_with_openai(
     company: dict[str, Any],
     projects: list[dict[str, Any]],
@@ -223,60 +218,32 @@ def _generate_with_openai(
         },
     }
 
-    completion = _openai_client().chat.completions.create(
-        model=settings.openai_model_for("generate_content"),
+    parsed, meta = call_json(
+        purpose="generate_content",
+        response_model=CapabilitiesStatementAI,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(user_prompt)},
         ],
         max_tokens=2000,
         temperature=0.3,
+        retries=2,
+        # If AI fails, let caller fall back to deterministic statement.
+        fallback=None,
     )
 
-    raw = (completion.choices[0].message.content or "").strip()
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        # If parsing fails, store the raw text as the statement.
-        statement = raw or ""
-        meta = {
-            "generatedAt": _now_iso(),
-            "generator": "openai_unparsed",
-            "model": settings.openai_model_for("generate_content"),
-            "projectIds": [str(p.get("projectId") or "") for p in projects_payload if p.get("projectId")],
-            "referenceIds": [str(r.get("referenceId") or "") for r in refs_payload if r.get("referenceId")],
-        }
-        return statement, meta
-
-    statement = str(parsed.get("statementMarkdown") or "").strip()
-    proj_ids = _clean_list(parsed.get("projectIds"), max_items=50)
-    ref_ids = _clean_list(parsed.get("referenceIds"), max_items=50)
-    caps = _clean_list(parsed.get("capabilities"), max_items=50)
-    limits = _clean_list(parsed.get("limitations"), max_items=50)
-    evidence_items: list[dict[str, str]] = []
-    for it in parsed.get("evidenceItems") or []:
-        if not isinstance(it, dict):
-            continue
-        t = str(it.get("type") or "").strip().lower()
-        if t not in ("project", "reference"):
-            continue
-        _id = str(it.get("id") or "").strip()
-        if not _id:
-            continue
-        label = str(it.get("label") or "").strip()
-        evidence_items.append({"type": t, "id": _id, "label": label or f"{t.title()} {_id}"})
-
-    meta = {
+    statement = str(parsed.statementMarkdown or "").strip()
+    meta_out = {
         "generatedAt": _now_iso(),
         "generator": "openai",
-        "model": settings.openai_model_for("generate_content"),
-        "projectIds": proj_ids,
-        "referenceIds": ref_ids,
-        "capabilities": caps,
-        "limitations": limits,
-        "evidenceItems": evidence_items[:200],
+        "model": meta.model,
+        "projectIds": _clean_list(parsed.projectIds, max_items=50),
+        "referenceIds": _clean_list(parsed.referenceIds, max_items=50),
+        "capabilities": _clean_list(parsed.capabilities, max_items=50),
+        "limitations": _clean_list(parsed.limitations, max_items=50),
+        "evidenceItems": [it.model_dump() for it in (parsed.evidenceItems or [])][:200],
     }
-    return statement, meta
+    return statement, meta_out
 
 
 def regenerate_company_capabilities(company_id: str) -> dict[str, Any] | None:
