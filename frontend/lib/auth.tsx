@@ -37,7 +37,7 @@ interface AuthContextType {
     magicId: string,
     code: string,
     remember?: boolean,
-  ) => Promise<{ ok: boolean; returnTo?: string }>
+  ) => Promise<{ ok: boolean; returnTo?: string; error?: string }>
   logout: () => Promise<void>
   loading: boolean
 }
@@ -110,7 +110,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     magicIdOrEmail: string,
     code: string,
     remember: boolean = true,
-  ): Promise<{ ok: boolean; returnTo?: string }> => {
+  ): Promise<{ ok: boolean; returnTo?: string; error?: string }> => {
     try {
       const val = String(magicIdOrEmail || '').trim()
       const payload: any = { code }
@@ -118,14 +118,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       else payload.magicId = val
 
       payload.remember = Boolean(remember)
-      const resp = await fetchJson<{ ok: boolean; returnTo?: string | null }>(
-        '/api/session/magic-link/verify',
-        {
-          method: 'POST',
-          body: JSON.stringify(payload),
-        },
-      )
-      if (!resp.ok || !resp.data?.ok) return { ok: false }
+      const resp = await fetchJson<{
+        ok: boolean
+        returnTo?: string | null
+        error?: string
+      }>('/api/session/magic-link/verify', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+      if (!resp.ok || !resp.data?.ok) {
+        return {
+          ok: false,
+          error:
+            (typeof resp.data?.error === 'string' && resp.data.error) ||
+            'Invalid or expired magic link',
+        }
+      }
       await fetchCurrentUser()
       return {
         ok: true,
@@ -135,7 +143,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             : undefined,
       }
     } catch (_e) {
-      return { ok: false }
+      return { ok: false, error: 'Magic link verification failed' }
     }
   }
 

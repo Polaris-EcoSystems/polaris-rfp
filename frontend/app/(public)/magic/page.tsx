@@ -30,28 +30,41 @@ export default function MagicLinkPage() {
     const run = async () => {
       setLoading(true)
       try {
-        // Prefer magicId (mid) when present: it pins to the exact auth session.
-        // Email-based lookup can fail if multiple magic links were requested quickly.
-        const idOrEmail = mid || email
-        if (!idOrEmail || !code) {
+        if (!code || (!mid && !email)) {
           toast.error('Invalid magic link')
           router.replace('/login')
           return
         }
 
         // Guard against double-submits (can happen due to re-renders / param object identity changes).
-        const key = `${idOrEmail}::${code}`
+        const key = `${mid || email}::${code}`
         if (ranKeyRef.current === key) return
         ranKeyRef.current = key
 
-        const res = await verifyMagicLink(idOrEmail, code, true)
-        if (!res.ok) {
-          toast.error('Magic link expired or invalid')
+        // Robust verification strategy:
+        // 1) If magicId is present, try that first (pins to specific session).
+        // 2) If that fails and email exists, retry with email (handles missing MAGIC# entry, etc).
+        const attempts = [mid, email].filter(Boolean)
+        let ok = false
+        let finalReturnTo: string | undefined
+        let lastErr = ''
+        for (const a of attempts) {
+          const res = await verifyMagicLink(a, code, true)
+          if (res.ok) {
+            ok = true
+            finalReturnTo = res.returnTo || undefined
+            break
+          }
+          lastErr = String(res.error || '')
+        }
+
+        if (!ok) {
+          toast.error(lastErr || 'Magic link expired or invalid')
           router.replace('/login')
           return
         }
 
-        const dest = res.returnTo || returnTo || '/'
+        const dest = finalReturnTo || returnTo || '/'
         router.replace(dest)
       } finally {
         setLoading(false)
