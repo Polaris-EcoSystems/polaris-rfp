@@ -22,7 +22,9 @@ export default function MagicLinkPage() {
     const run = async () => {
       setLoading(true)
       try {
-        const idOrEmail = email || mid
+        // Prefer magicId (mid) when present: it pins to the exact auth session.
+        // Email-based lookup can fail if multiple magic links were requested quickly.
+        const idOrEmail = mid || email
         if (!idOrEmail || !code) {
           toast.error('Invalid magic link')
           router.replace('/login')
