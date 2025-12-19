@@ -116,6 +116,20 @@ def request_magic_link(body: MagicLinkRequest):
             user_pool_id=settings.cognito_user_pool_id, username=email
         )
         status = str(u.get("UserStatus") or "")
+        # If the user exists but is not confirmed, confirm them so custom auth works.
+        # This can happen if a user was created via a different flow or left UNCONFIRMED.
+        if status == "UNCONFIRMED":
+            try:
+                cognito_idp.admin_confirm_sign_up(
+                    user_pool_id=settings.cognito_user_pool_id, email=email
+                )
+            except Exception as e:
+                # Enumeration-safe: still return ok (but log for operators)
+                log.warning(
+                    "magic_link_user_confirm_failed",
+                    email_domain=email.split("@", 1)[1] if "@" in email else None,
+                    error=str(e),
+                )
         # Users created via AdminCreateUser can be stuck in FORCE_CHANGE_PASSWORD, which blocks auth flows.
         if status == "FORCE_CHANGE_PASSWORD":
             try:
@@ -263,11 +277,30 @@ def verify_magic_link(body: MagicLinkVerify):
             continue
 
         try:
-            resp = cognito_idp.respond_to_custom_challenge(
-                session=session,
-                email=email,
-                answer=code,
-            )
+            def _respond() -> dict:
+                return cognito_idp.respond_to_custom_challenge(
+                    session=session,
+                    email=email,
+                    answer=code,
+                )
+
+            try:
+                resp = _respond()
+            except Exception as e:
+                # If the user exists but is not confirmed, Cognito will reject the challenge.
+                # Confirm and retry once (does not leak code validity; still returns generic error on failure).
+                if type(e).__name__ == "UserNotConfirmedException" or "UserNotConfirmedException" in str(
+                    e
+                ):
+                    try:
+                        cognito_idp.admin_confirm_sign_up(
+                            user_pool_id=settings.cognito_user_pool_id, email=email
+                        )
+                        resp = _respond()
+                    except Exception:
+                        raise e
+                else:
+                    raise e
             auth = resp.get("AuthenticationResult") or {}
             id_token = auth.get("IdToken")
             if not id_token:
