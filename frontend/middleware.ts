@@ -6,17 +6,27 @@ const SESSION_COOKIE =
     ? '__Host-polaris_session'
     : 'polaris_session'
 
+function normalizePath(pathname: string): string {
+  // With `trailingSlash: true`, Next routes often look like `/login/`.
+  // Normalize to no trailing slash (except root) so public route checks are stable.
+  const p = String(pathname || '')
+  if (p === '/') return '/'
+  return p.replace(/\/+$/, '')
+}
+
 function isPublicPath(pathname: string): boolean {
-  if (pathname === '/login') return true
-  if (pathname === '/signup') return true
-  if (pathname === '/magic') return true
-  if (pathname === '/reset-password') return true
-  if (pathname.startsWith('/reset-password/')) return true
+  const p = normalizePath(pathname)
+  if (p === '/login') return true
+  if (p === '/signup') return true
+  if (p === '/magic') return true
+  if (p === '/reset-password') return true
+  if (p.startsWith('/reset-password/')) return true
   return false
 }
 
 export function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl
+  const normalizedPath = normalizePath(pathname)
 
   // Never gate Next internals / static assets / API routes.
   if (
@@ -36,7 +46,20 @@ export function middleware(req: NextRequest) {
 
   const loginUrl = req.nextUrl.clone()
   loginUrl.pathname = '/login'
-  const from = `${pathname}${search || ''}`
+
+  // Avoid infinite recursion: never set `from` to a login-ish URL.
+  let from = `${normalizedPath}${search || ''}`
+  if (
+    from === '/login' ||
+    from === '/login/' ||
+    from.startsWith('/login?') ||
+    from.startsWith('/login/?')
+  ) {
+    from = '/'
+  }
+  // Hard cap to prevent gigantic URLs (CloudFront 413).
+  if (from.length > 1024) from = '/'
+
   loginUrl.searchParams.set('from', from)
   return NextResponse.redirect(loginUrl)
 }
