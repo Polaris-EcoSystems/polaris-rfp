@@ -14,9 +14,17 @@ export default function MagicLinkPage() {
   const ranKeyRef = useRef<string>('')
 
   useEffect(() => {
-    const mid = searchParams.get('mid') || ''
+    const mid =
+      searchParams.get('mid') ||
+      searchParams.get('magicId') ||
+      searchParams.get('magic_id') ||
+      ''
     const email = searchParams.get('email') || ''
-    const code = searchParams.get('code') || ''
+    const code =
+      searchParams.get('code') ||
+      searchParams.get('c') ||
+      searchParams.get('otp') ||
+      ''
     const returnTo = searchParams.get('returnTo') || ''
 
     const run = async () => {

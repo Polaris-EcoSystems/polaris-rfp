@@ -41,8 +41,19 @@ export async function POST(req: Request) {
       : fallback
 
     if (!upstream.ok) {
+      const detail =
+        (typeof data?.detail === 'string' && data.detail) ||
+        (typeof data?.title === 'string' && data.title) ||
+        null
       return NextResponse.json(
-        { ok: false, error: data?.error || data?.message || 'Verify failed' },
+        {
+          ok: false,
+          error:
+            data?.error ||
+            data?.message ||
+            detail ||
+            'Invalid or expired magic link',
+        },
         { status: upstream.status || 400 },
       )
     }
