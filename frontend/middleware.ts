@@ -1,5 +1,11 @@
 import type { NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
+import {
+  DEFAULT_LOCALE,
+  isSupportedLocale,
+  LOCALE_COOKIE,
+  pickLocaleFromAcceptLanguage,
+} from './lib/i18n'
 
 const SESSION_COOKIE =
   process.env.NODE_ENV === 'production'
@@ -28,21 +34,58 @@ export function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl
   const normalizedPath = normalizePath(pathname)
 
+  const existingLocale = req.cookies.get(LOCALE_COOKIE)?.value
+  const locale = isSupportedLocale(existingLocale)
+    ? existingLocale
+    : pickLocaleFromAcceptLanguage(req.headers.get('accept-language'))
+
+  const shouldSetLocaleCookie =
+    !isSupportedLocale(existingLocale) || existingLocale !== locale
+
   // Never gate Next internals / static assets / API routes.
   if (
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon') ||
     pathname.startsWith('/api')
   ) {
-    return NextResponse.next()
+    const res = NextResponse.next()
+    if (shouldSetLocaleCookie) {
+      res.cookies.set(LOCALE_COOKIE, locale || DEFAULT_LOCALE, {
+        path: '/',
+        sameSite: 'lax',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+      })
+    }
+    return res
   }
 
   if (isPublicPath(pathname)) {
-    return NextResponse.next()
+    const res = NextResponse.next()
+    if (shouldSetLocaleCookie) {
+      res.cookies.set(LOCALE_COOKIE, locale || DEFAULT_LOCALE, {
+        path: '/',
+        sameSite: 'lax',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+      })
+    }
+    return res
   }
 
   const token = req.cookies.get(SESSION_COOKIE)?.value
-  if (token) return NextResponse.next()
+  if (token) {
+    const res = NextResponse.next()
+    if (shouldSetLocaleCookie) {
+      res.cookies.set(LOCALE_COOKIE, locale || DEFAULT_LOCALE, {
+        path: '/',
+        sameSite: 'lax',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+      })
+    }
+    return res
+  }
 
   const loginUrl = req.nextUrl.clone()
   loginUrl.pathname = '/login'
@@ -61,11 +104,18 @@ export function middleware(req: NextRequest) {
   if (from.length > 1024) from = '/'
 
   loginUrl.searchParams.set('from', from)
-  return NextResponse.redirect(loginUrl)
+  const res = NextResponse.redirect(loginUrl)
+  if (shouldSetLocaleCookie) {
+    res.cookies.set(LOCALE_COOKIE, locale || DEFAULT_LOCALE, {
+      path: '/',
+      sameSite: 'lax',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+    })
+  }
+  return res
 }
 
 export const config = {
   matcher: ['/:path*'],
 }
-
-

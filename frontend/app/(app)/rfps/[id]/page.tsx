@@ -1651,53 +1651,61 @@ export default function RFPDetailPage() {
             { label: rfp.title || 'RFP' },
           ]}
         />
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {nextStep ? (
             <button
               type="button"
               onClick={nextStep.onClick}
-              className="lg:hidden inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg text-white bg-primary-600 hover:bg-primary-700"
+              className="w-full sm:w-auto lg:hidden inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg text-white bg-primary-600 hover:bg-primary-700"
             >
               {nextStep.label}
             </button>
           ) : null}
           <Link
             href={`/linkedin-finder?rfpId=${encodeURIComponent(rfp._id)}`}
-            className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg text-white bg-slate-900 hover:bg-slate-800"
+            className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg text-white bg-slate-900 hover:bg-slate-800"
           >
-            <UserGroupIcon className="h-5 w-5 mr-2" />
+            <UserGroupIcon className="h-5 w-5 mr-2" aria-hidden="true" />
             Run Buyer Profiles
           </Link>
         </div>
       </div>
       {/* Page tabs */}
       <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
-          <button
-            onClick={() => setPageTab('details')}
-            className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
-              pageTab === 'details'
-                ? 'border-primary-500 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-            type="button"
-          >
-            <DocumentTextIcon className="h-5 w-5 inline mr-2" />
-            Details
-          </button>
-          <button
-            onClick={() => setPageTab('pdf')}
-            className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
-              pageTab === 'pdf'
-                ? 'border-primary-500 text-primary-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-            }`}
-            type="button"
-          >
-            <PaperClipIcon className="h-5 w-5 inline mr-2" />
-            Original PDF
-          </button>
-        </nav>
+        <div className="-mx-4 px-4 sm:mx-0 sm:px-0 overflow-x-auto">
+          <nav className="-mb-px flex space-x-8 min-w-max">
+            <button
+              onClick={() => setPageTab('details')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
+                pageTab === 'details'
+                  ? 'border-primary-500 text-primary-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+              type="button"
+            >
+              <DocumentTextIcon
+                className="h-5 w-5 inline mr-2"
+                aria-hidden="true"
+              />
+              Details
+            </button>
+            <button
+              onClick={() => setPageTab('pdf')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
+                pageTab === 'pdf'
+                  ? 'border-primary-500 text-primary-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+              type="button"
+            >
+              <PaperClipIcon
+                className="h-5 w-5 inline mr-2"
+                aria-hidden="true"
+              />
+              Original PDF
+            </button>
+          </nav>
+        </div>
       </div>
 
       {pageTab === 'pdf' ? (

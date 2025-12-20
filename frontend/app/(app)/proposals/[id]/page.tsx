@@ -906,9 +906,9 @@ export default function ProposalDetailPage() {
                 </div>
               )}
             </div>
-            <div className="mt-6 flex space-x-3 md:mt-0 md:ml-4">
+            <div className="mt-6 flex flex-wrap gap-3 md:mt-0 md:ml-4">
               {companies.length > 0 && (
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <select
                     value={selectedCompanyId || ''}
                     onChange={(e) => {
@@ -917,7 +917,7 @@ export default function ProposalDetailPage() {
                       if (next) switchCompany(next)
                     }}
                     disabled={switchingCompany}
-                    className="border border-gray-300 rounded-md px-3 py-2 bg-gray-100 text-gray-900 text-sm"
+                    className="w-full sm:w-auto border border-gray-300 rounded-md px-3 py-2 bg-gray-100 text-gray-900 text-sm"
                     title="Switch proposal company/branding"
                   >
                     <option value="" disabled>
@@ -938,7 +938,7 @@ export default function ProposalDetailPage() {
                 <button
                   onClick={() => setShowDownloadMenu(!showDownloadMenu)}
                   disabled={downloading}
-                  className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full sm:w-auto inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {downloading ? (
                     <>

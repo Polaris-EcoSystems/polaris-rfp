@@ -12,6 +12,7 @@ import {
   PlusIcon,
   XCircleIcon,
 } from '@heroicons/react/24/outline'
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 
@@ -25,46 +26,50 @@ type PipelineStage =
   | 'NoBid'
   | 'Disqualified'
 
-const STAGES: { id: PipelineStage; label: string; help: string }[] = [
+const STAGE_DEFS: {
+  id: PipelineStage
+  labelKey: string
+  helpKey: string
+}[] = [
   {
     id: 'BidDecision',
-    label: 'Bid decision',
-    help: 'Decide bid/no-bid and capture blockers.',
+    labelKey: 'pipeline.stages.BidDecision.label',
+    helpKey: 'pipeline.stages.BidDecision.help',
   },
   {
     id: 'ProposalDraft',
-    label: 'Draft',
-    help: 'Generate a proposal and fill missing sections.',
+    labelKey: 'pipeline.stages.ProposalDraft.label',
+    helpKey: 'pipeline.stages.ProposalDraft.help',
   },
   {
     id: 'ReviewRebuttal',
-    label: 'Review / rebuttal',
-    help: 'Run compliance review and plan fixes.',
+    labelKey: 'pipeline.stages.ReviewRebuttal.label',
+    helpKey: 'pipeline.stages.ReviewRebuttal.help',
   },
   {
     id: 'Rework',
-    label: 'Rework',
-    help: 'Address review items and update the draft.',
+    labelKey: 'pipeline.stages.Rework.label',
+    helpKey: 'pipeline.stages.Rework.help',
   },
   {
     id: 'ReadyToSubmit',
-    label: 'Ready to submit',
-    help: 'Finalize checklist and prepare exports.',
+    labelKey: 'pipeline.stages.ReadyToSubmit.label',
+    helpKey: 'pipeline.stages.ReadyToSubmit.help',
   },
   {
     id: 'Submitted',
-    label: 'Submitted',
-    help: 'Record outcome and keep artifacts.',
+    labelKey: 'pipeline.stages.Submitted.label',
+    helpKey: 'pipeline.stages.Submitted.help',
   },
   {
     id: 'NoBid',
-    label: 'No-bid',
-    help: 'Archive with decision notes for later learning.',
+    labelKey: 'pipeline.stages.NoBid.label',
+    helpKey: 'pipeline.stages.NoBid.help',
   },
   {
     id: 'Disqualified',
-    label: 'Disqualified',
-    help: 'Past due or invalid—keep for history.',
+    labelKey: 'pipeline.stages.Disqualified.label',
+    helpKey: 'pipeline.stages.Disqualified.help',
   },
 ]
 
@@ -94,67 +99,22 @@ function getStage(rfp: RFP, proposals: Proposal[]): PipelineStage {
   return 'ProposalDraft'
 }
 
-function deadlineMeta(rfp: RFP): {
-  label: string
-  tone: 'ok' | 'warn' | 'bad'
-} {
-  const dueRaw = rfp.submissionDeadline
-  if (!dueRaw) return { label: 'Due: —', tone: 'warn' }
-  const due = new Date(dueRaw)
-  if (Number.isNaN(due.getTime())) return { label: 'Due: —', tone: 'warn' }
-  const days = Math.ceil((due.getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-  if (days < 0) return { label: `Due: ${days}d`, tone: 'bad' }
-  if (days <= 7) return { label: `Due: ${days}d`, tone: 'warn' }
-  return { label: `Due: ${days}d`, tone: 'ok' }
-}
-
-function nextAction(
-  rfp: RFP,
-  proposals: Proposal[],
-): { label: string; href: string } {
-  const decision = String((rfp as any)?.review?.decision || '')
-    .trim()
-    .toLowerCase()
-
-  if (rfp.isDisqualified) return { label: 'View RFP', href: `/rfps/${rfp._id}` }
-  if (decision !== 'bid')
-    return { label: 'Review RFP', href: `/rfps/${rfp._id}` }
-  if (!proposals || proposals.length === 0)
-    return { label: 'Generate proposal', href: `/rfps/${rfp._id}#generate` }
-
-  const p = [...proposals].sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
-  )[0]
-  return { label: 'Open proposal', href: `/proposals/${p._id}` }
-}
-
-function nextStepHint(
-  stage: PipelineStage,
-  rfp: RFP,
-  proposals: Proposal[],
-): string {
-  if (stage === 'Disqualified')
-    return 'Review deadlines and archive for history.'
-  if (stage === 'NoBid') return 'Capture no-bid reason(s) for future learning.'
-  if (stage === 'BidDecision') return 'Decide bid/no-bid and note blockers.'
-  if (stage === 'ProposalDraft') {
-    if (!proposals || proposals.length === 0) return 'Generate the first draft.'
-    return 'Fill missing sections; get to “in review”.'
-  }
-  if (stage === 'ReviewRebuttal')
-    return 'Review requirements; add rebuttals/actions.'
-  if (stage === 'Rework') return 'Resolve review items and update draft.'
-  if (stage === 'ReadyToSubmit') return 'Finalize checklist and export.'
-  if (stage === 'Submitted') return 'Record outcome and attach final artifacts.'
-  // fallback (shouldn’t happen)
-  return `Continue: ${rfp.title || 'RFP'}`
-}
-
 export default function PipelinePage() {
+  const t = useTranslations()
   const [rfps, setRfps] = useState<RFP[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+
+  const stages = useMemo(
+    () =>
+      STAGE_DEFS.map((s) => ({
+        id: s.id,
+        label: t(s.labelKey),
+        help: t(s.helpKey),
+      })),
+    [t],
+  )
 
   useEffect(() => {
     const load = async () => {
@@ -196,7 +156,7 @@ export default function PipelinePage() {
 
   const byStage = useMemo(() => {
     const out: Record<PipelineStage, { rfp: RFP; proposals: Proposal[] }[]> =
-      Object.fromEntries(STAGES.map((s) => [s.id, []])) as any
+      Object.fromEntries(stages.map((s) => [s.id, []])) as any
     filteredRfps.forEach((rfp) => {
       const ps = proposalsByRfp[rfp._id] || []
       const stage = getStage(rfp, ps)
@@ -219,69 +179,150 @@ export default function PipelinePage() {
       })
     })
     return out
-  }, [filteredRfps, proposalsByRfp])
+  }, [filteredRfps, proposalsByRfp, stages])
+
+  const deadlineMeta = (
+    rfp: RFP,
+  ): { daysUntil: number | null; tone: 'ok' | 'warn' | 'bad' } => {
+    const dueRaw = rfp.submissionDeadline
+    if (!dueRaw) return { daysUntil: null, tone: 'warn' }
+    const due = new Date(dueRaw)
+    if (Number.isNaN(due.getTime())) return { daysUntil: null, tone: 'warn' }
+    const daysUntil = Math.ceil(
+      (due.getTime() - Date.now()) / (1000 * 60 * 60 * 24),
+    )
+    if (daysUntil < 0) return { daysUntil, tone: 'bad' }
+    if (daysUntil <= 7) return { daysUntil, tone: 'warn' }
+    return { daysUntil, tone: 'ok' }
+  }
+
+  const dueLabel = (daysUntil: number | null) => {
+    const val =
+      daysUntil === null
+        ? t('pipeline.dueUnknown')
+        : t('pipeline.dueDays', { days: daysUntil })
+    return `${t('pipeline.due')}: ${val}`
+  }
+
+  const nextAction = (
+    rfp: RFP,
+    proposalsForRfp: Proposal[],
+  ): { label: string; href: string } => {
+    const decision = String((rfp as any)?.review?.decision || '')
+      .trim()
+      .toLowerCase()
+
+    if (rfp.isDisqualified)
+      return { label: t('pipeline.actions.viewRfp'), href: `/rfps/${rfp._id}` }
+    if (decision !== 'bid')
+      return {
+        label: t('pipeline.actions.reviewRfp'),
+        href: `/rfps/${rfp._id}`,
+      }
+    if (!proposalsForRfp || proposalsForRfp.length === 0)
+      return {
+        label: t('pipeline.actions.generateProposal'),
+        href: `/rfps/${rfp._id}#generate`,
+      }
+
+    const p = [...proposalsForRfp].sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    )[0]
+    return {
+      label: t('pipeline.actions.openProposal'),
+      href: `/proposals/${p._id}`,
+    }
+  }
+
+  const nextStepHint = (
+    stage: PipelineStage,
+    proposalsForRfp: Proposal[],
+  ): string => {
+    if (stage === 'Disqualified') return t('pipeline.hints.disqualified')
+    if (stage === 'NoBid') return t('pipeline.hints.noBid')
+    if (stage === 'BidDecision') return t('pipeline.hints.bidDecision')
+    if (stage === 'ProposalDraft') {
+      if (!proposalsForRfp || proposalsForRfp.length === 0)
+        return t('pipeline.hints.proposalDraftFirst')
+      return t('pipeline.hints.proposalDraftContinue')
+    }
+    if (stage === 'ReviewRebuttal') return t('pipeline.hints.reviewRebuttal')
+    if (stage === 'Rework') return t('pipeline.hints.rework')
+    if (stage === 'ReadyToSubmit') return t('pipeline.hints.readyToSubmit')
+    if (stage === 'Submitted') return t('pipeline.hints.submitted')
+    return t('pipeline.hints.bidDecision')
+  }
 
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
-            <h1 className="text-3xl font-bold text-gray-900">Pipeline</h1>
+            <h1 className="text-3xl font-bold text-gray-900">
+              {t('pipeline.title')}
+            </h1>
             <p className="mt-1 text-sm text-gray-600">
-              Your primary workflow: intake → bid decision → draft → review →
-              submit.
+              {t('pipeline.subtitle')}
             </p>
 
             <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
               <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-gray-700">
-                <PlusIcon className="h-4 w-4" />
-                Intake
+                <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                {t('pipeline.workflow.intake')}
               </span>
               <span className="text-gray-300">→</span>
               <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-gray-700">
-                <CheckCircleIcon className="h-4 w-4" />
-                Bid decision
+                <CheckCircleIcon className="h-4 w-4" aria-hidden="true" />
+                {t('pipeline.workflow.bidDecision')}
               </span>
               <span className="text-gray-300">→</span>
               <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-gray-700">
-                <DocumentTextIcon className="h-4 w-4" />
-                Draft
+                <DocumentTextIcon className="h-4 w-4" aria-hidden="true" />
+                {t('pipeline.workflow.draft')}
               </span>
               <span className="text-gray-300">→</span>
               <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-gray-700">
-                <ExclamationTriangleIcon className="h-4 w-4" />
-                Review
+                <ExclamationTriangleIcon
+                  className="h-4 w-4"
+                  aria-hidden="true"
+                />
+                {t('pipeline.workflow.review')}
               </span>
               <span className="text-gray-300">→</span>
               <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-gray-700">
-                <ArrowRightIcon className="h-4 w-4" />
-                Submit
+                <ArrowRightIcon className="h-4 w-4" aria-hidden="true" />
+                {t('pipeline.workflow.submit')}
               </span>
             </div>
           </div>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <div className="relative w-full sm:w-80">
-              <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+              <MagnifyingGlassIcon
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+                aria-hidden="true"
+              />
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search by title or client…"
+                placeholder={t('pipeline.searchPlaceholder')}
+                aria-label={t('pipeline.searchPlaceholder')}
                 className="w-full border border-gray-300 rounded-md pl-9 pr-3 py-2 bg-white text-sm"
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Link
                 href="/rfps/upload"
-                className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                className="w-full sm:w-auto inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
               >
-                Upload RFP
+                {t('pipeline.uploadRfp')}
               </Link>
               <Link
                 href="/finder"
-                className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-gray-900 bg-gray-100 hover:bg-gray-200"
+                className="w-full sm:w-auto inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-gray-900 bg-gray-100 hover:bg-gray-200"
               >
-                Finder
+                {t('pipeline.finder')}
               </Link>
             </div>
           </div>
@@ -293,8 +334,8 @@ export default function PipelinePage() {
           <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600" />
         </div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-4">
-          {STAGES.map((s) => (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {stages.map((s) => (
             <div
               key={s.id}
               className="rounded-xl border border-gray-200 bg-white shadow-sm"
@@ -312,7 +353,9 @@ export default function PipelinePage() {
               </div>
               <div className="p-3 space-y-3 max-h-[72vh] overflow-auto">
                 {byStage[s.id].length === 0 ? (
-                  <div className="text-xs text-gray-500">No items.</div>
+                  <div className="text-xs text-gray-500">
+                    {t('pipeline.emptyStage')}
+                  </div>
                 ) : (
                   byStage[s.id].map(({ rfp, proposals }) => {
                     const fit =
@@ -321,7 +364,7 @@ export default function PipelinePage() {
                         : null
                     const due = deadlineMeta(rfp)
                     const action = nextAction(rfp, proposals)
-                    const hint = nextStepHint(s.id, rfp, proposals)
+                    const hint = nextStepHint(s.id, proposals)
 
                     const dueTone =
                       due.tone === 'bad'
@@ -362,15 +405,15 @@ export default function PipelinePage() {
                           <span
                             className={`px-2 py-1 rounded-full text-[11px] border ${dueTone}`}
                           >
-                            {due.label}
+                            {dueLabel(due.daysUntil)}
                           </span>
                           {fit !== null ? (
                             <span className="px-2 py-1 rounded-full text-[11px] border border-slate-200 bg-slate-50 text-slate-800">
-                              Fit {fit}
+                              {t('pipeline.fit')} {fit}
                             </span>
                           ) : (
                             <span className="px-2 py-1 rounded-full text-[11px] border border-slate-200 bg-slate-50 text-slate-700">
-                              Fit —
+                              {t('pipeline.fit')} {t('pipeline.fitNone')}
                             </span>
                           )}
                           <span className="px-2 py-1 rounded-full text-[11px] border border-gray-200 bg-gray-50 text-gray-800">
@@ -380,17 +423,21 @@ export default function PipelinePage() {
 
                         <div className="mt-2 text-[11px] text-gray-600 line-clamp-2">
                           <span className="font-semibold text-gray-700">
-                            Next:
+                            {t('pipeline.next')}
                           </span>{' '}
                           {hint}
                         </div>
 
                         <div className="mt-2 flex items-center justify-between">
                           <div className="text-[11px] text-gray-500 flex items-center gap-1">
-                            <DocumentTextIcon className="h-4 w-4" />
+                            <DocumentTextIcon
+                              className="h-4 w-4"
+                              aria-hidden="true"
+                            />
                             <span>
-                              {proposals.length} proposal
-                              {proposals.length === 1 ? '' : 's'}
+                              {t('pipeline.proposalCount', {
+                                count: proposals.length,
+                              })}
                             </span>
                             {Array.isArray(rfp.dateWarnings) &&
                             rfp.dateWarnings.length > 0 ? (
@@ -398,7 +445,10 @@ export default function PipelinePage() {
                                 className="inline-flex items-center gap-1 text-amber-700"
                                 title={rfp.dateWarnings.slice(0, 6).join('\n')}
                               >
-                                <ExclamationTriangleIcon className="h-4 w-4" />
+                                <ExclamationTriangleIcon
+                                  className="h-4 w-4"
+                                  aria-hidden="true"
+                                />
                                 <span>{rfp.dateWarnings.length}</span>
                               </span>
                             ) : null}
@@ -408,7 +458,10 @@ export default function PipelinePage() {
                             className="inline-flex items-center gap-1 text-xs font-medium text-white bg-primary-600 hover:bg-primary-700 px-2.5 py-1.5 rounded-md"
                           >
                             {action.label}
-                            <ArrowRightIcon className="h-4 w-4" />
+                            <ArrowRightIcon
+                              className="h-4 w-4"
+                              aria-hidden="true"
+                            />
                           </Link>
                         </div>
                       </div>
@@ -423,5 +476,3 @@ export default function PipelinePage() {
     </div>
   )
 }
-
-

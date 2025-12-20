@@ -54,9 +54,12 @@ export default function TeamSection({ ctx }: { ctx: any }) {
       ? setControlledScope
       : setLocalScope
   const [localSearch, setLocalSearch] = useState('')
-  const search = typeof controlledSearch === 'string' ? controlledSearch : localSearch
+  const search =
+    typeof controlledSearch === 'string' ? controlledSearch : localSearch
   const setSearch =
-    typeof setControlledSearch === 'function' ? setControlledSearch : setLocalSearch
+    typeof setControlledSearch === 'function'
+      ? setControlledSearch
+      : setLocalSearch
   const [sortBy, setSortBy] = useState<'name' | 'position' | 'company'>('name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
@@ -68,7 +71,9 @@ export default function TeamSection({ ctx }: { ctx: any }) {
       .trim()
       .toLowerCase()
     const qualityIds = Array.isArray(qualityFilterIds) ? qualityFilterIds : []
-    const qualitySet = new Set(qualityIds.map((x: any) => String(x || '').trim()))
+    const qualitySet = new Set(
+      qualityIds.map((x: any) => String(x || '').trim()),
+    )
     const list =
       scope === 'unassigned'
         ? Array.isArray(unassignedTeam)
@@ -308,7 +313,9 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                   onClick={() => setSelectedMember(member)}
                   role="button"
                   tabIndex={0}
-                  aria-label={`View ${member.nameWithCredentials || member.name || 'team member'}`}
+                  aria-label={`View ${
+                    member.nameWithCredentials || member.name || 'team member'
+                  }`}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
@@ -488,104 +495,102 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                 </div>
               )}
 
-                {Array.isArray(selectedMember.bioProfiles) &&
-                  selectedMember.bioProfiles.length > 0 && (
-                    <div>
-                      <h5 className="text-sm font-medium text-gray-700 mb-2">
-                        Tailored Profiles
-                      </h5>
-                      <div className="space-y-3">
-                        {selectedMember.bioProfiles.map(
-                          (p: any, idx: number) => (
-                            <div
-                              key={p.id || idx}
-                              className="rounded border border-gray-200 p-3"
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="text-sm font-medium text-gray-900">
-                                  {p.label || `Profile ${idx + 1}`}
-                                </div>
-                                <div className="flex flex-wrap gap-1 justify-end">
-                                  {(Array.isArray(p.projectTypes)
-                                    ? p.projectTypes
-                                    : []
-                                  ).map((t: string) => (
-                                    <span
-                                      key={t}
-                                      className="px-2 py-0.5 text-[11px] bg-gray-100 text-gray-700 rounded"
-                                    >
-                                      {t}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                              {p.bio && (
-                                <p className="text-xs text-gray-600 mt-2 line-clamp-4 whitespace-pre-wrap">
-                                  {String(p.bio).trim()}
-                                </p>
-                              )}
-                              {p.experience && (
-                                <p className="text-xs text-gray-600 mt-2 line-clamp-4 whitespace-pre-wrap">
-                                  {String(p.experience).trim()}
-                                </p>
-                              )}
-                            </div>
-                          ),
-                        )}
-                      </div>
-                    </div>
-                  )}
-
-                {/* Legacy fields for backward compatibility */}
-                {selectedMember.experienceYears && (
+              {Array.isArray(selectedMember.bioProfiles) &&
+                selectedMember.bioProfiles.length > 0 && (
                   <div>
                     <h5 className="text-sm font-medium text-gray-700 mb-2">
-                      Experience
+                      Tailored Profiles
                     </h5>
-                    <p className="text-sm text-gray-600">
-                      {selectedMember.experienceYears}+ years
-                    </p>
+                    <div className="space-y-3">
+                      {selectedMember.bioProfiles.map((p: any, idx: number) => (
+                        <div
+                          key={p.id || idx}
+                          className="rounded border border-gray-200 p-3"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="text-sm font-medium text-gray-900">
+                              {p.label || `Profile ${idx + 1}`}
+                            </div>
+                            <div className="flex flex-wrap gap-1 justify-end">
+                              {(Array.isArray(p.projectTypes)
+                                ? p.projectTypes
+                                : []
+                              ).map((t: string) => (
+                                <span
+                                  key={t}
+                                  className="px-2 py-0.5 text-[11px] bg-gray-100 text-gray-700 rounded"
+                                >
+                                  {t}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          {p.bio && (
+                            <p className="text-xs text-gray-600 mt-2 line-clamp-4 whitespace-pre-wrap">
+                              {String(p.bio).trim()}
+                            </p>
+                          )}
+                          {p.experience && (
+                            <p className="text-xs text-gray-600 mt-2 line-clamp-4 whitespace-pre-wrap">
+                              {String(p.experience).trim()}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
-                {selectedMember.education &&
-                  selectedMember.education.length > 0 && (
-                    <div>
-                      <h5 className="text-sm font-medium text-gray-700 mb-2">
-                        Education
-                      </h5>
-                      <ul className="space-y-1">
-                        {selectedMember.education.map(
-                          (edu: string, index: number) => (
-                            <li key={index} className="text-sm text-gray-600">
-                              {edu}
-                            </li>
-                          ),
-                        )}
-                      </ul>
-                    </div>
-                  )}
+              {/* Legacy fields for backward compatibility */}
+              {selectedMember.experienceYears && (
+                <div>
+                  <h5 className="text-sm font-medium text-gray-700 mb-2">
+                    Experience
+                  </h5>
+                  <p className="text-sm text-gray-600">
+                    {selectedMember.experienceYears}+ years
+                  </p>
+                </div>
+              )}
 
-                {selectedMember.certifications &&
-                  selectedMember.certifications.length > 0 && (
-                    <div>
-                      <h5 className="text-sm font-medium text-gray-700 mb-2">
-                        Certifications
-                      </h5>
-                      <div className="flex flex-wrap gap-1">
-                        {selectedMember.certifications.map(
-                          (cert: string, index: number) => (
-                            <span
-                              key={index}
-                              className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded"
-                            >
-                              {cert}
-                            </span>
-                          ),
-                        )}
-                      </div>
+              {selectedMember.education &&
+                selectedMember.education.length > 0 && (
+                  <div>
+                    <h5 className="text-sm font-medium text-gray-700 mb-2">
+                      Education
+                    </h5>
+                    <ul className="space-y-1">
+                      {selectedMember.education.map(
+                        (edu: string, index: number) => (
+                          <li key={index} className="text-sm text-gray-600">
+                            {edu}
+                          </li>
+                        ),
+                      )}
+                    </ul>
+                  </div>
+                )}
+
+              {selectedMember.certifications &&
+                selectedMember.certifications.length > 0 && (
+                  <div>
+                    <h5 className="text-sm font-medium text-gray-700 mb-2">
+                      Certifications
+                    </h5>
+                    <div className="flex flex-wrap gap-1">
+                      {selectedMember.certifications.map(
+                        (cert: string, index: number) => (
+                          <span
+                            key={index}
+                            className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded"
+                          >
+                            {cert}
+                          </span>
+                        ),
+                      )}
                     </div>
-                  )}
+                  </div>
+                )}
             </div>
           ) : (
             <EmptyState

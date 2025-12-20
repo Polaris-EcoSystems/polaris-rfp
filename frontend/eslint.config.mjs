@@ -6,6 +6,13 @@ import jsxA11y from 'eslint-plugin-jsx-a11y'
 import react from 'eslint-plugin-react'
 import reactHooks from 'eslint-plugin-react-hooks'
 
+const jsxA11yRecommendedWarn = Object.fromEntries(
+  Object.entries(jsxA11y.configs.recommended.rules).map(([name, rule]) => {
+    if (Array.isArray(rule)) return [name, ['warn', ...rule.slice(1)]]
+    return [name, 'warn']
+  }),
+)
+
 /** @type {import('eslint').Linter.FlatConfig[]} */
 export default [
   {
@@ -42,6 +49,7 @@ export default [
     rules: {
       ...next.configs.recommended.rules,
       ...next.configs['core-web-vitals'].rules,
+      ...jsxA11yRecommendedWarn,
 
       'react-hooks/rules-of-hooks': 'error',
       'react-hooks/exhaustive-deps': 'warn',

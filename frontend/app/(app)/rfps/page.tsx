@@ -16,19 +16,9 @@ import {
   PlusIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline'
+import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { useEffect, useState } from 'react'
-
-const getFitBadge = (score: number | undefined) => {
-  if (score === undefined || score === null) {
-    return { label: 'Fit —', cls: 'bg-gray-100 text-gray-700' }
-  }
-  if (score >= 80)
-    return { label: `Fit ${score}`, cls: 'bg-green-100 text-green-800' }
-  if (score >= 60)
-    return { label: `Fit ${score}`, cls: 'bg-yellow-100 text-yellow-800' }
-  return { label: `Fit ${score}`, cls: 'bg-red-100 text-red-800' }
-}
 
 const isPresent = (v: unknown) => {
   const s = String(v ?? '').trim()
@@ -44,6 +34,8 @@ const formatRfpDate = (v: unknown) => {
 }
 
 export default function RFPsPage() {
+  const t = useTranslations()
+  const locale = useLocale()
   const [rfps, setRfps] = useState<RFP[]>([])
   const [filteredRfps, setFilteredRfps] = useState<RFP[]>([])
   const [searchTerm, setSearchTerm] = useState('')
@@ -154,23 +146,44 @@ export default function RFPsPage() {
     )
   }
 
+  const formatUploadedDate = (iso: string) => {
+    try {
+      return new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(
+        new Date(iso),
+      )
+    } catch {
+      return new Date(iso).toLocaleDateString()
+    }
+  }
+
+  const getFitBadge = (score: number | undefined) => {
+    if (score === undefined || score === null) {
+      return {
+        label: `${t('rfps.fit')} ${t('rfps.fitNone')}`,
+        cls: 'bg-gray-100 text-gray-700',
+      }
+    }
+    const label = `${t('rfps.fit')} ${score}`
+    if (score >= 80) return { label, cls: 'bg-green-100 text-green-800' }
+    if (score >= 60) return { label, cls: 'bg-yellow-100 text-yellow-800' }
+    return { label, cls: 'bg-red-100 text-red-800' }
+  }
+
   return (
     <div>
       <div className="mb-6">
         <PipelineContextBanner
           variant="secondary"
-          title="Pipeline is the primary workflow."
-          description="This page is a table view for discovery and bulk review."
+          title={t('rfps.bannerTitle')}
+          description={t('rfps.bannerDescription')}
         />
       </div>
       <div className="md:flex md:items-center md:justify-between">
         <div className="flex-1 min-w-0">
           <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
-            RFPs
+            {t('rfps.title')}
           </h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Manage uploaded RFP documents and their analysis
-          </p>
+          <p className="mt-1 text-sm text-gray-500">{t('rfps.subtitle')}</p>
         </div>
         <div className="mt-4 flex md:mt-0 md:ml-4">
           <Link
@@ -178,7 +191,7 @@ export default function RFPsPage() {
             className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700"
           >
             <PlusIcon className="-ml-1 mr-2 h-5 w-5" aria-hidden="true" />
-            Upload RFP
+            {t('rfps.uploadRfp')}
           </Link>
         </div>
       </div>
@@ -188,10 +201,17 @@ export default function RFPsPage() {
         <div className="flex flex-col sm:flex-row gap-4">
           <div className="flex-1">
             <div className="relative">
-              <MagnifyingGlassIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+              <label htmlFor="rfp-search" className="sr-only">
+                {t('rfps.searchLabel')}
+              </label>
+              <MagnifyingGlassIcon
+                className="absolute left-3 top-3 h-4 w-4 text-gray-400"
+                aria-hidden="true"
+              />
               <input
+                id="rfp-search"
                 type="text"
-                placeholder="Search RFPs by title or client name..."
+                placeholder={t('rfps.searchPlaceholder')}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500 bg-gray-100 text-gray-900"
@@ -200,13 +220,20 @@ export default function RFPsPage() {
           </div>
           <div className="sm:w-48">
             <div className="relative">
-              <FunnelIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
+              <label htmlFor="rfp-projectType" className="sr-only">
+                {t('rfps.filterLabel')}
+              </label>
+              <FunnelIcon
+                className="absolute left-3 top-3 h-4 w-4 text-gray-400"
+                aria-hidden="true"
+              />
               <select
+                id="rfp-projectType"
                 value={selectedProjectType}
                 onChange={(e) => setSelectedProjectType(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500 appearance-none bg-grey-100 "
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-primary-500 focus:border-primary-500 appearance-none bg-gray-100"
               >
-                <option value="all">All Project Types</option>
+                <option value="all">{t('rfps.allProjectTypes')}</option>
                 {projectTypes.map((type) => (
                   <option key={type} value={type}>
                     {type.replace('_', ' ')}
@@ -219,7 +246,10 @@ export default function RFPsPage() {
         {(searchTerm || selectedProjectType !== 'all') && (
           <div className="mt-4 flex items-center justify-between">
             <p className="text-sm text-gray-600">
-              Showing {filteredRfps.length} of {rfps.length} RFPs
+              {t('rfps.showing', {
+                filtered: filteredRfps.length,
+                total: rfps.length,
+              })}
             </p>
             <button
               onClick={() => {
@@ -228,7 +258,7 @@ export default function RFPsPage() {
               }}
               className="text-sm text-primary-600 hover:text-primary-800"
             >
-              Clear filters
+              {t('rfps.clearFilters')}
             </button>
           </div>
         )}
@@ -240,23 +270,26 @@ export default function RFPsPage() {
             {filteredRfps.map((rfp) => (
               <li key={rfp._id} className="hover:bg-gray-50 transition-colors">
                 <div className="px-4 py-4 sm:px-6">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center flex-1 min-w-0">
                       <button
+                        type="button"
                         onClick={() => toggleRfpExpansion(rfp._id)}
-                        className="w-10 h-10 rounded-lg flex items-center justify-center mr-3 transition-colors shadow-sm hover:shadow-md"
-                        style={{ backgroundColor: '#3b82f6' }}
-                        onMouseEnter={(e) =>
-                          (e.currentTarget.style.backgroundColor = '#2563eb')
-                        }
-                        onMouseLeave={(e) =>
-                          (e.currentTarget.style.backgroundColor = '#3b82f6')
-                        }
+                        className="w-10 h-10 rounded-lg flex items-center justify-center mr-3 transition-colors shadow-sm hover:shadow-md bg-blue-500 hover:bg-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                        aria-expanded={expandedRfp === rfp._id}
+                        aria-controls={`rfp-proposals-${rfp._id}`}
+                        aria-label={t('rfps.toggleDetails')}
                       >
                         {expandedRfp === rfp._id ? (
-                          <ChevronDownIcon className="h-5 w-5 text-white" />
+                          <ChevronDownIcon
+                            className="h-5 w-5 text-white"
+                            aria-hidden="true"
+                          />
                         ) : (
-                          <ChevronRightIcon className="h-5 w-5 text-white" />
+                          <ChevronRightIcon
+                            className="h-5 w-5 text-white"
+                            aria-hidden="true"
+                          />
                         )}
                       </button>
                       <div className="flex flex-col min-w-0 flex-1">
@@ -268,16 +301,17 @@ export default function RFPsPage() {
                         </Link>
                         {rfpProposals[rfp._id] && (
                           <span className="text-xs text-gray-500 mt-1">
-                            {rfpProposals[rfp._id].length} proposal
-                            {rfpProposals[rfp._id].length !== 1 ? 's' : ''}
+                            {t('rfps.proposalCount', {
+                              count: rfpProposals[rfp._id].length,
+                            })}
                           </span>
                         )}
                       </div>
                     </div>
-                    <div className="ml-4 flex items-center space-x-2">
+                    <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                       {rfp.isDisqualified && (
                         <span className="px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800">
-                          Disqualified
+                          {t('rfps.disqualified')}
                         </span>
                       )}
                       <span
@@ -296,19 +330,21 @@ export default function RFPsPage() {
                       <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
                         {rfp.projectType.replace('_', ' ')}
                       </span>
-                      <div className="flex space-x-1">
+                      <div className="flex items-center gap-1">
                         <Link
                           href={`/rfps/${rfp._id}`}
                           className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-primary-600 bg-primary-100 hover:bg-primary-200"
                         >
-                          View Details
+                          {t('rfps.viewDetails')}
                         </Link>
                         <button
                           onClick={() => handleDeleteRFP(rfp)}
                           className="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-red-600 bg-red-100 hover:bg-red-200"
-                          title="Delete RFP"
+                          title={t('rfps.delete')}
+                          aria-label={t('rfps.delete')}
+                          type="button"
                         >
-                          <TrashIcon className="h-3 w-3" />
+                          <TrashIcon className="h-3 w-3" aria-hidden="true" />
                         </button>
                       </div>
                     </div>
@@ -316,53 +352,80 @@ export default function RFPsPage() {
                   <div className="mt-2 sm:flex sm:justify-between sm:items-center">
                     <div className="sm:flex sm:space-x-6">
                       <p className="flex items-center text-sm text-gray-500">
-                        <BuildingOfficeIcon className="h-4 w-4 mr-1" />
+                        <BuildingOfficeIcon
+                          className="h-4 w-4 mr-1"
+                          aria-hidden="true"
+                        />
                         {rfp.clientName}
                       </p>
                       {rfp.budgetRange && (
                         <p className="flex items-center text-sm text-gray-500 sm:mt-0">
-                          <CurrencyDollarIcon className="h-4 w-4 mr-1" />
+                          <CurrencyDollarIcon
+                            className="h-4 w-4 mr-1"
+                            aria-hidden="true"
+                          />
                           {rfp.budgetRange}
                         </p>
                       )}
                       {isPresent(rfp.submissionDeadline) && (
                         <p className="flex items-center text-sm text-gray-500 sm:mt-0">
-                          <CalendarDaysIcon className="h-4 w-4 mr-1" />
-                          Submission due {formatRfpDate(rfp.submissionDeadline)}
+                          <CalendarDaysIcon
+                            className="h-4 w-4 mr-1"
+                            aria-hidden="true"
+                          />
+                          {t('rfps.submissionDue', {
+                            date: formatRfpDate(rfp.submissionDeadline),
+                          })}
                         </p>
                       )}
                       {isPresent(rfp.questionsDeadline) && (
                         <p className="flex items-center text-sm text-gray-500 sm:mt-0">
-                          <CalendarDaysIcon className="h-4 w-4 mr-1" />
-                          Questions due {formatRfpDate(rfp.questionsDeadline)}
+                          <CalendarDaysIcon
+                            className="h-4 w-4 mr-1"
+                            aria-hidden="true"
+                          />
+                          {t('rfps.questionsDue', {
+                            date: formatRfpDate(rfp.questionsDeadline),
+                          })}
                         </p>
                       )}
                       {isPresent(rfp.projectDeadline) && (
                         <p className="flex items-center text-sm text-gray-500 sm:mt-0">
-                          <CalendarDaysIcon className="h-4 w-4 mr-1" />
-                          Project deadline {formatRfpDate(rfp.projectDeadline)}
+                          <CalendarDaysIcon
+                            className="h-4 w-4 mr-1"
+                            aria-hidden="true"
+                          />
+                          {t('rfps.projectDeadline', {
+                            date: formatRfpDate(rfp.projectDeadline),
+                          })}
                         </p>
                       )}
                       {rfp.location && (
                         <p className="flex items-center text-sm text-gray-500 sm:mt-0">
-                          <BuildingOfficeIcon className="h-4 w-4 mr-1" />
+                          <BuildingOfficeIcon
+                            className="h-4 w-4 mr-1"
+                            aria-hidden="true"
+                          />
                           {rfp.location}
                         </p>
                       )}
                     </div>
                     <div className="mt-2 flex items-center text-xs text-gray-400 sm:mt-0">
-                      Uploaded{' '}
-                      {new Date(rfp.createdAt).toLocaleDateString('en-US')}
+                      {t('rfps.uploaded', {
+                        date: formatUploadedDate(rfp.createdAt),
+                      })}
                     </div>
                   </div>
 
                   {/* Expanded Proposals Section */}
                   {expandedRfp === rfp._id && (
-                    <RfpProposalsSection
-                      rfpId={rfp._id}
-                      proposals={rfpProposals[rfp._id] || []}
-                      isLoading={loadingProposals[rfp._id] || false}
-                    />
+                    <div id={`rfp-proposals-${rfp._id}`}>
+                      <RfpProposalsSection
+                        rfpId={rfp._id}
+                        proposals={rfpProposals[rfp._id] || []}
+                        isLoading={loadingProposals[rfp._id] || false}
+                      />
+                    </div>
                   )}
                 </div>
               </li>
@@ -370,10 +433,15 @@ export default function RFPsPage() {
           </ul>
         ) : (
           <div className="text-center py-12">
-            <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
-            <h3 className="mt-2 text-sm font-medium text-gray-900">No RFPs</h3>
+            <DocumentTextIcon
+              className="mx-auto h-12 w-12 text-gray-400"
+              aria-hidden="true"
+            />
+            <h3 className="mt-2 text-sm font-medium text-gray-900">
+              {t('rfps.noRfpsTitle')}
+            </h3>
             <p className="mt-1 text-sm text-gray-500">
-              Get started by uploading your first RFP.
+              {t('rfps.noRfpsSubtitle')}
             </p>
             <div className="mt-6">
               <Link
@@ -381,7 +449,7 @@ export default function RFPsPage() {
                 className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
               >
                 <PlusIcon className="-ml-1 mr-2 h-5 w-5" aria-hidden="true" />
-                Upload RFP
+                {t('rfps.uploadRfp')}
               </Link>
             </div>
           </div>
@@ -393,7 +461,11 @@ export default function RFPsPage() {
           setShowDeleteModal(false)
           setRfpToDelete(null)
         }}
-        title={rfpToDelete ? `Delete "${rfpToDelete.title}"?` : 'Delete RFP'}
+        title={
+          rfpToDelete
+            ? t('rfps.deleteModalTitle', { title: rfpToDelete.title })
+            : t('rfps.deleteModalTitleFallback')
+        }
         size="sm"
         footer={
           <div className="flex items-center space-x-3">
@@ -403,19 +475,21 @@ export default function RFPsPage() {
                 setShowDeleteModal(false)
                 setRfpToDelete(null)
               }}
+              type="button"
             >
-              Cancel
+              {t('rfps.deleteModalCancel')}
             </button>
             <button
               className="px-4 py-2 rounded-lg text-white bg-red-600 hover:bg-red-700"
               onClick={confirmDeleteRFP}
+              type="button"
             >
-              Delete
+              {t('rfps.deleteModalConfirm')}
             </button>
           </div>
         }
       >
-        <p className="text-gray-700">This action cannot be undone.</p>
+        <p className="text-gray-700">{t('rfps.deleteModalBody')}</p>
       </Modal>
     </div>
   )

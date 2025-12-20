@@ -1,0 +1,151 @@
+{
+  "app": {
+    "name": "North Star RFP"
+  },
+  "nav": {
+    "primary": "Primary",
+    "resources": "Resources",
+    "tools": "Tools",
+    "account": "Account",
+    "pipeline": "Pipeline",
+    "rfps": "RFPs",
+    "proposals": "Proposals",
+    "templates": "Templates",
+    "contentLibrary": "Content Library",
+    "rfpFinder": "RFP Finder",
+    "buyerProfiles": "Buyer Profiles",
+    "googleDrive": "Google Drive",
+    "canva": "Canva",
+    "profile": "Profile"
+  },
+  "header": {
+    "openSidebar": "Open sidebar",
+    "closeSidebar": "Close sidebar",
+    "openUserMenu": "Open user menu",
+    "guest": "Guest",
+    "online": "Online",
+    "offline": "Offline",
+    "logout": "Logout",
+    "signIn": "Sign in",
+    "api": "API",
+    "notifications": "Notifications",
+    "notificationsTitle": "Notifications",
+    "notificationsSubtitle": "Due date reminders and updates",
+    "notificationsLoading": "Loading…",
+    "notificationsEmpty": "No notifications yet."
+  },
+  "search": {
+    "open": "Open search",
+    "placeholder": "Search proposals, RFPs…",
+    "searching": "Searching…",
+    "rfps": "RFPs",
+    "rfpsEmpty": "No RFPs found",
+    "proposals": "Proposals",
+    "proposalsEmpty": "No proposals found",
+    "topResults": "Showing top results"
+  },
+  "pipeline": {
+    "title": "Pipeline",
+    "subtitle": "Your primary workflow: intake → bid decision → draft → review → submit.",
+    "workflow": {
+      "intake": "Intake",
+      "bidDecision": "Bid decision",
+      "draft": "Draft",
+      "review": "Review",
+      "submit": "Submit"
+    },
+    "searchPlaceholder": "Search by title or client…",
+    "uploadRfp": "Upload RFP",
+    "finder": "Finder",
+    "emptyStage": "No items.",
+    "next": "Next:",
+    "actions": {
+      "viewRfp": "View RFP",
+      "reviewRfp": "Review RFP",
+      "generateProposal": "Generate proposal",
+      "openProposal": "Open proposal"
+    },
+    "hints": {
+      "disqualified": "Review deadlines and archive for history.",
+      "noBid": "Capture no-bid reason(s) for future learning.",
+      "bidDecision": "Decide bid/no-bid and note blockers.",
+      "proposalDraftFirst": "Generate the first draft.",
+      "proposalDraftContinue": "Fill missing sections; get to “in review”.",
+      "reviewRebuttal": "Review requirements; add rebuttals/actions.",
+      "rework": "Resolve review items and update draft.",
+      "readyToSubmit": "Finalize checklist and export.",
+      "submitted": "Record outcome and attach final artifacts."
+    },
+    "stages": {
+      "BidDecision": {
+        "label": "Bid decision",
+        "help": "Decide bid/no-bid and capture blockers."
+      },
+      "ProposalDraft": {
+        "label": "Draft",
+        "help": "Generate a proposal and fill missing sections."
+      },
+      "ReviewRebuttal": {
+        "label": "Review / rebuttal",
+        "help": "Run compliance review and plan fixes."
+      },
+      "Rework": {
+        "label": "Rework",
+        "help": "Address review items and update the draft."
+      },
+      "ReadyToSubmit": {
+        "label": "Ready to submit",
+        "help": "Finalize checklist and prepare exports."
+      },
+      "Submitted": {
+        "label": "Submitted",
+        "help": "Record outcome and keep artifacts."
+      },
+      "NoBid": {
+        "label": "No-bid",
+        "help": "Archive with decision notes for later learning."
+      },
+      "Disqualified": {
+        "label": "Disqualified",
+        "help": "Past due or invalid—keep for history."
+      }
+    },
+    "proposalCount": "{count, plural, one {# proposal} other {# proposals}}",
+    "due": "Due",
+    "dueUnknown": "—",
+    "dueDays": "{days}d",
+    "fit": "Fit",
+    "fitNone": "—"
+  },
+  "rfps": {
+    "title": "RFPs",
+    "subtitle": "Manage uploaded RFP documents and their analysis",
+    "bannerTitle": "Pipeline is the primary workflow.",
+    "bannerDescription": "This page is a table view for discovery and bulk review.",
+    "uploadRfp": "Upload RFP",
+    "searchLabel": "Search RFPs",
+    "searchPlaceholder": "Search RFPs by title or client name…",
+    "filterLabel": "Filter by project type",
+    "allProjectTypes": "All Project Types",
+    "showing": "Showing {filtered} of {total} RFPs",
+    "clearFilters": "Clear filters",
+    "toggleDetails": "Toggle details",
+    "fit": "Fit",
+    "fitNone": "—",
+    "proposalCount": "{count, plural, one {# proposal} other {# proposals}}",
+    "disqualified": "Disqualified",
+    "viewDetails": "View Details",
+    "delete": "Delete",
+    "uploaded": "Uploaded {date}",
+    "noRfpsTitle": "No RFPs",
+    "noRfpsSubtitle": "Get started by uploading your first RFP.",
+    "deleteModalTitle": "Delete \"{title}\"?",
+    "deleteModalTitleFallback": "Delete RFP",
+    "deleteModalCancel": "Cancel",
+    "deleteModalConfirm": "Delete",
+    "deleteModalBody": "This action cannot be undone.",
+    "submissionDue": "Submission due {date}",
+    "questionsDue": "Questions due {date}",
+    "projectDeadline": "Project deadline {date}"
+  }
+}

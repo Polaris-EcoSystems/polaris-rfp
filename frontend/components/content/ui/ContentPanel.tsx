@@ -19,7 +19,9 @@ export default function ContentPanel({
 }) {
   return (
     <div
-      className={`bg-white shadow rounded-lg ${sticky ? 'sticky top-6' : ''} ${className}`.trim()}
+      className={`bg-white shadow rounded-lg ${
+        sticky ? 'sticky top-6' : ''
+      } ${className}`.trim()}
     >
       {title || actions ? (
         <div className="px-6 py-5 border-b border-gray-200">
@@ -31,7 +33,9 @@ export default function ContentPanel({
                 </h3>
               ) : null}
             </div>
-            {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
+            {actions ? (
+              <div className="flex items-center gap-2">{actions}</div>
+            ) : null}
           </div>
         </div>
       ) : null}

@@ -33,7 +33,7 @@ def _command_response_type(subcommand: str) -> str:
     # Per request: make all commands public except `job` which can contain
     # operational details and is typically user-specific.
     sub = str(subcommand or "").strip().lower()
-    if sub in ("job", "upload", "ingest"):
+    if sub in ("job", "upload", "ingest", "channel", "chan", "whereami"):
         return "ephemeral"
     return "in_channel"
 
@@ -453,6 +453,7 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
                     "- `/polaris recent [n]` (list latest RFPs)",
                     "- `/polaris search <keywords>` (search title/client/type)",
                     "- `/polaris upload [n]` (upload latest PDFs from this channel; default 1)",
+                    "- `/polaris channel` (show this channel's ID; use for private rfp-machine config)",
                     "- `/polaris due [days]` (submission deadlines due soon; default 7)",
                     "- `/polaris pipeline [stage]` (group RFPs by workflow stage)",
                     "- `/polaris proposals [n]` (list latest proposals)",
@@ -462,6 +463,25 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
                     "- `/polaris rfp <rfpId>` (returns a link)",
                     "- `/polaris open <keywords>` (first search result)",
                     "- `/polaris job <jobId>` (RFP upload job status)",
+                ]
+            ),
+        }
+
+    if sub in ("channel", "chan", "whereami"):
+        ch = channel_id or ""
+        if not ch:
+            return {
+                "response_type": "ephemeral",
+                "text": "Channel context missing (try running from a channel, not a DM).",
+            }
+        return {
+            "response_type": "ephemeral",
+            "text": "\n".join(
+                [
+                    f"*Channel ID:* `{ch}`",
+                    "",
+                    "For private `rfp-machine`, set `SLACK_RFP_MACHINE_CHANNEL` to this ID (starts with `G`).",
+                    "Also ensure the bot user is invited to the private channel.",
                 ]
             ),
         }

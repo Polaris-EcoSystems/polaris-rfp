@@ -178,23 +178,46 @@ def post_message(
     if blocks:
         payload["blocks"] = blocks
 
-    try:
+    def _send(p: dict[str, Any]) -> tuple[bool, str | None, int]:
         resp = httpx.post(
             "https://slack.com/api/chat.postMessage",
             headers={"Authorization": f"Bearer {token}"},
-            json=payload,
+            json=p,
             timeout=10.0,
         )
         data = resp.json() if resp.content else {}
         ok = bool(data.get("ok"))
-        if not ok:
-            log.warning(
-                "slack_post_message_failed",
-                status_code=int(resp.status_code),
-                error=str(data.get("error") or "") or None,
-            )
-        return ok
+        err = str(data.get("error") or "").strip() or None
+        return ok, err, int(resp.status_code)
+
+    try:
+        ok, err, status = _send(payload)
+        if ok:
+            return True
+
+        # Common misconfig: channel name without '#'. Try once with '#'.
+        if err in ("channel_not_found", "not_in_channel") and isinstance(ch, str):
+            if not ch.startswith(("#", "C", "G")):
+                payload2 = dict(payload)
+                payload2["channel"] = "#" + ch
+                ok2, err2, status2 = _send(payload2)
+                if ok2:
+                    return True
+                err = err2 or err
+                status = status2 or status
+
+        log.warning(
+            "slack_post_message_failed",
+            status_code=status,
+            error=err,
+            channel=str(ch) if ch else None,
+        )
+        return False
     except Exception as e:
-        log.warning("slack_post_message_exception", error=str(e) or "unknown_error")
+        log.warning(
+            "slack_post_message_exception",
+            error=str(e) or "unknown_error",
+            channel=str(ch) if ch else None,
+        )
         return False
 

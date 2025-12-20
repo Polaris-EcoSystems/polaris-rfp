@@ -57,9 +57,12 @@ export default function ReferencesSection({ ctx }: { ctx: any }) {
       ? setControlledScope
       : setLocalScope
   const [localSearch, setLocalSearch] = useState('')
-  const search = typeof controlledSearch === 'string' ? controlledSearch : localSearch
+  const search =
+    typeof controlledSearch === 'string' ? controlledSearch : localSearch
   const setSearch =
-    typeof setControlledSearch === 'function' ? setControlledSearch : setLocalSearch
+    typeof setControlledSearch === 'function'
+      ? setControlledSearch
+      : setLocalSearch
   const [sortBy, setSortBy] = useState<'org' | 'contact' | 'time'>('org')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
@@ -71,7 +74,9 @@ export default function ReferencesSection({ ctx }: { ctx: any }) {
       .trim()
       .toLowerCase()
     const qualityIds = Array.isArray(qualityFilterIds) ? qualityFilterIds : []
-    const qualitySet = new Set(qualityIds.map((x: any) => String(x || '').trim()))
+    const qualitySet = new Set(
+      qualityIds.map((x: any) => String(x || '').trim()),
+    )
     const list =
       scope === 'unassigned'
         ? Array.isArray(unassignedReferences)
@@ -318,7 +323,9 @@ export default function ReferencesSection({ ctx }: { ctx: any }) {
                   onClick={() => setSelectedReference(reference)}
                   role="button"
                   tabIndex={0}
-                  aria-label={`View reference ${reference.organizationName || ''}`}
+                  aria-label={`View reference ${
+                    reference.organizationName || ''
+                  }`}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()

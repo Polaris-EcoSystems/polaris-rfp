@@ -130,6 +130,28 @@ def _extract_first_json_object(text: str) -> str | None:
     return m.group(0) if m else None
 
 
+def _enforce_no_additional_properties(schema: Any) -> Any:
+    """
+    OpenAI structured outputs require `additionalProperties: false` on objects.
+    Pydantic may omit it (implicitly allowing additional fields), so we enforce it.
+    """
+    if isinstance(schema, dict):
+        if schema.get("type") == "object":
+            schema["additionalProperties"] = False
+        for v in schema.values():
+            _enforce_no_additional_properties(v)
+    elif isinstance(schema, list):
+        for v in schema:
+            _enforce_no_additional_properties(v)
+    return schema
+
+
+def _should_retry_with_legacy_max_tokens(e: Exception) -> bool:
+    msg = (str(e) or "").lower()
+    # Some older models/endpoints only accept `max_tokens`.
+    return "unsupported parameter" in msg and "max_completion_tokens" in msg
+
+
 def call_text(
     *,
     purpose: str,
@@ -149,12 +171,23 @@ def call_text(
     for model in _models_to_try(purpose):
         for attempt in range(1, max(1, int(retries) + 1) + 1):
             try:
-                completion = client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
+                try:
+                    completion = client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        max_completion_tokens=max_tokens,
+                        temperature=temperature,
+                    )
+                except Exception as e:
+                    if _should_retry_with_legacy_max_tokens(e):
+                        completion = client.chat.completions.create(
+                            model=model,
+                            messages=messages,
+                            max_tokens=max_tokens,
+                            temperature=temperature,
+                        )
+                    else:
+                        raise
                 out = (completion.choices[0].message.content or "").strip()
                 if not out:
                     raise AiParseError("empty_model_response")
@@ -221,6 +254,7 @@ def call_json(
     messages = _normalize_messages(messages, max_prompt_chars)
 
     schema = response_model.model_json_schema()
+    schema = _enforce_no_additional_properties(schema)
     # OpenAI structured output format wrapper.
     rf_json_schema: dict[str, Any] = {
         "type": "json_schema",
@@ -252,16 +286,26 @@ def call_json(
                     else None
                 )
                 try:
-                    kwargs: dict[str, Any] = {
+                    kwargs_base: dict[str, Any] = {
                         "model": model,
                         "messages": messages,
-                        "max_tokens": max_tokens,
                         "temperature": temp,
                     }
                     if response_format is not None:
-                        kwargs["response_format"] = response_format
+                        kwargs_base["response_format"] = response_format
 
-                    completion = client.chat.completions.create(**kwargs)
+                    try:
+                        completion = client.chat.completions.create(
+                            **(kwargs_base | {"max_completion_tokens": max_tokens})
+                        )
+                    except Exception as e:
+                        if _should_retry_with_legacy_max_tokens(e):
+                            completion = client.chat.completions.create(
+                                **(kwargs_base | {"max_tokens": max_tokens})
+                            )
+                        else:
+                            raise
+
                     content = (completion.choices[0].message.content or "").strip()
                     if not content:
                         raise AiParseError("empty_model_response")
@@ -364,13 +408,25 @@ def stream_text(
     last_err: Exception | None = None
     for model in _models_to_try(purpose):
         try:
-            stream = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                stream=True,
-            )
+            try:
+                stream = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    max_completion_tokens=max_tokens,
+                    temperature=temperature,
+                    stream=True,
+                )
+            except Exception as e:
+                if _should_retry_with_legacy_max_tokens(e):
+                    stream = client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        stream=True,
+                    )
+                else:
+                    raise
             return stream, AiMeta(
                 purpose=purpose,
                 model=model,

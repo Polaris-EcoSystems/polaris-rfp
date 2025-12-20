@@ -135,11 +135,13 @@ def _normalize_member_headshot_storage(member: dict[str, Any]) -> dict[str, Any]
 
 
 @router.get("/companies")
+@router.get("/companies/")
 def companies():
     return content_repo.list_companies(limit=200)
 
 
 @router.get("/company")
+@router.get("/company/")
 def company(companyId: str | None = None):
     if companyId:
         c = content_repo.get_company_by_company_id(companyId)
@@ -152,6 +154,7 @@ def company(companyId: str | None = None):
 
 
 @router.get("/companies/{companyId}")
+@router.get("/companies/{companyId}/")
 def company_by_id(companyId: str):
     c = content_repo.get_company_by_company_id(companyId)
     if not c:
@@ -160,6 +163,7 @@ def company_by_id(companyId: str):
 
 
 @router.post("/companies", status_code=201)
+@router.post("/companies/", status_code=201)
 def create_company(body: dict):
     name = _clean_string((body or {}).get("name"), max_len=200)
     description = _clean_string((body or {}).get("description"), max_len=20000)
@@ -197,6 +201,7 @@ def create_company(body: dict):
 
 
 @router.put("/companies/{companyId}")
+@router.put("/companies/{companyId}/")
 def update_company(companyId: str, body: dict):
     existing = content_repo.get_company_by_company_id(companyId)
     if not existing:
@@ -238,6 +243,7 @@ def update_company(companyId: str, body: dict):
 
 
 @router.post("/companies/{companyId}/capabilities/regenerate")
+@router.post("/companies/{companyId}/capabilities/regenerate/")
 def regenerate_capabilities(companyId: str):
     c = content_repo.get_company_by_company_id(companyId)
     if not c:
@@ -249,6 +255,7 @@ def regenerate_capabilities(companyId: str):
 
 
 @router.put("/company")
+@router.put("/company/")
 def update_company_compat(body: dict):
     company_id = str((body or {}).get("companyId") or "").strip()
     if not company_id:
@@ -268,6 +275,7 @@ def update_company_compat(body: dict):
 
 
 @router.delete("/companies/{companyId}")
+@router.delete("/companies/{companyId}/")
 def delete_company(companyId: str):
     existing = content_repo.get_company_by_company_id(companyId)
     if not existing:
@@ -281,6 +289,7 @@ def delete_company(companyId: str):
 
 
 @router.get("/team")
+@router.get("/team/")
 def team():
     members = content_repo.list_team_members(limit=500)
     active = [m for m in members if m.get("isActive", True) is True]
@@ -288,6 +297,7 @@ def team():
 
 
 @router.get("/team/{memberId}")
+@router.get("/team/{memberId}/")
 def team_member(memberId: str):
     m = content_repo.get_team_member_by_id(memberId)
     if not m:
@@ -296,6 +306,7 @@ def team_member(memberId: str):
 
 
 @router.post("/team/headshot/presign")
+@router.post("/team/headshot/presign/")
 def presign_team_headshot(body: dict):
     file_name = str((body or {}).get("fileName") or "").strip()
     content_type = str((body or {}).get("contentType") or "").strip().lower()
@@ -334,6 +345,7 @@ def presign_team_headshot(body: dict):
 
 
 @router.post("/team", status_code=201)
+@router.post("/team/", status_code=201)
 def create_team_member(body: dict):
     doc = {
         "memberId": _clean_nullable_string((body or {}).get("memberId"), max_len=80),
@@ -364,6 +376,7 @@ def create_team_member(body: dict):
 
 
 @router.put("/team/{memberId}")
+@router.put("/team/{memberId}/")
 def update_team_member(memberId: str, body: dict):
     existing = content_repo.get_team_member_by_id(memberId)
     if not existing:
@@ -413,6 +426,7 @@ def update_team_member(memberId: str, body: dict):
 
 
 @router.delete("/team/{memberId}")
+@router.delete("/team/{memberId}/")
 def delete_team_member(memberId: str):
     existing = content_repo.get_team_member_by_id(memberId)
     if not existing:
@@ -425,6 +439,7 @@ def delete_team_member(memberId: str):
 
 
 @router.get("/projects")
+@router.get("/projects/")
 def projects(
     project_type: str | None = None,
     industry: str | None = None,
@@ -444,6 +459,7 @@ def projects(
 
 
 @router.get("/projects/{id}")
+@router.get("/projects/{id}/")
 def project_by_id(id: str):
     p = content_repo.get_past_project_by_id(id)
     if not p:
@@ -452,6 +468,7 @@ def project_by_id(id: str):
 
 
 @router.post("/projects", status_code=201)
+@router.post("/projects/", status_code=201)
 def create_project(body: dict, background_tasks: BackgroundTasks):
     required = ["title", "clientName", "description", "industry", "projectType", "duration"]
     for f in required:
@@ -485,6 +502,7 @@ def create_project(body: dict, background_tasks: BackgroundTasks):
 
 
 @router.put("/projects/{id}")
+@router.put("/projects/{id}/")
 def update_project(id: str, body: dict, background_tasks: BackgroundTasks):
     existing = content_repo.get_past_project_by_id(id)
     if not existing:
@@ -526,6 +544,7 @@ def update_project(id: str, body: dict, background_tasks: BackgroundTasks):
 
 
 @router.delete("/projects/{id}")
+@router.delete("/projects/{id}/")
 def delete_project(id: str, background_tasks: BackgroundTasks):
     existing = content_repo.get_past_project_by_id(id)
     if not existing:
@@ -541,6 +560,7 @@ def delete_project(id: str, background_tasks: BackgroundTasks):
 
 
 @router.get("/references")
+@router.get("/references/")
 def references(project_type: str | None = None, companyId: str | None = None, count: int = 10):
     items = content_repo.list_project_references(limit=500)
     filtered = [r for r in items if r.get("isActive", True) is True]
@@ -553,6 +573,7 @@ def references(project_type: str | None = None, companyId: str | None = None, co
 
 
 @router.get("/references/{id}")
+@router.get("/references/{id}/")
 def reference_by_id(id: str):
     r = content_repo.get_project_reference_by_id(id)
     if not r:
@@ -561,6 +582,7 @@ def reference_by_id(id: str):
 
 
 @router.post("/references", status_code=201)
+@router.post("/references/", status_code=201)
 def create_reference(body: dict, background_tasks: BackgroundTasks):
     required = ["organizationName", "contactName", "contactEmail", "scopeOfWork"]
     for f in required:
@@ -593,6 +615,7 @@ def create_reference(body: dict, background_tasks: BackgroundTasks):
 
 
 @router.put("/references/{id}")
+@router.put("/references/{id}/")
 def update_reference(id: str, body: dict, background_tasks: BackgroundTasks):
     existing = content_repo.get_project_reference_by_id(id)
     if not existing:
@@ -638,6 +661,7 @@ def update_reference(id: str, body: dict, background_tasks: BackgroundTasks):
 
 
 @router.delete("/references/{id}")
+@router.delete("/references/{id}/")
 def delete_reference(id: str, background_tasks: BackgroundTasks):
     existing = content_repo.get_project_reference_by_id(id)
     if not existing:

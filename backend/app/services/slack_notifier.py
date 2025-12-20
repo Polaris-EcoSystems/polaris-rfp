@@ -4,6 +4,7 @@ from typing import Any
 
 from ..settings import settings
 from .rfps_repo import get_rfp_by_id
+from .slack_secrets import get_secret_str
 from .slack_web import post_message
 
 
@@ -81,7 +82,12 @@ def notify_rfp_upload_job_completed(
 ) -> None:
     rid = str(rfp_id or "").strip()
     name = str(file_name or "").strip() or "upload.pdf"
-    ch = str(channel or settings.slack_rfp_machine_channel or "").strip() or None
+    ch = (
+        str(channel or "").strip()
+        or str(settings.slack_rfp_machine_channel or "").strip()
+        or str(get_secret_str("SLACK_RFP_MACHINE_CHANNEL") or "").strip()
+        or None
+    )
     post_message(
         text=_format_rfp_upload_summary(rfp_id=rid, file_name=name, job_id=job_id),
         channel=ch,
@@ -98,7 +104,12 @@ def notify_rfp_upload_job_failed(
 ) -> None:
     name = str(file_name or "").strip() or "upload.pdf"
     err = str(error or "").strip() or "Unknown error"
-    ch = str(channel or settings.slack_rfp_machine_channel or "").strip() or None
+    ch = (
+        str(channel or "").strip()
+        or str(settings.slack_rfp_machine_channel or "").strip()
+        or str(get_secret_str("SLACK_RFP_MACHINE_CHANNEL") or "").strip()
+        or None
+    )
     post_message(
         text=f"RFP upload failed (job `{job_id}`, file `{name}`): {err}",
         channel=ch,

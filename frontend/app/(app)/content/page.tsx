@@ -195,7 +195,10 @@ export default function ContentLibraryPage() {
       )
     : []
 
-  const normalize = (v: any) => String(v || '').toLowerCase().trim()
+  const normalize = (v: any) =>
+    String(v || '')
+      .toLowerCase()
+      .trim()
 
   const projectTypeOptions = useMemo(() => {
     const set = new Set<string>()
@@ -296,7 +299,9 @@ export default function ContentLibraryPage() {
   const dupReferenceOrgEmailIds = useMemo(() => {
     const by = new Map<string, string[]>()
     ;(Array.isArray(references) ? references : []).forEach((r: any) => {
-      const key = `${normalize(r?.organizationName)}|${normalize(r?.contactEmail)}`
+      const key = `${normalize(r?.organizationName)}|${normalize(
+        r?.contactEmail,
+      )}`
       const id = String(r?._id || r?.referenceId || '').trim()
       if (!normalize(r?.organizationName) || !normalize(r?.contactEmail) || !id)
         return
@@ -1283,7 +1288,9 @@ export default function ContentLibraryPage() {
                   <>
                     <select
                       value={projectsProjectTypeFilter}
-                      onChange={(e) => setProjectsProjectTypeFilter(e.target.value)}
+                      onChange={(e) =>
+                        setProjectsProjectTypeFilter(e.target.value)
+                      }
                       className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
                       title="Filter by project type"
                     >
@@ -1296,7 +1303,9 @@ export default function ContentLibraryPage() {
                     </select>
                     <select
                       value={projectsIndustryFilter}
-                      onChange={(e) => setProjectsIndustryFilter(e.target.value)}
+                      onChange={(e) =>
+                        setProjectsIndustryFilter(e.target.value)
+                      }
                       className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
                       title="Filter by industry"
                     >
@@ -1313,7 +1322,9 @@ export default function ContentLibraryPage() {
                 {activeTab === 'references' ? (
                   <select
                     value={referencesProjectTypeFilter}
-                    onChange={(e) => setReferencesProjectTypeFilter(e.target.value)}
+                    onChange={(e) =>
+                      setReferencesProjectTypeFilter(e.target.value)
+                    }
                     className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
                     title="Filter by project type"
                   >
@@ -1356,9 +1367,12 @@ export default function ContentLibraryPage() {
         <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-gray-900">Data health</div>
+              <div className="text-sm font-semibold text-gray-900">
+                Data health
+              </div>
               <div className="text-xs text-gray-500">
-                Quick triage for unassigned items, missing fields, and likely duplicates.
+                Quick triage for unassigned items, missing fields, and likely
+                duplicates.
               </div>
             </div>
             <button
@@ -1599,7 +1613,9 @@ export default function ContentLibraryPage() {
             <div className="mt-4 rounded-lg border border-primary-200 bg-primary-50 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="text-sm text-primary-800">
-                  <span className="font-semibold">Active data-health filter:</span>{' '}
+                  <span className="font-semibold">
+                    Active data-health filter:
+                  </span>{' '}
                   {qualityFilter.label} ({qualityFilter.ids.length})
                 </div>
                 <button
@@ -2275,7 +2291,9 @@ export default function ContentLibraryPage() {
               setSearchQuery: setGlobalQuery,
               projectTypeFilter: referencesProjectTypeFilter,
               qualityFilterLabel:
-                qualityFilter?.tab === 'references' ? qualityFilter.label : null,
+                qualityFilter?.tab === 'references'
+                  ? qualityFilter.label
+                  : null,
               qualityFilterIds:
                 qualityFilter?.tab === 'references' ? qualityFilter.ids : null,
               clearQualityFilter,

@@ -55,9 +55,12 @@ export default function ProjectsSection({ ctx }: { ctx: any }) {
       ? setControlledScope
       : setLocalScope
   const [localSearch, setLocalSearch] = useState('')
-  const search = typeof controlledSearch === 'string' ? controlledSearch : localSearch
+  const search =
+    typeof controlledSearch === 'string' ? controlledSearch : localSearch
   const setSearch =
-    typeof setControlledSearch === 'function' ? setControlledSearch : setLocalSearch
+    typeof setControlledSearch === 'function'
+      ? setControlledSearch
+      : setLocalSearch
   const [sortBy, setSortBy] = useState<'title' | 'client' | 'industry'>('title')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
@@ -69,7 +72,9 @@ export default function ProjectsSection({ ctx }: { ctx: any }) {
       .trim()
       .toLowerCase()
     const qualityIds = Array.isArray(qualityFilterIds) ? qualityFilterIds : []
-    const qualitySet = new Set(qualityIds.map((x: any) => String(x || '').trim()))
+    const qualitySet = new Set(
+      qualityIds.map((x: any) => String(x || '').trim()),
+    )
     const list =
       scope === 'unassigned'
         ? Array.isArray(unassignedProjects)
@@ -394,7 +399,11 @@ export default function ProjectsSection({ ctx }: { ctx: any }) {
               ))
             ) : (
               <EmptyState
-                title={search ? 'No projects match this search.' : 'No projects found.'}
+                title={
+                  search
+                    ? 'No projects match this search.'
+                    : 'No projects found.'
+                }
                 description={
                   search
                     ? 'Try a different query, or widen the scope.'

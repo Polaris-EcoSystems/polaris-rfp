@@ -119,6 +119,14 @@ Parameters:
     Description: Optional Secrets Manager secret ARN containing Slack credentials/config (JSON)
     Default: 'arn:aws:secretsmanager:us-east-1:211125621822:secret:polaris-rfp/slack-T4YN9o'
 
+  SlackRfpMachineChannel:
+    Type: String
+    Description: >
+      Slack channel *ID* (recommended) or name for rfp-machine notifications.
+      For private channels, use the channel ID (starts with G) and ensure the bot is invited.
+      Example: G0123456789
+    Default: 'C0A4M5813RU'
+
   EnableSlackTokenRotation:
     Type: String
     Description: If true, deploy a scheduled Lambda to refresh Slack access tokens into Secrets Manager
@@ -281,6 +289,7 @@ Resources:
         OpenAiProjectId: !Ref OpenAiProjectId
         OpenAiOrganizationId: !Ref OpenAiOrganizationId
         SlackSecretArn: !Ref SlackSecretArn
+        SlackRfpMachineChannel: !Ref SlackRfpMachineChannel
         EnableSlackTokenRotation: !Ref EnableSlackTokenRotation
 
   FrontendStack:

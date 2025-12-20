@@ -1,0 +1,151 @@
+{
+  "app": {
+    "name": "North Star RFP"
+  },
+  "nav": {
+    "primary": "Principal",
+    "resources": "Recursos",
+    "tools": "Herramientas",
+    "account": "Cuenta",
+    "pipeline": "Pipeline",
+    "rfps": "RFPs",
+    "proposals": "Propuestas",
+    "templates": "Plantillas",
+    "contentLibrary": "Biblioteca de contenido",
+    "rfpFinder": "Buscador de RFP",
+    "buyerProfiles": "Perfiles de compradores",
+    "googleDrive": "Google Drive",
+    "canva": "Canva",
+    "profile": "Perfil"
+  },
+  "header": {
+    "openSidebar": "Abrir barra lateral",
+    "closeSidebar": "Cerrar barra lateral",
+    "openUserMenu": "Abrir menú de usuario",
+    "guest": "Invitado",
+    "online": "En línea",
+    "offline": "Sin conexión",
+    "logout": "Cerrar sesión",
+    "signIn": "Iniciar sesión",
+    "api": "API",
+    "notifications": "Notificaciones",
+    "notificationsTitle": "Notificaciones",
+    "notificationsSubtitle": "Recordatorios de vencimiento y actualizaciones",
+    "notificationsLoading": "Cargando…",
+    "notificationsEmpty": "Aún no hay notificaciones."
+  },
+  "search": {
+    "open": "Abrir búsqueda",
+    "placeholder": "Buscar propuestas, RFPs…",
+    "searching": "Buscando…",
+    "rfps": "RFPs",
+    "rfpsEmpty": "No se encontraron RFPs",
+    "proposals": "Propuestas",
+    "proposalsEmpty": "No se encontraron propuestas",
+    "topResults": "Mostrando los mejores resultados"
+  },
+  "pipeline": {
+    "title": "Pipeline",
+    "subtitle": "Tu flujo principal: ingreso → decisión → borrador → revisión → envío.",
+    "workflow": {
+      "intake": "Ingreso",
+      "bidDecision": "Decisión",
+      "draft": "Borrador",
+      "review": "Revisión",
+      "submit": "Envío"
+    },
+    "searchPlaceholder": "Buscar por título o cliente…",
+    "uploadRfp": "Subir RFP",
+    "finder": "Buscador",
+    "emptyStage": "Sin elementos.",
+    "next": "Siguiente:",
+    "actions": {
+      "viewRfp": "Ver RFP",
+      "reviewRfp": "Revisar RFP",
+      "generateProposal": "Generar propuesta",
+      "openProposal": "Abrir propuesta"
+    },
+    "hints": {
+      "disqualified": "Revisa fechas límite y archiva para el historial.",
+      "noBid": "Registra motivos de no-ofertar para aprender a futuro.",
+      "bidDecision": "Decide ofertar/no ofertar y anota bloqueos.",
+      "proposalDraftFirst": "Genera el primer borrador.",
+      "proposalDraftContinue": "Completa secciones faltantes y pasa a “en revisión”.",
+      "reviewRebuttal": "Revisa requisitos; agrega acciones y respuestas.",
+      "rework": "Resuelve elementos de revisión y actualiza el borrador.",
+      "readyToSubmit": "Finaliza la lista y exporta.",
+      "submitted": "Registra el resultado y adjunta los archivos finales."
+    },
+    "stages": {
+      "BidDecision": {
+        "label": "Decisión",
+        "help": "Decide ofertar/no ofertar y registra bloqueos."
+      },
+      "ProposalDraft": {
+        "label": "Borrador",
+        "help": "Genera una propuesta y completa secciones."
+      },
+      "ReviewRebuttal": {
+        "label": "Revisión",
+        "help": "Realiza revisión de cumplimiento y planifica correcciones."
+      },
+      "Rework": {
+        "label": "Retrabajo",
+        "help": "Resuelve elementos de revisión y actualiza el borrador."
+      },
+      "ReadyToSubmit": {
+        "label": "Listo para enviar",
+        "help": "Finaliza la lista y prepara exportaciones."
+      },
+      "Submitted": {
+        "label": "Enviado",
+        "help": "Registra el resultado y conserva artefactos."
+      },
+      "NoBid": {
+        "label": "No ofertar",
+        "help": "Archiva con notas de decisión para aprendizaje."
+      },
+      "Disqualified": {
+        "label": "Descalificado",
+        "help": "Vencido o inválido—conservar para historial."
+      }
+    },
+    "proposalCount": "{count, plural, one {# propuesta} other {# propuestas}}",
+    "due": "Vence",
+    "dueUnknown": "—",
+    "dueDays": "{days}d",
+    "fit": "Ajuste",
+    "fitNone": "—"
+  },
+  "rfps": {
+    "title": "RFPs",
+    "subtitle": "Administra los documentos RFP subidos y su análisis",
+    "bannerTitle": "Pipeline es el flujo principal.",
+    "bannerDescription": "Esta página es una vista tipo tabla para descubrimiento y revisión masiva.",
+    "uploadRfp": "Subir RFP",
+    "searchLabel": "Buscar RFPs",
+    "searchPlaceholder": "Buscar RFPs por título o cliente…",
+    "filterLabel": "Filtrar por tipo de proyecto",
+    "allProjectTypes": "Todos los tipos de proyecto",
+    "showing": "Mostrando {filtered} de {total} RFPs",
+    "clearFilters": "Quitar filtros",
+    "toggleDetails": "Alternar detalles",
+    "fit": "Ajuste",
+    "fitNone": "—",
+    "proposalCount": "{count, plural, one {# propuesta} other {# propuestas}}",
+    "disqualified": "Descalificado",
+    "viewDetails": "Ver detalles",
+    "delete": "Eliminar",
+    "uploaded": "Subido {date}",
+    "noRfpsTitle": "No hay RFPs",
+    "noRfpsSubtitle": "Comienza subiendo tu primer RFP.",
+    "deleteModalTitle": "¿Eliminar \"{title}\"?",
+    "deleteModalTitleFallback": "Eliminar RFP",
+    "deleteModalCancel": "Cancelar",
+    "deleteModalConfirm": "Eliminar",
+    "deleteModalBody": "Esta acción no se puede deshacer.",
+    "submissionDue": "Entrega {date}",
+    "questionsDue": "Preguntas {date}",
+    "projectDeadline": "Fecha límite del proyecto {date}"
+  }
+}

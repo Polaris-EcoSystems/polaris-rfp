@@ -1,6 +1,16 @@
 'use client'
 
 import {
+  Dialog,
+  DialogPanel,
+  DialogTitle,
+  Menu,
+  MenuButton,
+  MenuItem,
+  MenuItems,
+  Transition,
+} from '@headlessui/react'
+import {
   Bars3Icon,
   BellIcon,
   ChartBarIcon,
@@ -9,27 +19,41 @@ import {
   CogIcon,
   DocumentTextIcon,
   FolderIcon,
+  MagnifyingGlassIcon,
   UserCircleIcon,
   UserGroupIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline'
+import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { ReactNode, useEffect, useRef, useState } from 'react'
+import {
+  Fragment,
+  ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import api, { extractList, proxyUrl, rfpApi, type RFP } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import GlobalSearch from './GlobalSearch'
+import Modal from './ui/Modal'
 
 interface LayoutProps {
   children: ReactNode
 }
 
 export default function Layout({ children }: LayoutProps) {
+  const t = useTranslations()
+  const locale = useLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [topMenuOpen, setTopMenuOpen] = useState(false)
-  const [footerMenuOpen, setFooterMenuOpen] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
+  const [searchModalOpen, setSearchModalOpen] = useState(false)
+  // Legacy notification popover wiring (kept for compatibility with older header markup)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const notificationsRef = useRef<HTMLDivElement | null>(null)
+  const [notificationsRequestedAt, setNotificationsRequestedAt] = useState(0)
   const [backendUp, setBackendUp] = useState<boolean | null>(null)
   const [backendLastCheckedAt, setBackendLastCheckedAt] = useState<Date | null>(
     null,
@@ -46,42 +70,25 @@ export default function Layout({ children }: LayoutProps) {
   const router = useRouter()
   const pathname = usePathname()
   const { user, logout } = useAuth()
-  const topMenuRef = useRef<HTMLDivElement | null>(null)
-  const footerMenuRef = useRef<HTMLDivElement | null>(null)
-  const notificationsRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
-    function handleDocClick(e: MouseEvent) {
-      const target = e.target as Node
-      if (topMenuRef.current && !topMenuRef.current.contains(target)) {
-        setTopMenuOpen(false)
-      }
-      if (footerMenuRef.current && !footerMenuRef.current.contains(target)) {
-        setFooterMenuOpen(false)
-      }
-      if (
-        notificationsRef.current &&
-        !notificationsRef.current.contains(target)
-      ) {
-        setNotificationsOpen(false)
-      }
+    if (!notificationsOpen) return
+    const onPointerDown = (e: MouseEvent) => {
+      const el = notificationsRef.current
+      if (!el) return
+      if (e.target && el.contains(e.target as Node)) return
+      setNotificationsOpen(false)
     }
-
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        setTopMenuOpen(false)
-        setFooterMenuOpen(false)
-        setNotificationsOpen(false)
-      }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNotificationsOpen(false)
     }
-
-    document.addEventListener('mousedown', handleDocClick)
-    document.addEventListener('keydown', handleKey)
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
     return () => {
-      document.removeEventListener('mousedown', handleDocClick)
-      document.removeEventListener('keydown', handleKey)
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
     }
-  }, [])
+  }, [notificationsOpen])
 
   // Heartbeat: check backend is reachable every minute.
   useEffect(() => {
@@ -111,7 +118,7 @@ export default function Layout({ children }: LayoutProps) {
   }, [])
 
   useEffect(() => {
-    if (!notificationsOpen) return
+    if (!notificationsRequestedAt) return
     let mounted = true
     const load = async () => {
       try {
@@ -187,95 +194,118 @@ export default function Layout({ children }: LayoutProps) {
     return () => {
       mounted = false
     }
-  }, [notificationsOpen])
+  }, [notificationsRequestedAt])
 
   // Search moved to GlobalSearch component
 
   type NavItem = {
-    name: string
+    id: string
+    label: string
     href: string
     icon: any
     current: boolean
   }
 
-  const primaryNav: NavItem[] = [
-    {
-      name: 'Pipeline',
-      href: '/pipeline',
-      icon: ChartBarIcon,
-      current: pathname.startsWith('/pipeline'),
-    },
-    {
-      name: 'RFPs',
-      href: '/rfps',
-      icon: DocumentTextIcon,
-      current: pathname.startsWith('/rfps'),
-    },
-    {
-      name: 'Proposals',
-      href: '/proposals',
-      icon: DocumentTextIcon,
-      current: pathname.startsWith('/proposals'),
-    },
-  ]
+  const primaryNav: NavItem[] = useMemo(
+    () => [
+      {
+        id: 'pipeline',
+        label: t('nav.pipeline'),
+        href: '/pipeline',
+        icon: ChartBarIcon,
+        current: pathname.startsWith('/pipeline'),
+      },
+      {
+        id: 'rfps',
+        label: t('nav.rfps'),
+        href: '/rfps',
+        icon: DocumentTextIcon,
+        current: pathname.startsWith('/rfps'),
+      },
+      {
+        id: 'proposals',
+        label: t('nav.proposals'),
+        href: '/proposals',
+        icon: DocumentTextIcon,
+        current: pathname.startsWith('/proposals'),
+      },
+    ],
+    [pathname, t],
+  )
 
-  const resourcesNav: NavItem[] = [
-    {
-      name: 'Templates',
-      href: '/templates',
-      icon: CogIcon,
-      current: pathname.startsWith('/templates'),
-    },
-    {
-      name: 'Content Library',
-      href: '/content',
-      icon: UserGroupIcon,
-      current: pathname === '/content',
-    },
-  ]
+  const resourcesNav: NavItem[] = useMemo(
+    () => [
+      {
+        id: 'templates',
+        label: t('nav.templates'),
+        href: '/templates',
+        icon: CogIcon,
+        current: pathname.startsWith('/templates'),
+      },
+      {
+        id: 'content',
+        label: t('nav.contentLibrary'),
+        href: '/content',
+        icon: UserGroupIcon,
+        current: pathname === '/content',
+      },
+    ],
+    [pathname, t],
+  )
 
-  const toolsNav: NavItem[] = [
-    {
-      name: 'RFP Finder',
-      href: '/finder',
-      icon: FolderIcon,
-      current: pathname === '/finder',
-    },
-    {
-      name: 'Buyer Profiles',
-      href: '/linkedin-finder',
-      icon: UserGroupIcon,
-      current: pathname === '/linkedin-finder',
-    },
-    {
-      name: 'Google Drive',
-      href: '/googledrive',
-      icon: FolderIcon,
-      current: pathname.startsWith('/googledrive'),
-    },
-    {
-      name: 'Canva',
-      href: '/integrations/canva',
-      icon: CogIcon,
-      current: pathname.startsWith('/integrations/canva'),
-    },
-  ]
+  const toolsNav: NavItem[] = useMemo(
+    () => [
+      {
+        id: 'finder',
+        label: t('nav.rfpFinder'),
+        href: '/finder',
+        icon: FolderIcon,
+        current: pathname === '/finder',
+      },
+      {
+        id: 'linkedin-finder',
+        label: t('nav.buyerProfiles'),
+        href: '/linkedin-finder',
+        icon: UserGroupIcon,
+        current: pathname === '/linkedin-finder',
+      },
+      {
+        id: 'googledrive',
+        label: t('nav.googleDrive'),
+        href: '/googledrive',
+        icon: FolderIcon,
+        current: pathname.startsWith('/googledrive'),
+      },
+      {
+        id: 'canva',
+        label: t('nav.canva'),
+        href: '/integrations/canva',
+        icon: CogIcon,
+        current: pathname.startsWith('/integrations/canva'),
+      },
+    ],
+    [pathname, t],
+  )
 
-  const accountNav: NavItem[] = [
-    {
-      name: 'Profile',
-      href: '/profile',
-      icon: UserCircleIcon,
-      current: pathname === '/profile',
-    },
-  ]
+  const accountNav: NavItem[] = useMemo(
+    () => [
+      {
+        id: 'profile',
+        label: t('nav.profile'),
+        href: '/profile',
+        icon: UserCircleIcon,
+        current: pathname === '/profile',
+      },
+    ],
+    [pathname, t],
+  )
 
   const toolsHasCurrent = toolsNav.some((x) => x.current)
   const toolsVisible = toolsOpen || toolsHasCurrent
 
   const NavLink = ({ item }: { item: NavItem }) => (
     <Link
-      key={item.name}
+      key={item.id}
       href={item.href}
       // Avoid scale transforms here: they can overlap neighboring links and "steal" clicks.
       className={`group flex items-center px-3 py-3 text-sm font-medium rounded-xl transition-colors duration-200 ${
@@ -291,8 +321,9 @@ export default function Layout({ children }: LayoutProps) {
             ? 'text-white'
             : 'text-gray-400 group-hover:text-gray-600'
         }`}
+        aria-hidden="true"
       />
-      <span className="font-medium">{item.name}</span>
+      <span className="font-medium">{item.label}</span>
       {item.current && (
         <div className="ml-auto w-2 h-2 bg-white rounded-full animate-pulse" />
       )}
@@ -300,6 +331,141 @@ export default function Layout({ children }: LayoutProps) {
   )
 
   const displayName = user?.display_name || user?.username || 'Guest'
+  const toolsPanelId = 'sidebar-tools-panel'
+
+  const SidebarFooter = () => (
+    <div className="p-4 border-t border-gray-200">
+      <div className="flex items-center justify-between p-3 bg-gradient-to-r from-gray-50 to-blue-50 rounded-xl">
+        <div className="flex items-center gap-3 min-w-0">
+          <UserCircleIcon
+            className="h-8 w-8 text-gray-400"
+            aria-hidden="true"
+          />
+          <div className="min-w-0">
+            {user ? (
+              <>
+                <div className="text-sm font-medium text-gray-900 truncate">
+                  {displayName}
+                </div>
+                <div className="text-xs text-gray-500 truncate">
+                  {user.email || ''}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-sm font-medium text-gray-900">
+                  {t('header.guest')}
+                </div>
+                <Link href="/login" className="text-xs text-blue-600">
+                  {t('header.signIn')}
+                </Link>
+              </>
+            )}
+          </div>
+        </div>
+        {user ? (
+          <Menu as="div" className="relative">
+            <MenuButton
+              type="button"
+              className="inline-flex items-center justify-center rounded-md p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+              aria-label={t('header.openUserMenu')}
+            >
+              <ChevronDownIcon className="h-5 w-5" aria-hidden="true" />
+            </MenuButton>
+            <Transition
+              as={Fragment}
+              enter="ease-out duration-150 motion-reduce:transition-none"
+              enterFrom="opacity-0 translate-y-1"
+              enterTo="opacity-100 translate-y-0"
+              leave="ease-in duration-100 motion-reduce:transition-none"
+              leaveFrom="opacity-100 translate-y-0"
+              leaveTo="opacity-0 translate-y-1"
+            >
+              <MenuItems className="absolute right-0 bottom-full mb-2 w-48 bg-white border border-gray-200 rounded-lg shadow-xl z-50 focus:outline-none">
+                <div className="py-1.5">
+                  <MenuItem>
+                    {({ active }) => (
+                      <button
+                        onClick={async () => {
+                          await logout()
+                          router.push('/login')
+                        }}
+                        className={`w-full text-left px-4 py-2.5 text-sm font-medium text-red-600 transition-colors duration-150 flex items-center gap-2 rounded-md ${
+                          active ? 'bg-red-50 text-red-700' : ''
+                        }`}
+                        type="button"
+                      >
+                        {t('header.logout')}
+                      </button>
+                    )}
+                  </MenuItem>
+                </div>
+              </MenuItems>
+            </Transition>
+          </Menu>
+        ) : null}
+      </div>
+    </div>
+  )
+
+  const SidebarNav = () => (
+    <div className="flex h-full flex-col">
+      <nav className="mt-4 px-3 space-y-6 flex-1 overflow-y-auto pb-4">
+        <div className="space-y-2">
+          <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
+            {t('nav.primary')}
+          </div>
+          {primaryNav.map((item) => (
+            <NavLink key={item.id} item={item} />
+          ))}
+        </div>
+
+        <div className="space-y-2">
+          <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
+            {t('nav.resources')}
+          </div>
+          {resourcesNav.map((item) => (
+            <NavLink key={item.id} item={item} />
+          ))}
+        </div>
+
+        <div className="space-y-2">
+          <button
+            type="button"
+            onClick={() => setToolsOpen((s) => !s)}
+            className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-semibold tracking-wider text-gray-400 uppercase hover:text-gray-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 rounded-md"
+            aria-expanded={toolsVisible}
+            aria-controls={toolsPanelId}
+          >
+            <span>{t('nav.tools')}</span>
+            {toolsVisible ? (
+              <ChevronUpIcon className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+            )}
+          </button>
+          {toolsVisible ? (
+            <div id={toolsPanelId} className="space-y-2">
+              {toolsNav.map((item) => (
+                <NavLink key={item.id} item={item} />
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="space-y-2">
+          <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
+            {t('nav.account')}
+          </div>
+          {accountNav.map((item) => (
+            <NavLink key={item.id} item={item} />
+          ))}
+        </div>
+      </nav>
+
+      <SidebarFooter />
+    </div>
+  )
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
@@ -309,18 +475,18 @@ export default function Layout({ children }: LayoutProps) {
           <div className="flex items-center space-x-4 min-w-0">
             <button
               onClick={() => setSidebarOpen(true)}
-              className="lg:hidden p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors"
-              aria-label="Open sidebar"
+              className="lg:hidden p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+              aria-label={t('header.openSidebar')}
               type="button"
             >
-              <Bars3Icon className="h-6 w-6" />
+              <Bars3Icon className="h-6 w-6" aria-hidden="true" />
             </button>
 
             <Link
               href="/pipeline"
               className="font-bold text-gray-900 tracking-tight whitespace-nowrap"
             >
-              North Star RFP
+              {t('app.name')}
             </Link>
 
             <div className="hidden sm:block">
@@ -330,7 +496,7 @@ export default function Layout({ children }: LayoutProps) {
             </div>
           </div>
 
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center gap-2 sm:gap-4">
             <div
               className="hidden sm:flex items-center gap-2 text-xs text-gray-600"
               title={
@@ -358,290 +524,251 @@ export default function Layout({ children }: LayoutProps) {
                     : 'bg-red-500'
                 }`}
               />
-              <span>API</span>
+              <span>{t('header.api')}</span>
             </div>
 
-            <div ref={notificationsRef} className="relative">
-              <button
-                onClick={() => setNotificationsOpen((s) => !s)}
-                className="p-2 rounded-xl text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-all duration-200 relative"
-                aria-expanded={notificationsOpen}
-                aria-label="Notifications"
+            <button
+              type="button"
+              onClick={() => setSearchModalOpen(true)}
+              className="sm:hidden p-2 rounded-xl text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+              aria-label={t('search.open')}
+            >
+              <MagnifyingGlassIcon className="h-6 w-6" aria-hidden="true" />
+            </button>
+
+            <Menu as="div" className="relative">
+              <MenuButton
+                onClick={() => setNotificationsRequestedAt(Date.now())}
+                className="p-2 rounded-xl text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-all duration-200 relative focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                aria-label={t('header.notifications')}
                 type="button"
               >
-                <BellIcon className="h-6 w-6" />
-              </button>
-              {notificationsOpen && (
-                <div className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-xl z-50">
+                <BellIcon className="h-6 w-6" aria-hidden="true" />
+              </MenuButton>
+              <Transition
+                as={Fragment}
+                enter="ease-out duration-150 motion-reduce:transition-none"
+                enterFrom="opacity-0 translate-y-1"
+                enterTo="opacity-100 translate-y-0"
+                leave="ease-in duration-100 motion-reduce:transition-none"
+                leaveFrom="opacity-100 translate-y-0"
+                leaveTo="opacity-0 translate-y-1"
+              >
+                <MenuItems className="absolute right-0 mt-2 w-80 bg-white border border-gray-200 rounded-lg shadow-xl z-50 focus:outline-none">
                   <div className="px-4 py-3 border-b border-gray-100">
                     <div className="text-sm font-semibold text-gray-900">
-                      Notifications
+                      {t('header.notificationsTitle')}
                     </div>
                     <div className="text-xs text-gray-500">
-                      Due date reminders and updates
+                      {t('header.notificationsSubtitle')}
                     </div>
                   </div>
                   <div className="px-4 py-3 text-sm text-gray-700">
                     {notificationsLoading ? (
-                      <div className="py-4 text-gray-600">Loading…</div>
+                      <div className="py-4 text-gray-600">
+                        {t('header.notificationsLoading')}
+                      </div>
                     ) : notificationItems.length === 0 ? (
                       <div className="py-4 text-gray-600">
-                        No notifications yet.
+                        {t('header.notificationsEmpty')}
                       </div>
                     ) : (
                       <div className="space-y-2">
                         {notificationItems.map((it) => (
-                          <button
-                            key={it.id}
-                            type="button"
-                            onClick={() => {
-                              setNotificationsOpen(false)
-                              // Try to route to the RFP details if we can infer the ID from the composite key
-                              const rfpId = it.id.split(':')[0]
-                              if (rfpId) router.push(`/rfps/${rfpId}`)
-                            }}
-                            className="w-full text-left p-2 rounded-md hover:bg-gray-50"
-                          >
-                            <div className="flex items-start gap-2">
-                              <div
-                                className={`mt-1 h-2 w-2 rounded-full ${
-                                  it.tone === 'danger'
-                                    ? 'bg-red-500'
-                                    : it.tone === 'warning'
-                                    ? 'bg-amber-500'
-                                    : 'bg-blue-500'
+                          <MenuItem key={it.id}>
+                            {({ active }) => (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const rfpId = it.id.split(':')[0]
+                                  if (rfpId) router.push(`/rfps/${rfpId}`)
+                                }}
+                                className={`w-full text-left p-2 rounded-md ${
+                                  active ? 'bg-gray-50' : ''
                                 }`}
-                              />
-                              <div className="min-w-0">
-                                <div className="text-sm font-medium text-gray-900 truncate">
-                                  {it.title}
+                              >
+                                <div className="flex items-start gap-2">
+                                  <div
+                                    className={`mt-1 h-2 w-2 rounded-full ${
+                                      it.tone === 'danger'
+                                        ? 'bg-red-500'
+                                        : it.tone === 'warning'
+                                        ? 'bg-amber-500'
+                                        : 'bg-blue-500'
+                                    }`}
+                                    aria-hidden="true"
+                                  />
+                                  <div className="min-w-0">
+                                    <div className="text-sm font-medium text-gray-900 truncate">
+                                      {it.title}
+                                    </div>
+                                    <div className="text-xs text-gray-600 line-clamp-2">
+                                      {it.subtitle}
+                                    </div>
+                                  </div>
                                 </div>
-                                <div className="text-xs text-gray-600 line-clamp-2">
-                                  {it.subtitle}
-                                </div>
-                              </div>
-                            </div>
-                          </button>
+                              </button>
+                            )}
+                          </MenuItem>
                         ))}
                       </div>
                     )}
                   </div>
-                </div>
-              )}
-            </div>
+                </MenuItems>
+              </Transition>
+            </Menu>
 
-            <div ref={topMenuRef} className="relative">
-              <button
-                onClick={() => setTopMenuOpen((s) => !s)}
-                className="flex items-center space-x-3 p-2 rounded-xl hover:bg-gray-100 transition-colors"
-                aria-expanded={topMenuOpen}
+            <Menu as="div" className="relative">
+              <MenuButton
+                className="flex items-center gap-3 p-2 rounded-xl hover:bg-gray-100 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                aria-label={t('header.openUserMenu')}
                 type="button"
               >
-                <UserCircleIcon className="h-8 w-8 text-gray-600" />
+                <UserCircleIcon
+                  className="h-8 w-8 text-gray-600"
+                  aria-hidden="true"
+                />
                 <div className="hidden sm:block text-left">
                   {user ? (
                     <>
                       <p className="text-sm font-medium text-gray-900">
                         {displayName}
                       </p>
-                      <p className="text-xs text-gray-500">Online</p>
+                      <p className="text-xs text-gray-500">
+                        {t('header.online')}
+                      </p>
                     </>
                   ) : (
                     <>
-                      <p className="text-sm font-medium text-gray-900">Guest</p>
-                      <p className="text-xs text-gray-500">Offline</p>
+                      <p className="text-sm font-medium text-gray-900">
+                        {t('header.guest')}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        {t('header.offline')}
+                      </p>
                     </>
                   )}
                 </div>
-                {/* chevron indicating menu state */}
-                {topMenuOpen ? (
-                  <ChevronUpIcon className="h-4 w-4 text-gray-400" />
-                ) : (
-                  <ChevronDownIcon className="h-4 w-4 text-gray-400" />
-                )}
-              </button>
-              {topMenuOpen && (
-                <div className="absolute right-0 mt-2 w-52 bg-white border border-gray-200 rounded-lg shadow-xl z-50">
+                <ChevronDownIcon
+                  className="h-4 w-4 text-gray-400"
+                  aria-hidden="true"
+                />
+              </MenuButton>
+              <Transition
+                as={Fragment}
+                enter="ease-out duration-150 motion-reduce:transition-none"
+                enterFrom="opacity-0 translate-y-1"
+                enterTo="opacity-100 translate-y-0"
+                leave="ease-in duration-100 motion-reduce:transition-none"
+                leaveFrom="opacity-100 translate-y-0"
+                leaveTo="opacity-0 translate-y-1"
+              >
+                <MenuItems className="absolute right-0 mt-2 w-52 bg-white border border-gray-200 rounded-lg shadow-xl z-50 focus:outline-none">
                   <div className="py-1.5">
-                    <button
-                      onClick={async () => {
-                        setTopMenuOpen(false)
-                        await logout()
-                        router.push('/login')
-                      }}
-                      className="w-full text-left px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors duration-150 flex items-center gap-2 rounded-md"
-                      type="button"
-                    >
-                      <svg
-                        className="h-4 w-4"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                        />
-                      </svg>
-                      Logout
-                    </button>
+                    <MenuItem>
+                      {({ active }) => (
+                        <button
+                          onClick={async () => {
+                            await logout()
+                            router.push('/login')
+                          }}
+                          className={`w-full text-left px-4 py-2.5 text-sm font-medium text-red-600 transition-colors duration-150 flex items-center gap-2 rounded-md ${
+                            active ? 'bg-red-50 text-red-700' : ''
+                          }`}
+                          type="button"
+                        >
+                          <svg
+                            className="h-4 w-4"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                            aria-hidden="true"
+                            focusable="false"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                            />
+                          </svg>
+                          {t('header.logout')}
+                        </button>
+                      )}
+                    </MenuItem>
                   </div>
-                </div>
-              )}
-            </div>
+                </MenuItems>
+              </Transition>
+            </Menu>
           </div>
         </div>
       </header>
 
-      {/* Mobile sidebar backdrop */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-x-0 bottom-0 top-16 z-30 bg-gray-600 bg-opacity-75 transition-opacity lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Sidebar */}
-      <div
-        className={`fixed left-0 top-16 bottom-0 z-50 w-64 bg-white shadow-xl transform transition-transform duration-300 ease-in-out lg:translate-x-0 ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        }`}
+      <Modal
+        isOpen={searchModalOpen}
+        onClose={() => setSearchModalOpen(false)}
+        title={t('search.open')}
+        size="md"
       >
-        <div className="flex items-center justify-end px-4 py-3 lg:hidden border-b border-gray-200">
-          <button
-            onClick={() => setSidebarOpen(false)}
-            className="p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors"
-            aria-label="Close sidebar"
-            type="button"
+        <GlobalSearch
+          autoFocus
+          containerClassName="w-full"
+          inputClassName="w-full pl-4 pr-10 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-gray-50 transition-all duration-200"
+          dropdownClassName="absolute mt-2 w-full max-h-96 overflow-auto rounded-xl border border-gray-200 bg-white shadow-lg z-40"
+        />
+      </Modal>
+
+      {/* Mobile sidebar */}
+      <Transition show={sidebarOpen} as={Fragment}>
+        <Dialog
+          as="div"
+          className="relative z-50 lg:hidden"
+          onClose={setSidebarOpen}
+        >
+          <Transition.Child
+            as={Fragment}
+            enter="ease-out duration-200 motion-reduce:transition-none"
+            enterFrom="opacity-0"
+            enterTo="opacity-100"
+            leave="ease-in duration-150 motion-reduce:transition-none"
+            leaveFrom="opacity-100"
+            leaveTo="opacity-0"
           >
-            <XMarkIcon className="h-6 w-6" />
-          </button>
-        </div>
+            <div className="fixed inset-0 bg-gray-600/75 top-16" />
+          </Transition.Child>
 
-        <nav className="mt-4 px-3 space-y-6">
-          <div className="space-y-2">
-            <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
-              Primary
-            </div>
-            {primaryNav.map((item) => (
-              <NavLink key={item.name} item={item} />
-            ))}
-          </div>
-
-          <div className="space-y-2">
-            <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
-              Resources
-            </div>
-            {resourcesNav.map((item) => (
-              <NavLink key={item.name} item={item} />
-            ))}
-          </div>
-
-          <div className="space-y-2">
-            <button
-              type="button"
-              onClick={() => setToolsOpen((s) => !s)}
-              className="w-full flex items-center justify-between px-3 py-2 text-[11px] font-semibold tracking-wider text-gray-400 uppercase hover:text-gray-600"
-              aria-expanded={toolsVisible}
+          <div className="fixed inset-0 top-16 flex">
+            <Transition.Child
+              as={Fragment}
+              enter="ease-out duration-200 motion-reduce:transition-none"
+              enterFrom="-translate-x-full"
+              enterTo="translate-x-0"
+              leave="ease-in duration-150 motion-reduce:transition-none"
+              leaveFrom="translate-x-0"
+              leaveTo="-translate-x-full"
             >
-              <span>Tools</span>
-              {toolsVisible ? (
-                <ChevronUpIcon className="h-4 w-4" />
-              ) : (
-                <ChevronDownIcon className="h-4 w-4" />
-              )}
-            </button>
-            {toolsVisible && (
-              <div className="space-y-2">
-                {toolsNav.map((item) => (
-                  <NavLink key={item.name} item={item} />
-                ))}
-              </div>
-            )}
+              <DialogPanel className="relative w-64 bg-white shadow-xl flex flex-col">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+                  <DialogTitle className="sr-only">Navigation</DialogTitle>
+                  <button
+                    onClick={() => setSidebarOpen(false)}
+                    className="p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+                    aria-label={t('header.closeSidebar')}
+                    type="button"
+                  >
+                    <XMarkIcon className="h-6 w-6" aria-hidden="true" />
+                  </button>
+                </div>
+                <SidebarNav />
+              </DialogPanel>
+            </Transition.Child>
           </div>
+        </Dialog>
+      </Transition>
 
-          <div className="space-y-2">
-            <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
-              Account
-            </div>
-            {accountNav.map((item) => (
-              <NavLink key={item.name} item={item} />
-            ))}
-          </div>
-        </nav>
-
-        {/* Sidebar footer */}
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200">
-          <div className="flex items-center justify-between p-3 bg-gradient-to-r from-gray-50 to-blue-50 rounded-xl">
-            <div
-              ref={footerMenuRef}
-              className="flex items-center space-x-3 relative"
-            >
-              <UserCircleIcon className="h-8 w-8 text-gray-400" />
-              <div>
-                {user ? (
-                  <>
-                    <button
-                      onClick={() => setFooterMenuOpen((s) => !s)}
-                      className="text-left"
-                      aria-expanded={footerMenuOpen}
-                    >
-                      <p className="text-sm font-medium text-gray-900">
-                        {displayName}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {user.email || ''}
-                      </p>
-                    </button>
-                    {footerMenuOpen && (
-                      <div className="absolute left-0 bottom-full mb-4 w-48 bg-white border border-gray-200 rounded-lg shadow-xl z-50">
-                        <div className="py-1.5">
-                          <button
-                            onClick={async () => {
-                              setFooterMenuOpen(false)
-                              await logout()
-                              router.push('/login')
-                            }}
-                            className="w-full text-left px-4 py-2.5 text-sm font-medium text-red-600 hover:bg-red-50 hover:text-red-700 transition-colors duration-150 flex items-center gap-2 rounded-md"
-                          >
-                            <svg
-                              className="h-4 w-4"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                              />
-                            </svg>
-                            Logout
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm font-medium text-gray-900">Guest</p>
-                    <Link href="/login" className="text-xs text-blue-600">
-                      Sign in
-                    </Link>
-                  </>
-                )}
-              </div>
-            </div>
-            {footerMenuOpen ? (
-              <ChevronUpIcon className="h-5 w-5 text-gray-400" />
-            ) : (
-              <ChevronDownIcon className="h-5 w-5 text-gray-400" />
-            )}
-          </div>
-        </div>
+      {/* Desktop sidebar */}
+      <div className="hidden lg:fixed lg:left-0 lg:top-16 lg:bottom-0 lg:z-30 lg:w-64 lg:bg-white lg:shadow-xl lg:block">
+        <SidebarNav />
       </div>
 
       {/* Main content */}

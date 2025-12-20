@@ -48,6 +48,7 @@ SLACK_ENABLED=false
 # - SLACK_ACCESS_TOKEN_EXPIRES_AT (optional unix seconds)
 # - SLACK_SIGNING_SECRET
 # - SLACK_DEFAULT_CHANNEL
+# - SLACK_RFP_MACHINE_CHANNEL (recommended: channel ID; required for private channels)
 # - SLACK_CLIENT_ID / SLACK_CLIENT_SECRET (required for refresh_token rotation)
 SLACK_SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:polaris-rfp/slack-xxxxxx
 
@@ -55,3 +56,4 @@ SLACK_SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:polaris-rf
 SLACK_BOT_TOKEN=xoxb-your-token
 SLACK_SIGNING_SECRET=your-signing-secret
 SLACK_DEFAULT_CHANNEL=#rfp-alerts
+SLACK_RFP_MACHINE_CHANNEL=G0123456789

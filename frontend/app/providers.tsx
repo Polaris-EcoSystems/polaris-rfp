@@ -2,11 +2,23 @@
 
 import { ToastProvider } from '@/components/ui/Toast'
 import { AuthProvider } from '@/lib/auth'
+import type { AbstractIntlMessages } from 'next-intl'
+import { NextIntlClientProvider } from 'next-intl'
 
-export default function Providers({ children }: { children: React.ReactNode }) {
+export default function Providers({
+  children,
+  locale,
+  messages,
+}: {
+  children: React.ReactNode
+  locale: string
+  messages: AbstractIntlMessages
+}) {
   return (
-    <ToastProvider>
-      <AuthProvider>{children}</AuthProvider>
-    </ToastProvider>
+    <NextIntlClientProvider locale={locale} messages={messages}>
+      <ToastProvider>
+        <AuthProvider>{children}</AuthProvider>
+      </ToastProvider>
+    </NextIntlClientProvider>
   )
 }
