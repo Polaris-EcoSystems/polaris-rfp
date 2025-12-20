@@ -164,3 +164,125 @@ def fail_job(*, job_id: str, error: str) -> dict[str, Any] | None:
     )
     return normalize_job(updated)
 
+
+def list_recent_jobs(*, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
+    """
+    List recent agent jobs, optionally filtered by status.
+    Uses GSI1 (AGENTJOB_DUE) to get jobs sorted by dueAt descending (most recent first).
+    """
+    lim = max(1, min(100, int(limit or 50)))
+    status_filter = str(status or "").strip().lower() if status else None
+    
+    # Query GSI1 for all jobs (dueAt index), sorted descending for most recent
+    # We'll need to query with a high upper bound and filter in code
+    # This is not perfect but efficient for bounded queries
+    pg = get_main_table().query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq("AGENTJOB_DUE"),
+        scan_index_forward=False,  # Descending = most recent first
+        limit=min(lim * 3, 200),  # Query more than needed to account for filtering
+        next_token=None,
+    )
+    
+    out: list[dict[str, Any]] = []
+    for it in pg.items or []:
+        norm = normalize_job(it)
+        if not norm:
+            continue
+        if status_filter and str(norm.get("status") or "").strip().lower() != status_filter:
+            continue
+        out.append(norm)
+        if len(out) >= lim:
+            break
+    
+    return out
+
+
+def list_jobs_by_scope(*, scope: dict[str, Any], limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
+    """
+    List jobs filtered by scope (e.g., scope.rfpId).
+    Uses GSI1 to get recent jobs, then filters by scope in code.
+    """
+    lim = max(1, min(100, int(limit or 50)))
+    status_filter = str(status or "").strip().lower() if status else None
+    scope_filter = scope if isinstance(scope, dict) else {}
+    
+    # Query GSI1 for all jobs, filter by scope
+    pg = get_main_table().query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq("AGENTJOB_DUE"),
+        scan_index_forward=False,
+        limit=min(lim * 5, 300),  # Query more to account for scope filtering
+        next_token=None,
+    )
+    
+    out: list[dict[str, Any]] = []
+    for it in pg.items or []:
+        norm = normalize_job(it)
+        if not norm:
+            continue
+        
+        # Filter by status
+        if status_filter and str(norm.get("status") or "").strip().lower() != status_filter:
+            continue
+        
+        # Filter by scope
+        job_scope = norm.get("scope")
+        job_scope_dict = job_scope if isinstance(job_scope, dict) else {}
+        scope_matches = True
+        for key, value in scope_filter.items():
+            if job_scope_dict.get(key) != value:
+                scope_matches = False
+                break
+        if not scope_matches:
+            continue
+        
+        out.append(norm)
+        if len(out) >= lim:
+            break
+    
+    return out
+
+
+def list_jobs_by_type(*, job_type: str, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
+    """
+    List jobs filtered by job type.
+    Uses GSI1 to get recent jobs, then filters by jobType in code.
+    """
+    lim = max(1, min(100, int(limit or 50)))
+    status_filter = str(status or "").strip().lower() if status else None
+    type_filter = str(job_type or "").strip()
+    
+    if not type_filter:
+        return []
+    
+    # Query GSI1 for all jobs, filter by type
+    pg = get_main_table().query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq("AGENTJOB_DUE"),
+        scan_index_forward=False,
+        limit=min(lim * 5, 300),  # Query more to account for type filtering
+        next_token=None,
+    )
+    
+    out: list[dict[str, Any]] = []
+    for it in pg.items or []:
+        norm = normalize_job(it)
+        if not norm:
+            continue
+        
+        # Filter by status
+        if status_filter and str(norm.get("status") or "").strip().lower() != status_filter:
+            continue
+        
+        # Filter by job type
+        job_type_str = str(norm.get("jobType") or "").strip()
+        if job_type_str != type_filter:
+            continue
+        
+        out.append(norm)
+        if len(out) >= lim:
+            break
+    
+    return out
+

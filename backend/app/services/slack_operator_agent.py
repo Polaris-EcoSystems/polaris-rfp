@@ -13,18 +13,153 @@ from ..observability.logging import get_logger
 from ..settings import settings
 from .agent_events_repo import append_event, list_recent_events
 from .agent_journal_repo import append_entry, list_recent_entries
-from .agent_jobs_repo import create_job as create_agent_job
+from .agent_jobs_repo import (
+    create_job as create_agent_job,
+    get_job as get_agent_job,
+    list_recent_jobs,
+    list_jobs_by_scope,
+    list_jobs_by_type,
+    claim_due_jobs,
+)
 from .agent_policy import sanitize_opportunity_patch
 from .change_proposals_repo import create_change_proposal
 from .opportunity_state_repo import ensure_state_exists, get_state, patch_state
 from .slack_thread_bindings_repo import get_binding as get_thread_binding, set_binding as set_thread_binding
 from .slack_reply_tools import ask_clarifying_question, post_summary
+from .agent_tools.slack_read import get_thread as slack_get_thread
+from .slack_web import get_user_info, slack_user_display_name
 
 # Reuse proven OpenAI tool-call plumbing from slack_agent to avoid divergence.
 from . import slack_agent as _sa
 
 
 log = get_logger("slack_operator_agent")
+
+
+# Slack bot token scopes - capabilities the agent has
+SLACK_BOT_SCOPES = """
+You have full org-wide Slack permissions. Key capabilities:
+- Read/write messages: Can read and send messages in all channels (public/private/DMs) you're in, including channels you're not a member of (chat:write.public)
+- Channel management: Join, create, manage public/private channels; invite members; set topics/descriptions
+- Direct messages: Start DMs and group DMs with any user; read/write DM history
+- Files: Read, upload, edit, delete files shared in channels/DMs
+- User access: Read user profiles, email addresses, workspace info
+- Search: Search files, public channels, and users across the workspace
+- Other capabilities: Manage bookmarks, pins, reactions, reminders, workflows, triggers, user groups, canvases, lists, calls, etc.
+
+You do NOT need permission to access channels - you have full org-wide access. You can identify channels by name or ID, and can read messages even if you haven't been explicitly invited. You should never claim you lack permissions or need to be invited.
+"""
+
+
+# Agent Jobs System Documentation
+AGENT_JOBS_SYSTEM_DOCS = """
+Agent Jobs System Architecture:
+- Jobs are executed by NorthStar Job Runner, an ECS task that runs every 15 minutes
+- Jobs are queued with a `due_at` ISO timestamp (e.g., "2024-01-15T10:30:00Z")
+- Jobs execute asynchronously; results are stored in the job record after completion
+- Jobs can be scoped to an RFP (via scope.rfpId) or be global (no rfpId in scope)
+- Use `agent_job_list` to see scheduled/running/completed jobs, `agent_job_get` to see details by ID
+- Jobs run in the background; check status using job query tools
+"""
+
+
+AGENT_JOB_TYPES_DOCS = """
+Available Job Types (use with schedule_job tool):
+
+RFP/Opportunity Management:
+- `opportunity_maintenance` / `perch_refresh` - Sync RFP state from platform (stage, dueDates, proposalIds, contractingCaseId)
+  * Scope: REQUIRED (scope.rfpId)
+  * Payload: {} (no payload needed)
+  * Behavior: Fetches current state from platform and updates OpportunityState
+
+- `opportunity_compact` / `memory_compact` - Compact journal entries for an RFP to reduce storage
+  * Scope: REQUIRED (scope.rfpId)
+  * Payload: {"journalLimit": 25} (optional, default 25)
+  * Behavior: Keeps only the most recent N journal entries
+
+Agent Operations:
+- `agent_daily_digest` - Generate and send daily Slack reports
+  * Scope: Global (use {} or {"env": "production"})
+  * Payload: {"hours": 24} (optional, default 24)
+  * Behavior: Generates digest, sends to configured Slack channel, reschedules itself
+
+- `agent_perch_time` / `telemetry_self_improve` - Run self-improvement/analysis tasks
+  * Scope: Global
+  * Payload: {"hours": 6, "rescheduleMinutes": 60} (optional)
+  * Behavior: Analyzes telemetry/logs, may reschedule itself
+
+Notifications:
+- `slack_nudge` - Send a Slack notification message
+  * Scope: REQUIRED (scope.rfpId)
+  * Payload: {"channel": "C123456", "threadTs": "1234567890.123456", "text": "Message text"}
+  * Behavior: Posts message to specified Slack channel/thread
+
+Self-Modification Pipeline (GitHub PR automation):
+- `self_modify_open_pr` - Open a GitHub PR for a change proposal
+  * Scope: Optional (scope.rfpId)
+  * Payload: {"proposalId": "cp_...", "_actorSlackUserId": "U123", "channelId": "C123", "threadTs": "123.456", "rfpId": "rfp_..."}
+  * Behavior: Creates GitHub PR from change proposal, posts result to Slack
+
+- `self_modify_check_pr` - Check status of GitHub PR checks
+  * Scope: Optional (scope.rfpId)
+  * Payload: {"pr": "123" or "https://github.com/.../pull/123", "channelId": "C123", "threadTs": "123.456", "rfpId": "rfp_..."}
+  * Behavior: Checks PR status, reports to Slack
+
+- `self_modify_verify_ecs` - Verify ECS service rollout completed successfully
+  * Scope: Optional (scope.rfpId)
+  * Payload: {"timeoutSeconds": 600, "pollSeconds": 10, "channelId": "C123", "threadTs": "123.456", "rfpId": "rfp_..."}
+  * Behavior: Polls ECS service until stable or timeout, reports to Slack
+
+AI Agent Workloads:
+- `ai_agent_ask` - Run an AI agent question workload (sandboxed)
+  * Scope: Optional
+  * Payload: {"question": "...", "userId": "U123", "userDisplayName": "...", "userEmail": "...", "userProfile": {...}, "channelId": "C123", "threadTs": "123.456", "maxSteps": 6}
+  * Behavior: Runs agent question processing, stores result in job
+
+- `ai_agent_analyze` - AI analysis workload (placeholder for future expansion)
+  * Scope: Optional
+  * Payload: {"analysisType": "..."}
+  * Behavior: Currently returns "not_implemented"
+"""
+
+
+AGENT_TOOL_CATEGORIES_DOCS = """
+Tool Categories Overview:
+
+RFP/Proposal Browsing:
+- list_rfps, search_rfps, get_rfp - Browse and search RFPs
+- list_proposals, get_proposal - Browse proposals
+- list_tasks - View workflow tasks
+
+Opportunity State Management:
+- opportunity_load - Load OpportunityState + journal + events for an RFP
+- opportunity_patch - Update OpportunityState (durable artifact)
+- journal_append - Add journal entry (decision narrative)
+- event_append - Add event log entry (tool calls, decisions)
+
+Slack Operations:
+- slack_get_thread - Fetch thread conversation history
+- slack_list_recent_messages - List recent channel messages
+- slack_post_summary - Post summary to Slack thread (use after state updates)
+- slack_ask_clarifying_question - Ask blocking clarifying question (rare)
+
+Agent Jobs:
+- schedule_job - Schedule a job for later execution (dueAt ISO time)
+- agent_job_list - List jobs with filtering (status, jobType, rfpId)
+- agent_job_get - Get job details by ID
+- agent_job_query_due - Query due/overdue queued jobs
+
+Infrastructure/AWS Tools:
+- dynamodb_* - Query/describe DynamoDB tables
+- s3_* - S3 operations (head, presign)
+- telemetry_* - CloudWatch Logs Insights queries
+- browser_* - Browser automation (Playwright)
+- github_* - GitHub API operations
+- aws_ecs_* - ECS service operations
+
+Action Proposal:
+- propose_action - Propose platform action for user confirmation (does not execute)
+"""
 
 
 @dataclass(frozen=True)
@@ -40,6 +175,53 @@ def _extract_rfp_id(text: str) -> str | None:
     if not m:
         return None
     return str(m.group(1)).strip() or None
+
+
+def _fetch_thread_history(*, channel_id: str, thread_ts: str, limit: int = 50) -> str:
+    """
+    Fetch thread messages and format them as a readable conversation history.
+    Returns a formatted string suitable for inclusion in system prompts.
+    """
+    try:
+        result = slack_get_thread(channel=channel_id, thread_ts=thread_ts, limit=limit)
+        if not result.get("ok"):
+            return ""
+        
+        messages = result.get("messages", [])
+        if not messages or not isinstance(messages, list):
+            return ""
+        
+        # Format messages in chronological order
+        lines: list[str] = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            user_id = str(msg.get("user") or "").strip()
+            text = str(msg.get("text") or "").strip()
+            
+            if not text:
+                continue
+            
+            # Get user display name (cache-friendly, so safe to call)
+            user_name = "User"
+            if user_id:
+                try:
+                    user_info = get_user_info(user_id=user_id)
+                    user_name = slack_user_display_name(user_info) or user_id
+                except Exception:
+                    user_name = user_id
+            
+            # Format: "User: message text"
+            lines.append(f"{user_name}: {text}")
+        
+        if not lines:
+            return ""
+        
+        return "\n".join(lines)
+    except Exception:
+        # Best-effort: if fetching fails, return empty string (don't break the agent)
+        log.warning("thread_history_fetch_failed", channel=channel_id, thread_ts=thread_ts)
+        return ""
 
 
 def _tool_def(name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -144,6 +326,95 @@ def _schedule_job_tool(args: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
     job = create_agent_job(job_type=job_type, scope=scope, due_at=due_at, payload=payload, requested_by_user_sub=None)
     return {"ok": True, "job": job}
+
+
+def _agent_job_list_tool(args: dict[str, Any]) -> dict[str, Any]:
+    limit = max(1, min(50, int(args.get("limit") or 25)))
+    status = str(args.get("status") or "").strip() or None
+    job_type = str(args.get("jobType") or "").strip() or None
+    rfp_id = str(args.get("rfpId") or "").strip() or None
+    
+    jobs: list[dict[str, Any]] = []
+    
+    try:
+        if rfp_id:
+            # Filter by scope (rfpId)
+            scope_filter = {"rfpId": rfp_id}
+            jobs = list_jobs_by_scope(scope=scope_filter, limit=limit, status=status)
+        elif job_type:
+            # Filter by job type
+            jobs = list_jobs_by_type(job_type=job_type, limit=limit, status=status)
+        else:
+            # List all recent jobs
+            jobs = list_recent_jobs(limit=limit, status=status)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "job_list_failed"}
+    
+    # Slim payload for each job to avoid bloating response
+    slim_jobs: list[dict[str, Any]] = []
+    for job in jobs:
+        slim: dict[str, Any] = {
+            "jobId": job.get("jobId"),
+            "jobType": job.get("jobType"),
+            "status": job.get("status"),
+            "dueAt": job.get("dueAt"),
+            "createdAt": job.get("createdAt"),
+            "scope": job.get("scope"),
+        }
+        # Include payload preview (first few keys)
+        payload = job.get("payload")
+        if isinstance(payload, dict):
+            slim["payloadPreview"] = {k: payload.get(k) for k in list(payload.keys())[:5]}
+        if "result" in job:
+            slim["result"] = job.get("result")
+        if "error" in job:
+            slim["error"] = job.get("error")
+        slim_jobs.append(slim)
+    
+    return {"ok": True, "jobs": slim_jobs, "count": len(slim_jobs)}
+
+
+def _agent_job_get_tool(args: dict[str, Any]) -> dict[str, Any]:
+    job_id = str(args.get("jobId") or "").strip()
+    if not job_id:
+        return {"ok": False, "error": "missing_jobId"}
+    
+    try:
+        job = get_agent_job(job_id=job_id)
+        if not job:
+            return {"ok": False, "error": "job_not_found", "jobId": job_id}
+        return {"ok": True, "job": job}
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "job_get_failed"}
+
+
+def _agent_job_query_due_tool(args: dict[str, Any]) -> dict[str, Any]:
+    limit = max(1, min(50, int(args.get("limit") or 25)))
+    before_iso = str(args.get("beforeIso") or "").strip() or None
+    
+    try:
+        now_iso = before_iso
+        due_jobs = claim_due_jobs(now_iso=now_iso, limit=limit)
+        
+        # Format results
+        slim_jobs: list[dict[str, Any]] = []
+        for job in due_jobs:
+            slim: dict[str, Any] = {
+                "jobId": job.get("jobId"),
+                "jobType": job.get("jobType"),
+                "status": job.get("status"),
+                "dueAt": job.get("dueAt"),
+                "createdAt": job.get("createdAt"),
+                "scope": job.get("scope"),
+            }
+            payload = job.get("payload")
+            if isinstance(payload, dict):
+                slim["payloadPreview"] = {k: payload.get(k) for k in list(payload.keys())[:5]}
+            slim_jobs.append(slim)
+        
+        return {"ok": True, "jobs": slim_jobs, "count": len(slim_jobs)}
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "job_query_due_failed"}
 
 def _create_change_proposal_tool(args: dict[str, Any]) -> dict[str, Any]:
     title = str(args.get("title") or "").strip()
@@ -294,6 +565,55 @@ OPERATOR_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
             },
         ),
         _schedule_job_tool,
+    ),
+    "agent_job_list": (
+        _tool_def(
+            "agent_job_list",
+            "List recent agent jobs with optional filtering by status, jobType, or rfpId scope.",
+            {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "status": {"type": "string", "enum": ["queued", "running", "completed", "failed", "cancelled"]},
+                    "jobType": {"type": "string", "maxLength": 120},
+                    "rfpId": {"type": "string", "maxLength": 120},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _agent_job_list_tool,
+    ),
+    "agent_job_get": (
+        _tool_def(
+            "agent_job_get",
+            "Get full details of a specific agent job by ID, including result (if completed) or error (if failed).",
+            {
+                "type": "object",
+                "properties": {
+                    "jobId": {"type": "string", "minLength": 1, "maxLength": 60},
+                },
+                "required": ["jobId"],
+                "additionalProperties": False,
+            },
+        ),
+        _agent_job_get_tool,
+    ),
+    "agent_job_query_due": (
+        _tool_def(
+            "agent_job_query_due",
+            "Query jobs that are due or overdue (queued and should have run by now). Useful for checking job backlog.",
+            {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "beforeIso": {"type": "string", "maxLength": 40},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _agent_job_query_due_tool,
     ),
     "create_change_proposal": (
         _tool_def(
@@ -495,17 +815,56 @@ def run_slack_operator_for_mention(
     tool_names = [tpl["name"] for tpl in tools if isinstance(tpl, dict) and tpl.get("name")]
     chat_tools = [_sa._to_chat_tool(tpl) for tpl in tools if isinstance(tpl, dict)]
 
+    # Fetch thread history for context (stateful memory)
+    thread_history = _fetch_thread_history(channel_id=ch, thread_ts=th, limit=50)
+    thread_context = ""
+    if thread_history:
+        thread_context = f"\n\nThread conversation history (for context - remember previous exchanges):\n{thread_history}\n"
+
+    # Fetch recent jobs for RFP-scoped conversations (optional context)
+    recent_jobs_context = ""
+    if rfp_id:
+        try:
+            recent_jobs = list_jobs_by_scope(scope={"rfpId": rfp_id}, limit=10, status=None)
+            if recent_jobs:
+                job_summaries: list[str] = []
+                for job in recent_jobs[:10]:  # Limit to 10 most recent
+                    jid = str(job.get("jobId") or "").strip()
+                    jtype = str(job.get("jobType") or "").strip()
+                    status = str(job.get("status") or "").strip()
+                    due_at = str(job.get("dueAt") or "").strip()
+                    job_summaries.append(f"- {jid}: {jtype} ({status}) due {due_at}")
+                if job_summaries:
+                    recent_jobs_context = "\n\nRecent agent jobs for this RFP (last 10):\n" + "\n".join(job_summaries) + "\n"
+        except Exception:
+            # Best-effort: if fetching fails, continue without job context
+            pass
+
     system = "\n".join(
         [
             "You are Polaris Operator, a Slack-connected agent for an RFP→Proposal→Contracting platform.",
             "You are stateless: you MUST reconstruct context by calling tools every invocation.",
             "",
+            "Slack Permissions:",
+            SLACK_BOT_SCOPES.strip(),
+            "",
+            "Agent Jobs System:",
+            AGENT_JOBS_SYSTEM_DOCS.strip(),
+            "",
+            "Available Job Types:",
+            AGENT_JOB_TYPES_DOCS.strip(),
+            "",
+            "Tool Categories:",
+            AGENT_TOOL_CATEGORIES_DOCS.strip(),
+            "",
             "Critical rules:",
             "- Do not treat Slack chat history as truth. Use platform tools + OpportunityState + Journal + Events.",
+            "- However, use the thread conversation history below to remember previous context in this thread (channel names, permissions, user preferences, etc.).",
             "- Default to silence. If you need to communicate, use `slack_post_summary` (or `slack_ask_clarifying_question` only when blocking).",
             "- Before posting, update durable artifacts: call `opportunity_patch` and/or `journal_append` so the system remembers.",
             "- Never invent IDs, dates, or commitments. Cite tool output or ask a single clarifying question.",
             "- For code changes: first call `create_change_proposal` (stores a patch + rationale). Then propose an approval-gated action `self_modify_open_pr` with the `proposalId`.",
+            "- Use `agent_job_list` to check job status when users ask about scheduled/running jobs.",
             "",
             "Runtime context:",
             f"- channel: {ch}",
@@ -515,6 +874,10 @@ def run_slack_operator_for_mention(
             f"- correlation_id: {corr or '(none)'}",
         ]
     )
+    if thread_context:
+        system += thread_context
+    if recent_jobs_context:
+        system += recent_jobs_context
 
     input0 = f"{system}\n\nUSER_MESSAGE:\n{q}"
 

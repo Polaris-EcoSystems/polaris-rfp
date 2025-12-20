@@ -17,6 +17,21 @@ from .slack_actions_repo import create_action, get_action, mark_action_done
 from .slack_action_executor import execute_action
 from .slack_action_risk import classify_action_risk
 
+# Slack bot token scopes - capabilities the agent has
+# (Note: This is duplicated in slack_operator_agent.py to avoid circular imports)
+SLACK_BOT_SCOPES = """
+You have full org-wide Slack permissions. Key capabilities:
+- Read/write messages: Can read and send messages in all channels (public/private/DMs) you're in, including channels you're not a member of (chat:write.public)
+- Channel management: Join, create, manage public/private channels; invite members; set topics/descriptions
+- Direct messages: Start DMs and group DMs with any user; read/write DM history
+- Files: Read, upload, edit, delete files shared in channels/DMs
+- User access: Read user profiles, email addresses, workspace info
+- Search: Search files, public channels, and users across the workspace
+- Other capabilities: Manage bookmarks, pins, reactions, reminders, workflows, triggers, user groups, canvases, lists, calls, etc.
+
+You do NOT need permission to access channels - you have full org-wide access. You can identify channels by name or ID, and can read messages even if you haven't been explicitly invited. You should never claim you lack permissions or need to be invited.
+"""
+
 log = get_logger("slack_agent")
 
 
@@ -550,10 +565,47 @@ def run_slack_agent_question(
         user_ctx_lines.append(f"- memory_summary: {clip_text(mem, max_chars=1200)}")
     user_ctx = "\n".join(user_ctx_lines).strip()
 
+    # Fetch thread history for context (stateful memory) if we have thread info
+    thread_context = ""
+    if channel_id and thread_ts:
+        try:
+            from .agent_tools.slack_read import get_thread as slack_get_thread
+            from .slack_web import get_user_info, slack_user_display_name
+            
+            result = slack_get_thread(channel=channel_id, thread_ts=thread_ts, limit=50)
+            if result.get("ok"):
+                messages = result.get("messages", [])
+                if messages and isinstance(messages, list):
+                    lines: list[str] = []
+                    for msg in messages:
+                        if not isinstance(msg, dict):
+                            continue
+                        user_id_msg = str(msg.get("user") or "").strip()
+                        text = str(msg.get("text") or "").strip()
+                        if not text:
+                            continue
+                        user_name = "User"
+                        if user_id_msg:
+                            try:
+                                user_info = get_user_info(user_id=user_id_msg)
+                                user_name = slack_user_display_name(user_info) or user_id_msg
+                            except Exception:
+                                user_name = user_id_msg
+                        lines.append(f"{user_name}: {text}")
+                    if lines:
+                        thread_context = "\n\nThread conversation history (for context - remember previous exchanges like channel names, permissions, preferences):\n" + "\n".join(lines) + "\n"
+        except Exception:
+            # Best-effort: if fetching fails, continue without thread history
+            pass
+
     system = "\n".join(
         [
             "You are Polaris, a Slack assistant for an RFP/proposal workflow platform.",
             "You can answer questions by calling tools to fetch current platform data.",
+            "",
+            "Slack Permissions:",
+            SLACK_BOT_SCOPES.strip(),
+            "",
             "You may also inspect raw platform storage *read-only* using tools:",
             "- DynamoDB main table uses keys like pk/sk and GSI1 (gsi1pk/gsi1sk). Prefer querying by pk or gsi1pk; avoid broad scans.",
             "- S3 assets bucket stores artifacts under prefixes like `rfp/` and `team/`.",
@@ -568,12 +620,15 @@ def run_slack_agent_question(
             "- Include deep links when referencing an item (use tool-provided `url` fields).",
             "- If you are uncertain, call a tool or ask a single clarifying question.",
             "- Do NOT invent IDs, dates, or numbers. Use tool results only.",
+            "- Use the thread conversation history below to remember previous context (channel names, permissions, user preferences, etc.).",
             "",
             "Slack formatting:",
             "- Use bullets only when presenting a list (do not force bullets for single sentences).",
             "- Put IDs in backticks.",
         ]
     )
+    if thread_context:
+        system += thread_context
 
     # First call: provide combined instruction + question as plain input text.
     input0 = f"{system}\n\nUSER_QUESTION:\n{q}"

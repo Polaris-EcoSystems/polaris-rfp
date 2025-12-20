@@ -98,7 +98,7 @@ Parameters:
     Default: 15
   JobRunnerRateMinutes:
     Type: Number
-    Default: 15
+    Default: 60
 
 Conditions:
   UseJwtSecretArn: !Not [!Equals [!Ref JwtSecretArn, '']]
