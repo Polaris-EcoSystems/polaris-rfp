@@ -66,6 +66,7 @@ export default function ProposalDetailPage() {
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
   const [downloadFormat, setDownloadFormat] = useState<'pdf' | 'docx'>('pdf')
   const downloadMenuRef = useRef<HTMLDivElement>(null)
+  const pollRef = useRef<number | null>(null)
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [sectionToDelete, setSectionToDelete] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string>('')
@@ -124,6 +125,35 @@ export default function ProposalDetailPage() {
       loadProposal(id)
     }
   }, [id])
+
+  // Poll while async proposal generation is running.
+  useEffect(() => {
+    const status = String(
+      (proposal as any)?.generationStatus || '',
+    ).toLowerCase()
+    const isRunning = status === 'queued' || status === 'running'
+
+    if (!id || !isRunning) {
+      if (pollRef.current) {
+        window.clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+      return
+    }
+
+    if (pollRef.current) return
+    pollRef.current = window.setInterval(() => {
+      loadProposal(id)
+    }, 2000)
+
+    return () => {
+      if (pollRef.current) {
+        window.clearInterval(pollRef.current)
+        pollRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, (proposal as any)?.generationStatus])
 
   useEffect(() => {
     const loadCompanies = async () => {
@@ -823,6 +853,15 @@ export default function ProposalDetailPage() {
     )
   }
 
+  const genStatus = String(
+    (proposal as any)?.generationStatus || '',
+  ).toLowerCase()
+  const genRunning = genStatus === 'queued' || genStatus === 'running'
+  const genError =
+    genStatus === 'error'
+      ? String((proposal as any)?.generationError || '').trim()
+      : ''
+
   return (
     <div>
       <div className="mb-4 px-4 sm:px-6 lg:max-w-6xl lg:mx-auto lg:px-8">
@@ -855,6 +894,17 @@ export default function ProposalDetailPage() {
                   </div>
                 </div>
               </div>
+              {genRunning && (
+                <div className="mt-3 text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-md px-3 py-2">
+                  Generating proposal sections… This page will update
+                  automatically.
+                </div>
+              )}
+              {!genRunning && genError && (
+                <div className="mt-3 text-sm text-red-800 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+                  AI generation failed. {genError}
+                </div>
+              )}
             </div>
             <div className="mt-6 flex space-x-3 md:mt-0 md:ml-4">
               {companies.length > 0 && (

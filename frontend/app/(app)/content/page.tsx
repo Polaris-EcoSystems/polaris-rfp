@@ -23,15 +23,30 @@ import {
   UserGroupIcon,
 } from '@heroicons/react/24/outline'
 import Link from 'next/link'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 export default function ContentLibraryPage() {
   const toast = useToast()
+  const [activeTab, setActiveTab] = useState<
+    'company' | 'team' | 'projects' | 'references'
+  >('company')
+  const [globalQuery, setGlobalQuery] = useState('')
+  const [projectsProjectTypeFilter, setProjectsProjectTypeFilter] = useState('')
+  const [projectsIndustryFilter, setProjectsIndustryFilter] = useState('')
+  const [referencesProjectTypeFilter, setReferencesProjectTypeFilter] =
+    useState('')
+  const [showDataHealth, setShowDataHealth] = useState(true)
+  const [qualityFilter, setQualityFilter] = useState<{
+    tab: 'team' | 'projects' | 'references'
+    label: string
+    ids: string[]
+  } | null>(null)
   const [companies, setCompanies] = useState<any[]>([])
   const [selectedCompany, setSelectedCompany] = useState<any>(null)
   const [team, setTeam] = useState<any[]>([])
   const [selectedMember, setSelectedMember] = useState<any>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string>('')
   const [editingCompany, setEditingCompany] = useState(false)
   const [editingMember, setEditingMember] = useState<any>(null)
   const [showAddMember, setShowAddMember] = useState(false)
@@ -91,9 +106,46 @@ export default function ContentLibraryPage() {
   } | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
 
+  const loadContent = useCallback(async () => {
+    try {
+      setLoadError('')
+      const [
+        companiesResponse,
+        teamResponse,
+        projectsResponse,
+        referencesResponse,
+      ] = await Promise.all([
+        contentApi.getCompanies(),
+        contentApi.getTeam(),
+        contentApi.getProjects?.() || Promise.resolve({ data: [] }),
+        contentApi.getReferences(),
+      ])
+      const companiesData = Array.isArray(companiesResponse.data)
+        ? companiesResponse.data
+        : []
+      setCompanies(companiesData)
+      if (companiesData.length > 0) {
+        setSelectedCompany(companiesData[0])
+      }
+      setTeam(Array.isArray(teamResponse.data) ? teamResponse.data : [])
+      setProjects(
+        Array.isArray(projectsResponse.data) ? projectsResponse.data : [],
+      )
+      setReferences(
+        Array.isArray(referencesResponse.data) ? referencesResponse.data : [],
+      )
+    } catch (error) {
+      console.error('Error loading content:', error)
+      setLoadError('Failed to load Content Library.')
+      toast.error('Failed to load Content Library')
+    } finally {
+      setLoading(false)
+    }
+  }, [toast])
+
   useEffect(() => {
     loadContent()
-  }, [])
+  }, [loadContent])
 
   const selectedCompanyId = selectedCompany?.companyId || null
   const [teamScope, setTeamScope] = useState<'company' | 'unassigned' | 'all'>(
@@ -143,6 +195,164 @@ export default function ContentLibraryPage() {
       )
     : []
 
+  const normalize = (v: any) => String(v || '').toLowerCase().trim()
+
+  const projectTypeOptions = useMemo(() => {
+    const set = new Set<string>()
+    ;(Array.isArray(projects) ? projects : []).forEach((p: any) => {
+      const v = String(p?.projectType || '').trim()
+      if (v) set.add(v)
+    })
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [projects])
+
+  const industryOptions = useMemo(() => {
+    const set = new Set<string>()
+    ;(Array.isArray(projects) ? projects : []).forEach((p: any) => {
+      const v = String(p?.industry || '').trim()
+      if (v) set.add(v)
+    })
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [projects])
+
+  const referenceProjectTypeOptions = useMemo(() => {
+    const set = new Set<string>()
+    ;(Array.isArray(references) ? references : []).forEach((r: any) => {
+      const v = String(r?.projectType || '').trim()
+      if (v) set.add(v)
+    })
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [references])
+
+  const teamMissingEmailIds = useMemo(() => {
+    return (Array.isArray(team) ? team : [])
+      .filter((m: any) => !String(m?.email || '').trim())
+      .map((m: any) => String(m?.memberId || m?._id || '').trim())
+      .filter(Boolean)
+  }, [team])
+
+  const teamMissingCompanyIds = useMemo(() => {
+    return (Array.isArray(team) ? team : [])
+      .filter((m: any) => !String(m?.companyId || '').trim())
+      .map((m: any) => String(m?.memberId || m?._id || '').trim())
+      .filter(Boolean)
+  }, [team])
+
+  const projectMissingIndustryIds = useMemo(() => {
+    return (Array.isArray(projects) ? projects : [])
+      .filter((p: any) => !String(p?.industry || '').trim())
+      .map((p: any) => String(p?._id || p?.projectId || '').trim())
+      .filter(Boolean)
+  }, [projects])
+
+  const projectMissingProjectTypeIds = useMemo(() => {
+    return (Array.isArray(projects) ? projects : [])
+      .filter((p: any) => !String(p?.projectType || '').trim())
+      .map((p: any) => String(p?._id || p?.projectId || '').trim())
+      .filter(Boolean)
+  }, [projects])
+
+  const referenceMissingEmailIds = useMemo(() => {
+    return (Array.isArray(references) ? references : [])
+      .filter((r: any) => !String(r?.contactEmail || '').trim())
+      .map((r: any) => String(r?._id || r?.referenceId || '').trim())
+      .filter(Boolean)
+  }, [references])
+
+  const dupTeamEmailIds = useMemo(() => {
+    const by = new Map<string, string[]>()
+    ;(Array.isArray(team) ? team : []).forEach((m: any) => {
+      const email = normalize(m?.email)
+      const id = String(m?.memberId || m?._id || '').trim()
+      if (!email || !id) return
+      const arr = by.get(email) || []
+      arr.push(id)
+      by.set(email, arr)
+    })
+    const out: string[] = []
+    Array.from(by.values()).forEach((ids) => {
+      if (ids.length > 1) out.push(...ids)
+    })
+    return Array.from(new Set(out))
+  }, [team])
+
+  const dupProjectTitleClientIds = useMemo(() => {
+    const by = new Map<string, string[]>()
+    ;(Array.isArray(projects) ? projects : []).forEach((p: any) => {
+      const key = `${normalize(p?.title)}|${normalize(p?.clientName)}`
+      const id = String(p?._id || p?.projectId || '').trim()
+      if (!normalize(p?.title) || !normalize(p?.clientName) || !id) return
+      const arr = by.get(key) || []
+      arr.push(id)
+      by.set(key, arr)
+    })
+    const out: string[] = []
+    Array.from(by.values()).forEach((ids) => {
+      if (ids.length > 1) out.push(...ids)
+    })
+    return Array.from(new Set(out))
+  }, [projects])
+
+  const dupReferenceOrgEmailIds = useMemo(() => {
+    const by = new Map<string, string[]>()
+    ;(Array.isArray(references) ? references : []).forEach((r: any) => {
+      const key = `${normalize(r?.organizationName)}|${normalize(r?.contactEmail)}`
+      const id = String(r?._id || r?.referenceId || '').trim()
+      if (!normalize(r?.organizationName) || !normalize(r?.contactEmail) || !id)
+        return
+      const arr = by.get(key) || []
+      arr.push(id)
+      by.set(key, arr)
+    })
+    const out: string[] = []
+    Array.from(by.values()).forEach((ids) => {
+      if (ids.length > 1) out.push(...ids)
+    })
+    return Array.from(new Set(out))
+  }, [references])
+
+  const clearQualityFilter = () => setQualityFilter(null)
+
+  const tabCounts = {
+    company: Array.isArray(companies) ? companies.length : 0,
+    team: selectedCompanyId ? teamForCompany.length : team.length,
+    projects: selectedCompanyId ? projectsForCompany.length : projects.length,
+    references: selectedCompanyId
+      ? referencesForCompany.length
+      : references.length,
+  }
+
+  const renderTab = (
+    id: 'company' | 'team' | 'projects' | 'references',
+    label: string,
+    count: number,
+  ) => {
+    const isActive = activeTab === id
+    return (
+      <button
+        key={id}
+        type="button"
+        onClick={() => setActiveTab(id)}
+        className={`inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+          isActive
+            ? 'bg-primary-50 border-primary-200 text-primary-700'
+            : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+        }`}
+      >
+        <span>{label}</span>
+        <span
+          className={`text-xs px-2 py-0.5 rounded-full ${
+            isActive
+              ? 'bg-primary-100 text-primary-800'
+              : 'bg-gray-100 text-gray-700'
+          }`}
+        >
+          {count}
+        </span>
+      </button>
+    )
+  }
+
   const refreshCompanyById = async (companyId: string) => {
     if (!companyId) return
     try {
@@ -158,40 +368,6 @@ export default function ContentLibraryPage() {
       }
     } catch (e) {
       // ignore
-    }
-  }
-
-  const loadContent = async () => {
-    try {
-      const [
-        companiesResponse,
-        teamResponse,
-        projectsResponse,
-        referencesResponse,
-      ] = await Promise.all([
-        contentApi.getCompanies(),
-        contentApi.getTeam(),
-        contentApi.getProjects?.() || Promise.resolve({ data: [] }),
-        contentApi.getReferences(),
-      ])
-      const companiesData = Array.isArray(companiesResponse.data)
-        ? companiesResponse.data
-        : []
-      setCompanies(companiesData)
-      if (companiesData.length > 0) {
-        setSelectedCompany(companiesData[0])
-      }
-      setTeam(Array.isArray(teamResponse.data) ? teamResponse.data : [])
-      setProjects(
-        Array.isArray(projectsResponse.data) ? projectsResponse.data : [],
-      )
-      setReferences(
-        Array.isArray(referencesResponse.data) ? referencesResponse.data : [],
-      )
-    } catch (error) {
-      console.error('Error loading content:', error)
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -966,6 +1142,28 @@ export default function ContentLibraryPage() {
     )
   }
 
+  if (loadError) {
+    return (
+      <div className="rounded-xl border border-gray-200 bg-white p-8 shadow-sm">
+        <div className="text-sm font-semibold text-gray-900">{loadError}</div>
+        <div className="mt-1 text-sm text-gray-600">
+          Please try again. If this persists, your session may have expired.
+        </div>
+        <div className="mt-4">
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              setLoading(true)
+              await loadContent()
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div>
       <div className="mb-6">
@@ -1001,20 +1199,424 @@ export default function ContentLibraryPage() {
           },
         ]}
       />
-      <div className="md:flex md:items-center md:justify-between">
-        <div className="flex-1 min-w-0">
-          <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
-            Content Library
-          </h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Company is the top-level container; team members, past projects, and
-            references roll up to it.
-          </p>
+      <div className="mt-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
+              Content Library
+            </h2>
+            <p className="mt-1 text-sm text-gray-600">
+              Company is the top-level container. Team, projects, and references
+              roll up to it.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-gray-600">
+                Company
+              </span>
+              <select
+                value={selectedCompanyId || ''}
+                onChange={(e) => {
+                  const id = e.target.value
+                  const next =
+                    (Array.isArray(companies) ? companies : []).find(
+                      (c: any) =>
+                        String(c?.companyId || '') === String(id || ''),
+                    ) || null
+                  setSelectedCompany(next)
+                }}
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+              >
+                <option value="">None selected</option>
+                {(Array.isArray(companies) ? companies : []).map((c: any) => (
+                  <option key={c.companyId} value={c.companyId}>
+                    {c.name || c.companyName || c.companyId}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <Button
+              as={Link}
+              href="/proposals"
+              variant="secondary"
+              size="sm"
+              className="!rounded-lg"
+            >
+              View Proposals
+            </Button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {renderTab('company', 'Company', tabCounts.company)}
+          {renderTab('team', 'Team', tabCounts.team)}
+          {renderTab('projects', 'Projects', tabCounts.projects)}
+          {renderTab('references', 'References', tabCounts.references)}
+        </div>
+
+        {/* Global search + type filters */}
+        <div className="mt-4 sticky top-4 z-10">
+          <div className="rounded-xl border border-gray-200 bg-white/90 backdrop-blur p-3 shadow-sm">
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div className="flex-1">
+                <input
+                  value={globalQuery}
+                  onChange={(e) => setGlobalQuery(e.target.value)}
+                  placeholder={
+                    activeTab === 'team'
+                      ? 'Search team (name, role, email, company)…'
+                      : activeTab === 'projects'
+                      ? 'Search projects (title, client, industry, duration)…'
+                      : activeTab === 'references'
+                      ? 'Search references (org, contact, email, time)…'
+                      : 'Search…'
+                  }
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                {activeTab === 'projects' ? (
+                  <>
+                    <select
+                      value={projectsProjectTypeFilter}
+                      onChange={(e) => setProjectsProjectTypeFilter(e.target.value)}
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                      title="Filter by project type"
+                    >
+                      <option value="">All project types</option>
+                      {projectTypeOptions.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={projectsIndustryFilter}
+                      onChange={(e) => setProjectsIndustryFilter(e.target.value)}
+                      className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                      title="Filter by industry"
+                    >
+                      <option value="">All industries</option>
+                      {industryOptions.map((v) => (
+                        <option key={v} value={v}>
+                          {v}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                ) : null}
+
+                {activeTab === 'references' ? (
+                  <select
+                    value={referencesProjectTypeFilter}
+                    onChange={(e) => setReferencesProjectTypeFilter(e.target.value)}
+                    className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    title="Filter by project type"
+                  >
+                    <option value="">All project types</option>
+                    {referenceProjectTypeOptions.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                ) : null}
+
+                {globalQuery ||
+                projectsProjectTypeFilter ||
+                projectsIndustryFilter ||
+                referencesProjectTypeFilter ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGlobalQuery('')
+                      setProjectsProjectTypeFilter('')
+                      setProjectsIndustryFilter('')
+                      setReferencesProjectTypeFilter('')
+                      clearQualityFilter()
+                    }}
+                    className="px-3 py-2 text-sm rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+                    title="Clear search and filters"
+                  >
+                    Clear
+                  </button>
+                ) : (
+                  <div className="text-xs text-gray-500">Search + filters</div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Data health */}
+        <div className="mt-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-gray-900">Data health</div>
+              <div className="text-xs text-gray-500">
+                Quick triage for unassigned items, missing fields, and likely duplicates.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowDataHealth((v) => !v)}
+              className="px-3 py-2 text-sm rounded-lg border border-gray-200 bg-white hover:bg-gray-50"
+            >
+              {showDataHealth ? 'Hide' : 'Show'}
+            </button>
+          </div>
+
+          {showDataHealth ? (
+            <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                  Unassigned
+                </div>
+                <div className="mt-2 space-y-2 text-sm text-gray-800">
+                  <div className="flex items-center justify-between">
+                    <span>Team</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQualityFilter(null)
+                        setGlobalQuery('')
+                        setActiveTab('team')
+                        setTeamScope('unassigned')
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({unassignedTeam.length})
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Projects</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQualityFilter(null)
+                        setGlobalQuery('')
+                        setActiveTab('projects')
+                        setProjectsScope('unassigned')
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({unassignedProjects.length})
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>References</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQualityFilter(null)
+                        setGlobalQuery('')
+                        setActiveTab('references')
+                        setReferencesScope('unassigned')
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({unassignedReferences.length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                  Missing fields
+                </div>
+                <div className="mt-2 space-y-2 text-sm text-gray-800">
+                  <div className="flex items-center justify-between">
+                    <span>Team: missing email</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGlobalQuery('')
+                        setActiveTab('team')
+                        setTeamScope('all')
+                        setQualityFilter({
+                          tab: 'team',
+                          label: 'Missing email',
+                          ids: teamMissingEmailIds,
+                        })
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({teamMissingEmailIds.length})
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Team: unassigned</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGlobalQuery('')
+                        setActiveTab('team')
+                        setTeamScope('all')
+                        setQualityFilter({
+                          tab: 'team',
+                          label: 'Missing company assignment',
+                          ids: teamMissingCompanyIds,
+                        })
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({teamMissingCompanyIds.length})
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Projects: missing industry</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGlobalQuery('')
+                        setActiveTab('projects')
+                        setProjectsScope('all')
+                        setQualityFilter({
+                          tab: 'projects',
+                          label: 'Missing industry',
+                          ids: projectMissingIndustryIds,
+                        })
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({projectMissingIndustryIds.length})
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Projects: missing project type</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGlobalQuery('')
+                        setActiveTab('projects')
+                        setProjectsScope('all')
+                        setQualityFilter({
+                          tab: 'projects',
+                          label: 'Missing project type',
+                          ids: projectMissingProjectTypeIds,
+                        })
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({projectMissingProjectTypeIds.length})
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>References: missing email</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGlobalQuery('')
+                        setActiveTab('references')
+                        setReferencesScope('all')
+                        setQualityFilter({
+                          tab: 'references',
+                          label: 'Missing contact email',
+                          ids: referenceMissingEmailIds,
+                        })
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({referenceMissingEmailIds.length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <div className="text-xs font-semibold text-gray-700 uppercase tracking-wide">
+                  Likely duplicates
+                </div>
+                <div className="mt-2 space-y-2 text-sm text-gray-800">
+                  <div className="flex items-center justify-between">
+                    <span>Team: duplicate email</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGlobalQuery('')
+                        setActiveTab('team')
+                        setTeamScope('all')
+                        setQualityFilter({
+                          tab: 'team',
+                          label: 'Duplicate email',
+                          ids: dupTeamEmailIds,
+                        })
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({dupTeamEmailIds.length})
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Projects: duplicate title + client</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGlobalQuery('')
+                        setActiveTab('projects')
+                        setProjectsScope('all')
+                        setQualityFilter({
+                          tab: 'projects',
+                          label: 'Duplicate title + client',
+                          ids: dupProjectTitleClientIds,
+                        })
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({dupProjectTitleClientIds.length})
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>References: duplicate org + email</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGlobalQuery('')
+                        setActiveTab('references')
+                        setReferencesScope('all')
+                        setQualityFilter({
+                          tab: 'references',
+                          label: 'Duplicate org + email',
+                          ids: dupReferenceOrgEmailIds,
+                        })
+                      }}
+                      className="px-2 py-1 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      View ({dupReferenceOrgEmailIds.length})
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {qualityFilter ? (
+            <div className="mt-4 rounded-lg border border-primary-200 bg-primary-50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-sm text-primary-800">
+                  <span className="font-semibold">Active data-health filter:</span>{' '}
+                  {qualityFilter.label} ({qualityFilter.ids.length})
+                </div>
+                <button
+                  type="button"
+                  onClick={clearQualityFilter}
+                  className="px-2 py-1 text-xs rounded bg-white border border-primary-200 hover:bg-primary-100 text-primary-700"
+                >
+                  Clear filter
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
 
       {/* Unassigned Inbox */}
-      <div className="mt-6 rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="mt-6 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-gray-900">
@@ -1039,42 +1641,44 @@ export default function ContentLibraryPage() {
         </div>
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
+            className="!rounded-lg"
             onClick={() => {
               setTeamScope('unassigned')
               setProjectsScope('unassigned')
               setReferencesScope('unassigned')
-              const el = document.getElementById('section-team')
-              el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              setActiveTab('team')
             }}
-            className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
           >
-            View all unassigned
-          </button>
-          <button
-            type="button"
+            Review unassigned
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="!rounded-lg"
             onClick={() => {
               setTeamScope(selectedCompanyId ? 'company' : 'all')
               setProjectsScope(selectedCompanyId ? 'company' : 'all')
               setReferencesScope(selectedCompanyId ? 'company' : 'all')
             }}
-            className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
           >
-            Back to company view
-          </button>
+            Back to company-first view
+          </Button>
 
           {unassignedTeam.length +
             unassignedProjects.length +
             unassignedReferences.length >
           0 ? (
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
+              className="!rounded-lg"
               onClick={() => setShowRemaining((v) => !v)}
-              className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
             >
-              {showRemaining ? 'Hide remaining' : 'Review remaining'}
-            </button>
+              {showRemaining ? 'Hide remaining' : 'Show remaining'}
+            </Button>
           ) : null}
         </div>
 
@@ -1293,8 +1897,7 @@ export default function ContentLibraryPage() {
                   type="button"
                   onClick={() => {
                     setTeamScope('unassigned')
-                    const el = document.getElementById('section-team')
-                    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    setActiveTab('team')
                   }}
                   className="px-3 py-1.5 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
                 >
@@ -1304,8 +1907,7 @@ export default function ContentLibraryPage() {
                   type="button"
                   onClick={() => {
                     setProjectsScope('unassigned')
-                    const el = document.getElementById('section-projects')
-                    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    setActiveTab('projects')
                   }}
                   className="px-3 py-1.5 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
                 >
@@ -1315,8 +1917,7 @@ export default function ContentLibraryPage() {
                   type="button"
                   onClick={() => {
                     setReferencesScope('unassigned')
-                    const el = document.getElementById('section-references')
-                    el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    setActiveTab('references')
                   }}
                   className="px-3 py-1.5 text-xs rounded bg-white border border-gray-200 hover:bg-gray-50"
                 >
@@ -1530,54 +2131,11 @@ export default function ContentLibraryPage() {
         )}
       </div>
 
-      {/* Jump links */}
-      <div className="mt-6 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            const el = document.getElementById('section-company')
-            el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          }}
-          className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
+      <div className="mt-8">
+        <section
+          id="section-company"
+          className={`scroll-mt-24 ${activeTab === 'company' ? '' : 'hidden'}`}
         >
-          Company
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            const el = document.getElementById('section-team')
-            el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          }}
-          className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
-        >
-          Team ({selectedCompanyId ? teamForCompany.length : team.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            const el = document.getElementById('section-projects')
-            el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          }}
-          className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
-        >
-          Projects (
-          {selectedCompanyId ? projectsForCompany.length : projects.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            const el = document.getElementById('section-references')
-            el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          }}
-          className="px-3 py-2 text-sm rounded border border-gray-200 bg-white hover:bg-gray-50"
-        >
-          References (
-          {selectedCompanyId ? referencesForCompany.length : references.length})
-        </button>
-      </div>
-
-      <div className="mt-8 space-y-12">
-        <section id="section-company" className="scroll-mt-24">
           <CompanySection
             ctx={{
               companies,
@@ -1602,7 +2160,10 @@ export default function ContentLibraryPage() {
           />
         </section>
 
-        <section id="section-team" className="scroll-mt-24">
+        <section
+          id="section-team"
+          className={`scroll-mt-24 ${activeTab === 'team' ? '' : 'hidden'}`}
+        >
           <div className="flex items-center gap-2 mb-4">
             <UserGroupIcon className="h-5 w-5 text-gray-400" />
             <h3 className="text-lg font-semibold text-gray-900">Team</h3>
@@ -1613,6 +2174,13 @@ export default function ContentLibraryPage() {
               unassignedTeam,
               allTeam: team,
               selectedCompanyId,
+              searchQuery: globalQuery,
+              setSearchQuery: setGlobalQuery,
+              qualityFilterLabel:
+                qualityFilter?.tab === 'team' ? qualityFilter.label : null,
+              qualityFilterIds:
+                qualityFilter?.tab === 'team' ? qualityFilter.ids : null,
+              clearQualityFilter,
               assignMemberToSelectedCompany,
               scope: teamScope,
               setScope: setTeamScope,
@@ -1638,7 +2206,10 @@ export default function ContentLibraryPage() {
           />
         </section>
 
-        <section id="section-projects" className="scroll-mt-24">
+        <section
+          id="section-projects"
+          className={`scroll-mt-24 ${activeTab === 'projects' ? '' : 'hidden'}`}
+        >
           <div className="flex items-center gap-2 mb-4">
             <FolderIcon className="h-5 w-5 text-gray-400" />
             <h3 className="text-lg font-semibold text-gray-900">
@@ -1651,6 +2222,15 @@ export default function ContentLibraryPage() {
               unassignedProjects,
               allProjects: projects,
               selectedCompanyId,
+              searchQuery: globalQuery,
+              setSearchQuery: setGlobalQuery,
+              projectTypeFilter: projectsProjectTypeFilter,
+              industryFilter: projectsIndustryFilter,
+              qualityFilterLabel:
+                qualityFilter?.tab === 'projects' ? qualityFilter.label : null,
+              qualityFilterIds:
+                qualityFilter?.tab === 'projects' ? qualityFilter.ids : null,
+              clearQualityFilter,
               assignProjectToSelectedCompany,
               scope: projectsScope,
               setScope: setProjectsScope,
@@ -1675,7 +2255,12 @@ export default function ContentLibraryPage() {
           />
         </section>
 
-        <section id="section-references" className="scroll-mt-24">
+        <section
+          id="section-references"
+          className={`scroll-mt-24 ${
+            activeTab === 'references' ? '' : 'hidden'
+          }`}
+        >
           <div className="flex items-center gap-2 mb-4">
             <ClipboardDocumentListIcon className="h-5 w-5 text-gray-400" />
             <h3 className="text-lg font-semibold text-gray-900">References</h3>
@@ -1686,6 +2271,14 @@ export default function ContentLibraryPage() {
               unassignedReferences,
               allReferences: references,
               selectedCompanyId,
+              searchQuery: globalQuery,
+              setSearchQuery: setGlobalQuery,
+              projectTypeFilter: referencesProjectTypeFilter,
+              qualityFilterLabel:
+                qualityFilter?.tab === 'references' ? qualityFilter.label : null,
+              qualityFilterIds:
+                qualityFilter?.tab === 'references' ? qualityFilter.ids : null,
+              clearQualityFilter,
               assignReferenceToSelectedCompany,
               scope: referencesScope,
               setScope: setReferencesScope,
@@ -1896,5 +2489,3 @@ export default function ContentLibraryPage() {
     </div>
   )
 }
-
-

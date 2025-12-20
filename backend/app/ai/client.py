@@ -7,7 +7,6 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Generic, TypeVar
 
-from openai import OpenAI
 from pydantic import BaseModel
 
 from ..observability.logging import get_logger
@@ -77,9 +76,19 @@ class AiMeta:
     used_response_format: str | None
 
 
-def _client() -> OpenAI:
+def _client() -> Any:
     if not settings.openai_api_key:
         raise AiNotConfigured("OPENAI_API_KEY not configured")
+    try:
+        # OpenAI Python SDK v1.x
+        from openai import OpenAI  # type: ignore
+    except Exception as e:
+        # Avoid crashing the whole app at import-time if the OpenAI SDK isn't present
+        # (or is an older incompatible version). We only require it when actually
+        # making AI calls.
+        raise AiNotConfigured(
+            "OpenAI SDK is missing or incompatible. Install a v1.x SDK (e.g. openai>=1.0.0)."
+        ) from e
     # We do our own retries; keep OpenAI client retries minimal.
     headers: dict[str, str] = {}
     # Force project routing if configured (matches OpenAI dashboard project id).

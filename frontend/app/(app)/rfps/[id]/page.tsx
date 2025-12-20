@@ -3,6 +3,7 @@
 import AIPreviewModal from '@/components/AIPreviewModal'
 import AttachmentUploadModal from '@/components/AttachmentUploadModal'
 import ConfirmDeleteModal from '@/components/ConfirmDeleteModal'
+import BidGenerateProposalModal from '@/components/proposals/BidGenerateProposalModal'
 import { PipelineBreadcrumbs } from '@/components/ui/PipelineBreadcrumbs'
 import { useToast } from '@/components/ui/Toast'
 import {
@@ -224,6 +225,8 @@ export default function RFPDetailPage() {
   >([])
   const [newBlockerText, setNewBlockerText] = useState<string>('')
   const [bidSaving, setBidSaving] = useState(false)
+  const [showBidGenerateModal, setShowBidGenerateModal] = useState(false)
+  const lastSavedBidDecisionRef = useRef<BidDecision>('')
 
   type ReqStatus = 'unknown' | 'ok' | 'risk' | 'gap'
   type ReqAssessment = {
@@ -325,6 +328,8 @@ export default function RFPDetailPage() {
       .trim()
       .toLowerCase() as BidDecision
     setBidDecision(d === 'bid' || d === 'no_bid' || d === 'maybe' ? d : '')
+    lastSavedBidDecisionRef.current =
+      d === 'bid' || d === 'no_bid' || d === 'maybe' ? d : ''
     setBidNotes(String(r?.notes || ''))
     setBidReasons(Array.isArray(r?.reasons) ? r.reasons.slice(0, 50) : [])
     const bl = Array.isArray(r?.blockers) ? r.blockers : []
@@ -697,6 +702,7 @@ export default function RFPDetailPage() {
 
   const saveBidReview = async () => {
     if (!rfp) return
+    const prevSavedDecision = lastSavedBidDecisionRef.current
     setBidSaving(true)
     try {
       const resp = await rfpApi.updateReview(rfp._id, {
@@ -707,6 +713,11 @@ export default function RFPDetailPage() {
       })
       setRfp(resp.data)
       toast.success('Saved review')
+
+      // If the user just committed a Bid decision, automatically prompt to generate a proposal.
+      if (prevSavedDecision !== 'bid' && bidDecision === 'bid') {
+        setShowBidGenerateModal(true)
+      }
     } catch (e: any) {
       console.error('Failed to save review:', e)
       toast.error('Failed to save review')
@@ -1025,9 +1036,27 @@ export default function RFPDetailPage() {
   }, [rfp?._id])
 
   const scrollToSection = (sid: TocSectionId) => {
+    // Make TOC clicks feel immediate even if the intersection observer is laggy.
+    setActiveSection(sid)
+
+    // If it's a collapsible section, open it first, then scroll after layout settles.
     if (sid !== 'bid-review') setSectionOpen(sid, true)
-    const el = document.getElementById(sid)
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+
+    const targetId = String(sid)
+    const maxAttempts = 8
+
+    const tryScroll = (attempt: number) => {
+      const el = document.getElementById(targetId)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        return
+      }
+      if (attempt >= maxAttempts) return
+      requestAnimationFrame(() => tryScroll(attempt + 1))
+    }
+
+    // Defer to next frame so React state + layout have time to update.
+    requestAnimationFrame(() => requestAnimationFrame(() => tryScroll(0)))
   }
 
   const nextStep: null | { label: string; onClick: () => void } = (() => {
@@ -3325,6 +3354,19 @@ export default function RFPDetailPage() {
       ) : null}
 
       {/* AI Preview Modal */}
+      <BidGenerateProposalModal
+        isOpen={showBidGenerateModal}
+        onClose={() => setShowBidGenerateModal(false)}
+        rfpId={rfp._id}
+        rfpTitle={String(rfp.title || '')}
+        rfpProjectType={String((rfp as any)?.projectType || '')}
+        defaultCompanyId={selectedCompanyId}
+        onGenerated={(proposalId) => {
+          setShowBidGenerateModal(false)
+          router.push(`/proposals/${proposalId}`)
+        }}
+      />
+
       <AIPreviewModal
         isOpen={showAIPreviewModal}
         onClose={() => setShowAIPreviewModal(false)}

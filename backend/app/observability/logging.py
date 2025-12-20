@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 import sys
 
-import structlog
+try:
+    import structlog  # type: ignore
+except Exception:  # pragma: no cover
+    structlog = None  # type: ignore
 
 from .context import get_request_id
 
@@ -24,6 +28,14 @@ def configure_logging(*, level: str | int = "INFO") -> None:
     """
     global _CONFIGURED
     if _CONFIGURED:
+        return
+
+    # Minimal fallback when optional deps aren't installed (e.g. unit tests).
+    if structlog is None:  # pragma: no cover
+        root = logging.getLogger()
+        root.handlers = [logging.StreamHandler(sys.stdout)]
+        root.setLevel(level)
+        _CONFIGURED = True
         return
 
     pre_chain = [
@@ -67,7 +79,53 @@ def configure_logging(*, level: str | int = "INFO") -> None:
     _CONFIGURED = True
 
 
-def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
+class _ShimLogger:
+    """
+    structlog-like logger shim for environments without structlog installed.
+    Accepts `log.info("event", key=value)` and emits a single JSON line.
+    """
+
+    def __init__(self, name: str | None):
+        self._logger = logging.getLogger(name or __name__)
+
+    def _emit(self, level: int, event: str, **kwargs):
+        payload = {"event": str(event or "")}
+        try:
+            rid = get_request_id()
+            if rid:
+                payload["request_id"] = rid
+        except Exception:
+            pass
+        for k, v in (kwargs or {}).items():
+            if v is None:
+                continue
+            payload[str(k)] = v
+        self._logger.log(level, json.dumps(payload, default=str))
+
+    def info(self, event: str, **kwargs):
+        self._emit(logging.INFO, event, **kwargs)
+
+    def warning(self, event: str, **kwargs):
+        self._emit(logging.WARNING, event, **kwargs)
+
+    def error(self, event: str, **kwargs):
+        self._emit(logging.ERROR, event, **kwargs)
+
+    def exception(self, event: str, **kwargs):
+        # Emit once and include traceback.
+        payload = {"event": str(event or ""), **{str(k): v for k, v in (kwargs or {}).items() if v is not None}}
+        try:
+            rid = get_request_id()
+            if rid:
+                payload["request_id"] = rid
+        except Exception:
+            pass
+        self._logger.exception(json.dumps(payload, default=str))
+
+
+def get_logger(name: str | None = None):
+    if structlog is None:  # pragma: no cover
+        return _ShimLogger(name)
     return structlog.get_logger(name)
 
 

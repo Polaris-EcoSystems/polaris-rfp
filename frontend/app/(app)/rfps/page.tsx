@@ -30,6 +30,19 @@ const getFitBadge = (score: number | undefined) => {
   return { label: `Fit ${score}`, cls: 'bg-red-100 text-red-800' }
 }
 
+const isPresent = (v: unknown) => {
+  const s = String(v ?? '').trim()
+  if (!s) return false
+  return s.toLowerCase() !== 'not available'
+}
+
+const formatRfpDate = (v: unknown) => {
+  const s = String(v ?? '').trim()
+  if (!s || s.toLowerCase() === 'not available') return '—'
+  // Backend stores US dates as MM/DD/YYYY strings; show them as-is for stability.
+  return s
+}
+
 export default function RFPsPage() {
   const [rfps, setRfps] = useState<RFP[]>([])
   const [filteredRfps, setFilteredRfps] = useState<RFP[]>([])
@@ -312,13 +325,28 @@ export default function RFPsPage() {
                           {rfp.budgetRange}
                         </p>
                       )}
-                      {rfp.submissionDeadline && (
+                      {isPresent(rfp.submissionDeadline) && (
                         <p className="flex items-center text-sm text-gray-500 sm:mt-0">
                           <CalendarDaysIcon className="h-4 w-4 mr-1" />
-                          Due{' '}
-                          {new Date(rfp.submissionDeadline).toLocaleDateString(
-                            'en-US',
-                          )}
+                          Submission due {formatRfpDate(rfp.submissionDeadline)}
+                        </p>
+                      )}
+                      {isPresent(rfp.questionsDeadline) && (
+                        <p className="flex items-center text-sm text-gray-500 sm:mt-0">
+                          <CalendarDaysIcon className="h-4 w-4 mr-1" />
+                          Questions due {formatRfpDate(rfp.questionsDeadline)}
+                        </p>
+                      )}
+                      {isPresent(rfp.projectDeadline) && (
+                        <p className="flex items-center text-sm text-gray-500 sm:mt-0">
+                          <CalendarDaysIcon className="h-4 w-4 mr-1" />
+                          Project deadline {formatRfpDate(rfp.projectDeadline)}
+                        </p>
+                      )}
+                      {rfp.location && (
+                        <p className="flex items-center text-sm text-gray-500 sm:mt-0">
+                          <BuildingOfficeIcon className="h-4 w-4 mr-1" />
+                          {rfp.location}
                         </p>
                       )}
                     </div>
@@ -392,5 +420,3 @@ export default function RFPsPage() {
     </div>
   )
 }
-
-

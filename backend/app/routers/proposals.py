@@ -5,11 +5,8 @@ import re
 from datetime import datetime
 from typing import Any
 
-from docx import Document
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 
 from ..ai.client import AiError, call_text
 from ..settings import settings
@@ -40,12 +37,47 @@ log = get_logger("proposals")
 def _now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
+def _clean_id_list(v: Any, *, max_items: int = 50, max_len: int = 120) -> list[str]:
+    arr = v if isinstance(v, list) else []
+    out: list[str] = []
+    for x in arr:
+        s = str(x or "").strip()
+        if not s:
+            continue
+        s = s[:max_len]
+        if s not in out:
+            out.append(s)
+        if len(out) >= max_items:
+            break
+    return out
+
 
 def _generate_text_section(
-    title: str, rfp: dict[str, Any], company: dict[str, Any] | None
+    title: str,
+    rfp: dict[str, Any],
+    company: dict[str, Any] | None,
+    team_member_ids: list[str] | None = None,
+    reference_ids: list[str] | None = None,
 ) -> str:
     if not settings.openai_api_key:
         return f"{title}\n\n(This section will be completed in the proposal editor.)"
+
+    team_ctx = ""
+    if team_member_ids:
+        try:
+            team_ctx = _build_team_section(team_member_ids, rfp)
+        except Exception:
+            team_ctx = ""
+    refs_ctx = ""
+    if reference_ids:
+        try:
+            refs_ctx = _build_references_section(reference_ids)
+        except Exception:
+            refs_ctx = ""
+
+    def _clip(s: str, n: int) -> str:
+        s = str(s or "")
+        return s if len(s) <= n else s[:n]
 
     prompt = (
         "Write a high-quality proposal section. Preserve markdown.\n\n"
@@ -57,6 +89,10 @@ def _generate_text_section(
         "COMPANY_CONTEXT:\n"
         f"- Name: {(company or {}).get('name') or ''}\n"
         f"- Capabilities: {', '.join((company or {}).get('coreCapabilities') or [])}\n\n"
+        "TEAM_CONTEXT:\n"
+        f"{_clip(team_ctx, 8000) if team_ctx else '(none)'}\n\n"
+        "REFERENCES_CONTEXT:\n"
+        f"{_clip(refs_ctx, 8000) if refs_ctx else '(none)'}\n\n"
         "Return ONLY the section content."
     )
 
@@ -142,9 +178,28 @@ def _build_references_section(selected_ids: list[str]) -> str:
 
 
 def _section_content_from_title(
-    section_title: str, rfp: dict[str, Any], company: dict[str, Any] | None
+    section_title: str,
+    rfp: dict[str, Any],
+    company: dict[str, Any] | None,
+    team_member_ids: list[str] | None = None,
+    reference_ids: list[str] | None = None,
 ) -> Any:
     st = (section_title or "").lower().strip()
+
+    if team_member_ids:
+        if (
+            "personnel" in st
+            or "team" in st
+            or "staff" in st
+            or "key personnel" in st
+            or "project team" in st
+            or "human resource" in st
+        ):
+            return _build_team_section(team_member_ids, rfp)
+
+    if reference_ids:
+        if "reference" in st or "past performance" in st or "past project" in st:
+            return _build_references_section(reference_ids)
 
     if st == "title" or st == "title page" or "title page" in st:
         return format_title_section(company, rfp)
@@ -161,10 +216,69 @@ def _section_content_from_title(
     ):
         return format_experience_section(company, rfp)
 
-    return _generate_text_section(section_title, rfp, company)
+    return _generate_text_section(
+        section_title,
+        rfp,
+        company,
+        team_member_ids=team_member_ids,
+        reference_ids=reference_ids,
+    )
+
+
+def _template_section_titles(template_id: str, rfp: dict[str, Any]) -> list[str]:
+    tid = str(template_id or "").strip()
+    if tid == "ai-template":
+        titles = rfp.get("sectionTitles") if isinstance(rfp.get("sectionTitles"), list) else []
+        titles = [str(x).strip() for x in titles if str(x).strip()]
+        if titles:
+            return titles[:80]
+        return [
+            "Title",
+            "Cover Letter",
+            "Firm Qualifications and Experience",
+            "Technical Approach",
+            "Key Personnel",
+            "References",
+        ]
+
+    builtin = get_builtin_template(tid)
+    template = {**builtin, "isBuiltin": True} if builtin else templates_repo.get_template_by_id(tid)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    gen_template = to_generator_template(template)
+    sec_defs = (gen_template or {}).get("sections") if isinstance(gen_template, dict) else []
+    out: list[str] = []
+    for s in sec_defs or []:
+        name = str(s.get("title") or s.get("name") or "").strip()
+        if not name:
+            continue
+        if name not in out:
+            out.append(name)
+        if len(out) >= 80:
+            break
+    return out or ["Title", "Cover Letter", "Technical Approach", "References"]
+
+
+def _placeholder_sections(titles: list[str]) -> dict[str, Any]:
+    now = _now_iso()
+    out: dict[str, Any] = {}
+    for t in titles:
+        nm = str(t or "").strip() or "Section"
+        out[nm] = {
+            "content": f"{nm}\n\n(Generating…)",
+            "type": "ai",
+            "lastModified": now,
+        }
+    return out
 
 
 def _render_pdf(proposal: dict[str, Any], company: dict[str, Any] | None) -> bytes:
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="PDF export dependency not installed") from e
+
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     _, height = letter
@@ -213,6 +327,11 @@ def _render_pdf(proposal: dict[str, Any], company: dict[str, Any] | None) -> byt
 
 
 def _render_docx(proposal: dict[str, Any], company: dict[str, Any] | None) -> bytes:
+    try:
+        from docx import Document
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="DOCX export dependency not installed") from e
+
     doc = Document()
     doc.add_heading(str(proposal.get("title") or "Proposal"), level=0)
     if company and company.get("name"):
@@ -235,12 +354,13 @@ def _render_docx(proposal: dict[str, Any], company: dict[str, Any] | None) -> by
 
 
 @router.post("/generate", status_code=201)
-def generate(body: dict):
+def generate(body: dict, background_tasks: BackgroundTasks):
     rfp_id = (body or {}).get("rfpId")
     template_id = (body or {}).get("templateId")
     title = (body or {}).get("title")
     company_id = (body or {}).get("companyId")
     custom_content = (body or {}).get("customContent") or {}
+    async_flag = bool((body or {}).get("async") is True)
 
     if not rfp_id or not template_id or not title:
         raise HTTPException(
@@ -255,6 +375,18 @@ def generate(body: dict):
     if company_id:
         effective_custom["companyId"] = company_id
 
+    # Normalize selection IDs (either top-level or in customContent)
+    team_member_ids = _clean_id_list(
+        (body or {}).get("teamMemberIds") or effective_custom.get("teamMemberIds")
+    )
+    reference_ids = _clean_id_list(
+        (body or {}).get("referenceIds") or effective_custom.get("referenceIds")
+    )
+    if team_member_ids:
+        effective_custom["teamMemberIds"] = team_member_ids
+    if reference_ids:
+        effective_custom["referenceIds"] = reference_ids
+
     company = None
     if company_id:
         company = content_repo.get_company_by_company_id(str(company_id))
@@ -262,42 +394,22 @@ def generate(body: dict):
         comps = content_repo.list_companies(limit=1)
         company = comps[0] if comps else None
 
+    titles = _template_section_titles(str(template_id), rfp)
     sections: dict[str, Any] = {}
 
-    if str(template_id) == "ai-template":
-        titles = rfp.get("sectionTitles") if isinstance(rfp.get("sectionTitles"), list) else []
-        if not titles:
-            titles = [
-                "Title",
-                "Cover Letter",
-                "Firm Qualifications and Experience",
-                "Technical Approach",
-                "Key Personnel",
-                "References",
-            ]
+    if async_flag:
+        sections = _placeholder_sections(titles)
+    else:
         for t in titles:
             name = str(t)
             sections[name] = {
-                "content": _section_content_from_title(name, rfp, company),
-                "type": "ai",
-                "lastModified": _now_iso(),
-            }
-    else:
-        builtin = get_builtin_template(str(template_id))
-        template = (
-            {**builtin, "isBuiltin": True}
-            if builtin
-            else templates_repo.get_template_by_id(str(template_id))
-        )
-        if not template:
-            raise HTTPException(status_code=404, detail="Template not found")
-
-        gen_template = to_generator_template(template)
-        sec_defs = (gen_template or {}).get("sections") if isinstance(gen_template, dict) else []
-        for s in sec_defs or []:
-            name = str(s.get("title") or s.get("name") or "").strip() or "Section"
-            sections[name] = {
-                "content": _section_content_from_title(name, rfp, company),
+                "content": _section_content_from_title(
+                    name,
+                    rfp,
+                    company,
+                    team_member_ids=team_member_ids,
+                    reference_ids=reference_ids,
+                ),
                 "type": "ai",
                 "lastModified": _now_iso(),
             }
@@ -309,12 +421,87 @@ def generate(body: dict):
         title=str(title),
         sections=sections,
         custom_content=effective_custom,
+        generation_status="queued" if async_flag else "complete",
+        generation_error=None,
+        generation_started_at=None,
+        generation_completed_at=None if async_flag else _now_iso(),
         rfp_summary={
             "title": rfp.get("title"),
             "clientName": rfp.get("clientName"),
             "projectType": rfp.get("projectType"),
         },
     )
+
+    if async_flag:
+        proposal_id = str(proposal.get("_id") or "")
+
+        def _run_async_generation() -> None:
+            started = _now_iso()
+            try:
+                update_proposal(
+                    proposal_id,
+                    {
+                        "generationStatus": "running",
+                        "generationStartedAt": started,
+                        "generationError": None,
+                        "lastModifiedBy": "ai-generation",
+                    },
+                )
+            except Exception:
+                pass
+
+            try:
+                r = get_rfp_by_id(str(rfp_id)) or {}
+
+                comp = None
+                if company_id:
+                    comp = content_repo.get_company_by_company_id(str(company_id))
+                if not comp:
+                    comps = content_repo.list_companies(limit=1)
+                    comp = comps[0] if comps else None
+
+                next_sections: dict[str, Any] = {}
+                for t in titles:
+                    nm = str(t or "").strip() or "Section"
+                    next_sections[nm] = {
+                        "content": _section_content_from_title(
+                            nm,
+                            r,
+                            comp,
+                            team_member_ids=team_member_ids,
+                            reference_ids=reference_ids,
+                        ),
+                        "type": "ai",
+                        "lastModified": _now_iso(),
+                    }
+
+                done = _now_iso()
+                update_proposal(
+                    proposal_id,
+                    {
+                        "sections": next_sections,
+                        "generationStatus": "complete",
+                        "generationCompletedAt": done,
+                        "generationError": None,
+                        "lastModifiedBy": "ai-generation",
+                    },
+                )
+            except Exception as e:
+                done = _now_iso()
+                try:
+                    update_proposal(
+                        proposal_id,
+                        {
+                            "generationStatus": "error",
+                            "generationCompletedAt": done,
+                            "generationError": (str(e) or "generation_failed")[:800],
+                            "lastModifiedBy": "ai-generation",
+                        },
+                    )
+                except Exception:
+                    pass
+
+        background_tasks.add_task(_run_async_generation)
 
     try:
         notify_proposal_created(

@@ -51,6 +51,18 @@ def make_rfp_upload_key(*, file_name: str = "") -> str:
     return f"rfp/uploads/{uuid.uuid4()}{ext}"
 
 
+def make_rfp_upload_key_for_hash(*, sha256: str) -> str:
+    """
+    Deterministic key for an RFP PDF based on its SHA-256 (lowercase hex).
+
+    This enables storage-level convergence and makes de-dupe robust across retries.
+    """
+    s = str(sha256 or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}", s):
+        raise ValueError("Invalid sha256")
+    return f"rfp/uploads/sha256/{s}.pdf"
+
+
 @lru_cache(maxsize=1)
 def _s3_client():
     return boto3.client("s3", region_name=settings.aws_region)

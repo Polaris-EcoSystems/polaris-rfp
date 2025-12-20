@@ -277,10 +277,11 @@ export default function Layout({ children }: LayoutProps) {
     <Link
       key={item.name}
       href={item.href}
-      className={`group flex items-center px-3 py-3 text-sm font-medium rounded-xl transition-all duration-200 ${
+      // Avoid scale transforms here: they can overlap neighboring links and "steal" clicks.
+      className={`group flex items-center px-3 py-3 text-sm font-medium rounded-xl transition-colors duration-200 ${
         item.current
-          ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg transform scale-105'
-          : 'text-gray-700 hover:text-gray-900 hover:bg-gray-100 hover:shadow-md hover:transform hover:scale-105'
+          ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg'
+          : 'text-gray-700 hover:text-gray-900 hover:bg-gray-100 hover:shadow-md'
       }`}
       onClick={() => setSidebarOpen(false)}
     >

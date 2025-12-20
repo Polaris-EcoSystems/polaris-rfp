@@ -6,6 +6,11 @@ import {
 } from '@heroicons/react/24/outline'
 import Image from 'next/image'
 import { useMemo, useState } from 'react'
+import AuditMeta from './ui/AuditMeta'
+import ContentPanel from './ui/ContentPanel'
+import ContentSplitLayout from './ui/ContentSplitLayout'
+import EmptyState from './ui/EmptyState'
+import PaginationControls from './ui/PaginationControls'
 
 export default function TeamSection({ ctx }: { ctx: any }) {
   const {
@@ -14,6 +19,11 @@ export default function TeamSection({ ctx }: { ctx: any }) {
     unassignedTeam,
     allTeam,
     selectedCompanyId,
+    searchQuery: controlledSearch,
+    setSearchQuery: setControlledSearch,
+    qualityFilterLabel,
+    qualityFilterIds,
+    clearQualityFilter,
     assignMemberToSelectedCompany,
     assignManyToSelectedCompany,
     scope: controlledScope,
@@ -43,7 +53,10 @@ export default function TeamSection({ ctx }: { ctx: any }) {
     typeof setControlledScope === 'function'
       ? setControlledScope
       : setLocalScope
-  const [search, setSearch] = useState('')
+  const [localSearch, setLocalSearch] = useState('')
+  const search = typeof controlledSearch === 'string' ? controlledSearch : localSearch
+  const setSearch =
+    typeof setControlledSearch === 'function' ? setControlledSearch : setLocalSearch
   const [sortBy, setSortBy] = useState<'name' | 'position' | 'company'>('name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [page, setPage] = useState(1)
@@ -54,6 +67,8 @@ export default function TeamSection({ ctx }: { ctx: any }) {
     const q = String(search || '')
       .trim()
       .toLowerCase()
+    const qualityIds = Array.isArray(qualityFilterIds) ? qualityFilterIds : []
+    const qualitySet = new Set(qualityIds.map((x: any) => String(x || '').trim()))
     const list =
       scope === 'unassigned'
         ? Array.isArray(unassignedTeam)
@@ -69,8 +84,15 @@ export default function TeamSection({ ctx }: { ctx: any }) {
         ? team
         : []
 
+    const listAfterQuality =
+      qualitySet.size > 0
+        ? list.filter((m: any) =>
+            qualitySet.has(String(m?.memberId || m?._id || '').trim()),
+          )
+        : list
+
     const filtered = q
-      ? list.filter((m: any) => {
+      ? listAfterQuality.filter((m: any) => {
           const name = String(m?.nameWithCredentials || m?.name || '')
             .toLowerCase()
             .trim()
@@ -90,7 +112,7 @@ export default function TeamSection({ ctx }: { ctx: any }) {
             company.includes(q)
           )
         })
-      : list
+      : listAfterQuality
 
     const keyFn = (m: any) => {
       if (sortBy === 'position') return String(m?.position || m?.title || '')
@@ -117,6 +139,7 @@ export default function TeamSection({ ctx }: { ctx: any }) {
     search,
     sortBy,
     sortDir,
+    qualityFilterIds,
   ])
 
   const totalPages = Math.max(1, Math.ceil(filteredSorted.length / pageSize))
@@ -127,120 +150,152 @@ export default function TeamSection({ ctx }: { ctx: any }) {
   }, [filteredSorted, currentPage])
 
   return (
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-      {/* Team Members List */}
-      <div className="lg:col-span-2">
-        <div className="bg-white shadow rounded-lg">
-          <div className="px-6 py-5 border-b border-gray-200">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg leading-6 font-medium text-gray-900">
-                Team Members
-              </h3>
-              <div className="flex items-center gap-2">
-                {selectedCompanyId &&
-                scope === 'unassigned' &&
-                filteredSorted.length > 0 &&
-                typeof assignManyToSelectedCompany === 'function' ? (
-                  <button
-                    type="button"
-                    disabled={bulkAssigning}
-                    onClick={async () => {
-                      if (
-                        !confirm(
-                          `Assign ${filteredSorted.length} team member(s) to the selected company?`,
-                        )
-                      )
-                        return
-                      try {
-                        setBulkAssigning(true)
-                        await assignManyToSelectedCompany(filteredSorted)
-                      } finally {
-                        setBulkAssigning(false)
-                      }
-                    }}
-                    className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-60"
-                  >
-                    {bulkAssigning
-                      ? 'Assigning…'
-                      : `Assign all (${filteredSorted.length})`}
-                  </button>
-                ) : null}
+    <ContentSplitLayout
+      list={
+        <ContentPanel
+          title="Team Members"
+          actions={
+            <div className="flex items-center gap-2">
+              {selectedCompanyId &&
+              scope === 'unassigned' &&
+              filteredSorted.length > 0 &&
+              typeof assignManyToSelectedCompany === 'function' ? (
                 <button
-                  onClick={openAddMemberModal}
-                  className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-white bg-primary-600 hover:bg-primary-700"
+                  type="button"
+                  disabled={bulkAssigning}
+                  onClick={async () => {
+                    if (
+                      !confirm(
+                        `Assign ${filteredSorted.length} team member(s) to the selected company?`,
+                      )
+                    )
+                      return
+                    try {
+                      setBulkAssigning(true)
+                      await assignManyToSelectedCompany(filteredSorted)
+                    } finally {
+                      setBulkAssigning(false)
+                    }
+                  }}
+                  className="inline-flex items-center px-3 py-1 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-60"
                 >
-                  + Add Member
+                  {bulkAssigning
+                    ? 'Assigning…'
+                    : `Assign all (${filteredSorted.length})`}
                 </button>
-              </div>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-gray-500">Scope</span>
-                <select
-                  value={scope}
-                  onChange={(e) => {
-                    setScope(e.target.value as any)
-                    setPage(1)
-                  }}
-                  className="border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
-                >
-                  <option value="company" disabled={!selectedCompanyId}>
-                    This company
-                  </option>
-                  <option value="unassigned">Unassigned</option>
-                  <option value="all">All</option>
-                </select>
-              </div>
-              {!selectedCompanyId ? (
-                <div className="text-xs text-gray-500">
-                  Select a company to work “company-first”.
-                </div>
               ) : null}
+              <button
+                onClick={openAddMemberModal}
+                className="inline-flex items-center px-3 py-1 border border-transparent text-xs font-medium rounded text-white bg-primary-600 hover:bg-primary-700"
+              >
+                + Add Member
+              </button>
             </div>
-            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex-1 sm:max-w-md">
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => {
-                    setSearch(e.target.value)
-                    setPage(1)
-                  }}
-                  placeholder="Search by name, role, email, company…"
-                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                />
+          }
+          footer={
+            <PaginationControls
+              page={currentPage}
+              totalPages={totalPages}
+              onPrev={() => setPage((p) => Math.max(1, p - 1))}
+              onNext={() => setPage((p) => Math.min(totalPages, p + 1))}
+            />
+          }
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">Scope</span>
+              <select
+                value={scope}
+                onChange={(e) => {
+                  setScope(e.target.value as any)
+                  setPage(1)
+                }}
+                className="border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+              >
+                <option value="company" disabled={!selectedCompanyId}>
+                  This company
+                </option>
+                <option value="unassigned">Unassigned</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+            {!selectedCompanyId ? (
+              <div className="text-xs text-gray-500">
+                Select a company to work “company-first”.
               </div>
-              <div className="flex items-center gap-2">
-                <select
-                  value={sortBy}
-                  onChange={(e) => {
-                    setSortBy(e.target.value as any)
-                    setPage(1)
-                  }}
-                  className="border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
-                >
-                  <option value="name">Sort: Name</option>
-                  <option value="position">Sort: Role</option>
-                  <option value="company">Sort: Company</option>
-                </select>
+            ) : null}
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="text-xs text-gray-500">
+              Search:{' '}
+              <span className="font-semibold text-gray-700">
+                {search ? `“${search}”` : '—'}
+              </span>
+              {search ? (
                 <button
                   type="button"
                   onClick={() => {
-                    setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+                    setSearch('')
                     setPage(1)
                   }}
-                  className="px-3 py-2 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50"
-                  title="Toggle sort direction"
+                  className="ml-2 text-xs text-primary-600 hover:text-primary-700"
                 >
-                  {sortDir === 'asc' ? '↑' : '↓'}
+                  Clear
                 </button>
-              </div>
+              ) : null}
             </div>
-            <div className="mt-2 text-xs text-gray-500">
-              Showing {paged.length} of {filteredSorted.length} members
+            <div className="flex items-center gap-2">
+              <select
+                value={sortBy}
+                onChange={(e) => {
+                  setSortBy(e.target.value as any)
+                  setPage(1)
+                }}
+                className="border border-gray-300 rounded-md px-3 py-2 text-sm bg-white"
+              >
+                <option value="name">Sort: Name</option>
+                <option value="position">Sort: Role</option>
+                <option value="company">Sort: Company</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => {
+                  setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+                  setPage(1)
+                }}
+                className="px-3 py-2 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50"
+                title="Toggle sort direction"
+              >
+                {sortDir === 'asc' ? '↑' : '↓'}
+              </button>
             </div>
           </div>
-          <div className="divide-y divide-gray-200">
+
+          {qualityFilterLabel ? (
+            <div className="mt-3 rounded border border-primary-200 bg-primary-50 p-3 text-sm text-primary-800 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <span className="font-semibold">Filter:</span>{' '}
+                <span className="font-semibold">{qualityFilterLabel}</span>
+              </div>
+              {typeof clearQualityFilter === 'function' ? (
+                <button
+                  type="button"
+                  onClick={() => clearQualityFilter()}
+                  className="px-2 py-1 text-xs rounded bg-white border border-primary-200 hover:bg-primary-100 text-primary-700"
+                >
+                  Clear
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="mt-2 text-xs text-gray-500">
+            Showing {paged.length} of {filteredSorted.length} members
+          </div>
+
+          <div className="mt-4 -mx-6 border-t border-gray-200" />
+          <div className="-mx-6 divide-y divide-gray-200">
             {filteredSorted.length > 0 ? (
               paged.map((member: any, index: number) => (
                 <div
@@ -249,8 +304,17 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                     selectedMember === member
                       ? 'bg-primary-50 border-r-2 border-primary-500'
                       : ''
-                  }`}
+                  } focus:outline-none focus:ring-2 focus:ring-primary-500`}
                   onClick={() => setSelectedMember(member)}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`View ${member.nameWithCredentials || member.name || 'team member'}`}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      setSelectedMember(member)
+                    }
+                  }}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-3">
@@ -315,137 +379,114 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                 </div>
               ))
             ) : (
-              <div className="px-6 py-4">
-                <p className="text-gray-500 text-sm">
-                  No team members found{search ? ' for this search' : ''}.
-                </p>
-              </div>
+              <EmptyState
+                title={
+                  search
+                    ? 'No team members match this search.'
+                    : 'No team members found.'
+                }
+                description={
+                  search
+                    ? 'Try a different query, or widen the scope.'
+                    : 'Add your first team member to get started.'
+                }
+              />
             )}
           </div>
-          {totalPages > 1 && (
-            <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage <= 1}
-                className="px-3 py-2 text-sm rounded border border-gray-300 bg-white disabled:opacity-50"
-              >
-                Prev
-              </button>
-              <div className="text-sm text-gray-600">
-                Page {currentPage} / {totalPages}
-              </div>
-              <button
-                type="button"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage >= totalPages}
-                className="px-3 py-2 text-sm rounded border border-gray-300 bg-white disabled:opacity-50"
-              >
-                Next
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Member Details Panel */}
-      <div className="lg:col-span-1">
-        <div className="bg-white shadow rounded-lg sticky top-6">
-          <div className="px-6 py-5 border-b border-gray-200">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">
-              Member Details
-            </h3>
-          </div>
-          <div className="px-6 py-4">
-            {selectedMember ? (
-              <div className="space-y-4">
-                <div className="text-center">
-                  {selectedMember.headshotUrl ? (
-                    <Image
-                      src={selectedMember.headshotUrl}
-                      alt="Headshot"
-                      width={64}
-                      height={64}
-                      unoptimized
-                      className="h-16 w-16 rounded-full object-cover border mx-auto mb-3"
-                    />
-                  ) : (
-                    <div className="flex-shrink-0 h-16 w-16 rounded-full bg-primary-100 flex items-center justify-center mx-auto mb-3">
-                      <UserGroupIcon className="h-8 w-8 text-primary-600" />
-                    </div>
-                  )}
-                  <h4 className="font-medium text-gray-900">
-                    {selectedMember.nameWithCredentials || selectedMember.name}
-                  </h4>
-                  <p className="text-sm text-gray-500">
-                    {selectedMember.position || selectedMember.title}
-                  </p>
-                  {selectedMember.email && (
-                    <a
-                      href={`mailto:${selectedMember.email}`}
-                      className="text-xs text-primary-600 hover:text-primary-700 hover:underline mt-1 inline-block"
-                    >
-                      {selectedMember.email}
-                    </a>
-                  )}
-                  {selectedMember.company && (
-                    <div className="mt-2 flex items-center justify-center text-xs text-gray-600">
-                      <span className="font-medium">Company:</span>
-                      <span className="ml-1">
-                        {selectedMember.company.name}
-                      </span>
-                      {selectedMember.company.sharedInfo && (
-                        <span className="ml-1" title="Shared company data">
-                          🔗
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {selectedMember.biography && (
-                  <div>
-                    <h5 className="text-sm font-medium text-gray-700 mb-2">
-                      Default Biography
-                    </h5>
-                    <div className="text-sm text-gray-600 leading-relaxed">
-                      {selectedMember.biography
-                        .split('\n')
-                        .map((line: string, index: number) => {
-                          const trimmedLine = line.trim()
-                          if (!trimmedLine) return <br key={index} />
-
-                          // If line starts with bullet point, render as list item
-                          if (
-                            trimmedLine.startsWith('•') ||
-                            trimmedLine.startsWith('-') ||
-                            trimmedLine.startsWith('*')
-                          ) {
-                            return (
-                              <div
-                                key={index}
-                                className="flex items-start mb-1"
-                              >
-                                <span className="text-gray-400 mr-2 mt-0.5">
-                                  •
-                                </span>
-                                <span className="flex-1">
-                                  {trimmedLine.replace(/^[•\-*]\s*/, '')}
-                                </span>
-                              </div>
-                            )
-                          }
-
-                          // Regular paragraph
-                          return (
-                            <p key={index} className="mb-2">
-                              {trimmedLine}
-                            </p>
-                          )
-                        })}
-                    </div>
+        </ContentPanel>
+      }
+      details={
+        <ContentPanel title="Member Details" sticky>
+          {selectedMember ? (
+            <div className="space-y-4">
+              <div className="text-center">
+                {selectedMember.headshotUrl ? (
+                  <Image
+                    src={selectedMember.headshotUrl}
+                    alt="Headshot"
+                    width={64}
+                    height={64}
+                    unoptimized
+                    className="h-16 w-16 rounded-full object-cover border mx-auto mb-3"
+                  />
+                ) : (
+                  <div className="flex-shrink-0 h-16 w-16 rounded-full bg-primary-100 flex items-center justify-center mx-auto mb-3">
+                    <UserGroupIcon className="h-8 w-8 text-primary-600" />
                   </div>
                 )}
+                <h4 className="font-medium text-gray-900">
+                  {selectedMember.nameWithCredentials || selectedMember.name}
+                </h4>
+                <p className="text-sm text-gray-500">
+                  {selectedMember.position || selectedMember.title}
+                </p>
+                <AuditMeta
+                  className="mt-2"
+                  createdAt={selectedMember.createdAt}
+                  updatedAt={selectedMember.updatedAt}
+                  version={selectedMember.version}
+                />
+                {selectedMember.email && (
+                  <a
+                    href={`mailto:${selectedMember.email}`}
+                    className="text-xs text-primary-600 hover:text-primary-700 hover:underline mt-1 inline-block"
+                  >
+                    {selectedMember.email}
+                  </a>
+                )}
+                {selectedMember.company && (
+                  <div className="mt-2 flex items-center justify-center text-xs text-gray-600">
+                    <span className="font-medium">Company:</span>
+                    <span className="ml-1">{selectedMember.company.name}</span>
+                    {selectedMember.company.sharedInfo && (
+                      <span className="ml-1" title="Shared company data">
+                        🔗
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {selectedMember.biography && (
+                <div>
+                  <h5 className="text-sm font-medium text-gray-700 mb-2">
+                    Default Biography
+                  </h5>
+                  <div className="text-sm text-gray-600 leading-relaxed">
+                    {selectedMember.biography
+                      .split('\n')
+                      .map((line: string, index: number) => {
+                        const trimmedLine = line.trim()
+                        if (!trimmedLine) return <br key={index} />
+
+                        // If line starts with bullet point, render as list item
+                        if (
+                          trimmedLine.startsWith('•') ||
+                          trimmedLine.startsWith('-') ||
+                          trimmedLine.startsWith('*')
+                        ) {
+                          return (
+                            <div key={index} className="flex items-start mb-1">
+                              <span className="text-gray-400 mr-2 mt-0.5">
+                                •
+                              </span>
+                              <span className="flex-1">
+                                {trimmedLine.replace(/^[•\-*]\s*/, '')}
+                              </span>
+                            </div>
+                          )
+                        }
+
+                        // Regular paragraph
+                        return (
+                          <p key={index} className="mb-2">
+                            {trimmedLine}
+                          </p>
+                        )
+                      })}
+                  </div>
+                </div>
+              )}
 
                 {Array.isArray(selectedMember.bioProfiles) &&
                   selectedMember.bioProfiles.length > 0 && (
@@ -545,20 +586,16 @@ export default function TeamSection({ ctx }: { ctx: any }) {
                       </div>
                     </div>
                   )}
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <UserGroupIcon className="mx-auto h-8 w-8 text-gray-400" />
-                <p className="mt-2 text-sm text-gray-500">
-                  Select a team member to view their details
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Modals moved to page level */}
-    </div>
+            </div>
+          ) : (
+            <EmptyState
+              title="Select a team member"
+              description="Pick a row to preview details."
+              icon={<UserGroupIcon className="h-10 w-10" />}
+            />
+          )}
+        </ContentPanel>
+      }
+    />
   )
 }

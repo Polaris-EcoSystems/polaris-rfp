@@ -58,6 +58,10 @@ def create_proposal(
     sections: dict[str, Any],
     custom_content: dict[str, Any],
     rfp_summary: dict[str, Any] | None,
+    generation_status: str | None = None,
+    generation_error: str | None = None,
+    generation_started_at: str | None = None,
+    generation_completed_at: str | None = None,
 ) -> dict[str, Any]:
     proposal_id = new_id("proposal")
     created_at = now_iso()
@@ -74,6 +78,10 @@ def create_proposal(
         "status": "draft",
         "sections": sections or {},
         "customContent": custom_content or {},
+        "generationStatus": generation_status,
+        "generationError": generation_error,
+        "generationStartedAt": generation_started_at,
+        "generationCompletedAt": generation_completed_at,
         "review": {
             "score": None,
             "decision": "",
@@ -183,6 +191,10 @@ def update_proposal(proposal_id: str, updates_obj: dict[str, Any]) -> dict[str, 
         "companyId",
         "templateId",
         "lastModifiedBy",
+        "generationStatus",
+        "generationError",
+        "generationStartedAt",
+        "generationCompletedAt",
     }
     updates = {k: v for k, v in (updates_obj or {}).items() if k in allowed}
 

@@ -15,6 +15,14 @@ def _proposal_url(proposal_id: str) -> str:
     base = str(settings.frontend_base_url or "").rstrip("/")
     return f"{base}/proposals/{proposal_id}"
 
+def _present(value: Any) -> str:
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    if s.lower() in {"not available", "n/a", "na", "none", "null"}:
+        return ""
+    return s
+
 def _format_rfp_upload_summary(*, rfp_id: str, file_name: str, job_id: str) -> str:
     rid = str(rfp_id or "").strip()
     name = str(file_name or "").strip() or "upload.pdf"
@@ -27,24 +35,41 @@ def _format_rfp_upload_summary(*, rfp_id: str, file_name: str, job_id: str) -> s
     except Exception:
         rfp = None
 
-    title = str(((rfp or {}).get("title") or "RFP") if isinstance(rfp, dict) else "RFP").strip() or "RFP"
-    client = str(((rfp or {}).get("clientName") or "") if isinstance(rfp, dict) else "").strip()
-    ptype = str(((rfp or {}).get("projectType") or "") if isinstance(rfp, dict) else "").strip()
-    due = str(((rfp or {}).get("submissionDeadline") or "") if isinstance(rfp, dict) else "").strip()
+    title = _present(((rfp or {}).get("title") or "RFP") if isinstance(rfp, dict) else "RFP") or "RFP"
+    client = _present(((rfp or {}).get("clientName") or "") if isinstance(rfp, dict) else "")
+    ptype = _present(((rfp or {}).get("projectType") or "") if isinstance(rfp, dict) else "")
+    budget = _present(((rfp or {}).get("budgetRange") or "") if isinstance(rfp, dict) else "")
+    location = _present(((rfp or {}).get("location") or "") if isinstance(rfp, dict) else "")
+    due = _present(((rfp or {}).get("submissionDeadline") or "") if isinstance(rfp, dict) else "")
+    questions_due = _present(((rfp or {}).get("questionsDeadline") or "") if isinstance(rfp, dict) else "")
+    meeting = _present(((rfp or {}).get("bidMeetingDate") or "") if isinstance(rfp, dict) else "")
+    registration = _present(((rfp or {}).get("bidRegistrationDate") or "") if isinstance(rfp, dict) else "")
+    project_deadline = _present(((rfp or {}).get("projectDeadline") or "") if isinstance(rfp, dict) else "")
 
     link = f"<{_rfp_url(rid)}|{title}>" if rid else "RFP"
-    meta_parts: list[str] = []
-    if client:
-        meta_parts.append(client)
-    if ptype:
-        meta_parts.append(ptype)
-    if due:
-        meta_parts.append(f"due {due}")
-    meta = f" — {' · '.join(meta_parts)}" if meta_parts else ""
 
-    if rid:
-        return f"New RFP uploaded: {link} `{rid}`{meta} (file `{name}`, job `{jid}`)"
-    return f"New RFP uploaded: {link}{meta} (file `{name}`, job `{jid}`)"
+    lines: list[str] = []
+    header = f"New RFP uploaded: {link} `{rid}`" if rid else f"New RFP uploaded: {link}"
+    lines.append(header)
+
+    details: list[tuple[str, str]] = [
+        ("Client", client),
+        ("Project type", ptype),
+        ("Budget", budget),
+        ("Submission due", due),
+        ("Questions due", questions_due),
+        ("Bid meeting", meeting),
+        ("Registration", registration),
+        ("Project deadline", project_deadline),
+        ("Location", location),
+    ]
+    for label, val in details:
+        if val:
+            lines.append(f"• *{label}:* {val}")
+
+    lines.append(f"• *File:* `{name}`")
+    lines.append(f"• *Job:* `{jid}`")
+    return "\n".join(lines)
 
 
 def notify_rfp_upload_job_completed(

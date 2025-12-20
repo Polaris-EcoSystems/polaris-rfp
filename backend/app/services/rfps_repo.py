@@ -56,23 +56,46 @@ def normalize_rfp_for_api(item: dict[str, Any] | None) -> dict[str, Any] | None:
 
 def create_rfp_from_analysis(*, analysis: dict[str, Any], source_file_name: str, source_file_size: int) -> dict[str, Any]:
     rfp_id = new_id("rfp")
+    item = build_rfp_item_from_analysis(
+        rfp_id=rfp_id,
+        analysis=analysis,
+        source_file_name=source_file_name,
+        source_file_size=source_file_size,
+    )
+    get_main_table().put_item(item=item, condition_expression="attribute_not_exists(pk)")
+    return normalize_rfp_for_api(item) or {}
+
+
+def build_rfp_item_from_analysis(
+    *,
+    rfp_id: str,
+    analysis: dict[str, Any],
+    source_file_name: str,
+    source_file_size: int,
+) -> dict[str, Any]:
+    """
+    Build the DynamoDB item for an RFP record.
+
+    This is used by both the normal create path and the de-dupe transactional path.
+    """
+    rid = str(rfp_id or "").strip()
+    if not rid:
+        raise ValueError("rfp_id is required")
     created_at = now_iso()
 
     item: dict[str, Any] = {
-        **rfp_key(rfp_id),
+        **rfp_key(rid),
         "entityType": "RFP",
-        "rfpId": rfp_id,
+        "rfpId": rid,
         "createdAt": created_at,
         "updatedAt": created_at,
         **(analysis or {}),
         "fileName": source_file_name or "",
         "fileSize": int(source_file_size or 0),
         "clientName": (analysis or {}).get("clientName") or "Unknown Client",
-        **_rfp_type_item(rfp_id, created_at),
+        **_rfp_type_item(rid, created_at),
     }
-
-    get_main_table().put_item(item=item, condition_expression="attribute_not_exists(pk)")
-    return normalize_rfp_for_api(item) or {}
+    return item
 
 
 def get_rfp_by_id(rfp_id: str) -> dict[str, Any] | None:

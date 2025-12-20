@@ -39,13 +39,13 @@ def normalize_job_for_api(item: dict[str, Any] | None) -> dict[str, Any] | None:
     obj["jobId"] = obj.get("jobId") or ""
 
     # Never expose internal keys or user identity fields.
-    for k in ("pk", "sk", "gsi1pk", "gsi1sk", "entityType", "userSub"):
+    for k in ("pk", "sk", "gsi1pk", "gsi1sk", "entityType", "userSub", "sha256"):
         obj.pop(k, None)
 
     return obj
 
 
-def create_job(*, user_sub: str, s3_key: str, file_name: str) -> dict[str, Any]:
+def create_job(*, user_sub: str, s3_key: str, file_name: str, sha256: str) -> dict[str, Any]:
     jid = new_id("rfp_upload")
     created_at = now_iso()
 
@@ -59,6 +59,7 @@ def create_job(*, user_sub: str, s3_key: str, file_name: str) -> dict[str, Any]:
         "userSub": user_sub,
         "s3Key": s3_key,
         "fileName": file_name or "upload.pdf",
+        "sha256": str(sha256 or "").strip().lower(),
         **_job_type_item(jid, created_at),
     }
 

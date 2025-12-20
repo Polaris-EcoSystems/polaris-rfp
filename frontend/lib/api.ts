@@ -123,6 +123,8 @@ export interface RFP {
   projectDeadline?: string
   budgetRange?: string
   projectType: string
+  location?: string
+  contactInformation?: string
   keyRequirements: string[]
   evaluationCriteria: any[]
   deliverables: string[]
@@ -169,6 +171,10 @@ export interface Proposal {
   title: string
   status: string
   sections: Record<string, any>
+  generationStatus?: 'queued' | 'running' | 'complete' | 'error'
+  generationError?: string | null
+  generationStartedAt?: string | null
+  generationCompletedAt?: string | null
   review?: {
     score?: number | null
     decision?: '' | 'shortlist' | 'reject'
@@ -247,10 +253,30 @@ export const rfpApi = {
         ? 'application/pdf'
         : 'application/pdf'
 
+    const sha256Hex = async (f: File): Promise<string> => {
+      const buf = await f.arrayBuffer()
+      const digest = await crypto.subtle.digest('SHA-256', buf)
+      const bytes = new Uint8Array(digest)
+      let hex = ''
+      for (let i = 0; i < bytes.length; i++) {
+        hex += bytes[i].toString(16).padStart(2, '0')
+      }
+      return hex
+    }
+
+    const sha256 = await sha256Hex(file)
+
     const presignResp = await api.post(proxyUrl('/api/rfp/upload/presign'), {
       fileName,
       contentType,
+      sha256,
     })
+
+    const isDup = Boolean(presignResp?.data?.duplicate)
+    const dupRfpId = String(presignResp?.data?.rfpId || '')
+    if (isDup && dupRfpId) {
+      return api.get(proxyUrl(`/api/rfp/${cleanPathToken(dupRfpId)}`))
+    }
 
     const putUrl = String(presignResp?.data?.putUrl || '')
     const key = String(presignResp?.data?.key || '')
@@ -270,6 +296,7 @@ export const rfpApi = {
     const jobResp = await api.post(proxyUrl('/api/rfp/upload/from-s3'), {
       key,
       fileName,
+      sha256,
     })
 
     const jobId = String(jobResp?.data?.job?.jobId || '')
@@ -407,6 +434,7 @@ export const proposalApi = {
     title: string
     companyId?: string
     customContent?: any
+    async?: boolean
   }) => api.post<Proposal>(proxyUrl('/api/proposals/generate'), data),
   generateSections: (proposalId: string) =>
     api.post(
