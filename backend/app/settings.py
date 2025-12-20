@@ -121,6 +121,11 @@ class Settings(BaseSettings):
     northstar_daily_report_channel: str | None = Field(
         default=None, validation_alias="NORTHSTAR_DAILY_REPORT_CHANNEL"
     )
+    # Agent daily digest (telemetry/self-improvement) destination.
+    agent_daily_digest_channel: str | None = Field(default=None, validation_alias="AGENT_DAILY_DIGEST_CHANNEL")
+    agent_daily_digest_email_to: str | None = Field(default=None, validation_alias="AGENT_DAILY_DIGEST_EMAIL_TO")
+    agent_daily_digest_email_from: str | None = Field(default=None, validation_alias="AGENT_DAILY_DIGEST_EMAIL_FROM")
+    agent_daily_digest_tz: str = Field(default="America/Chicago", validation_alias="AGENT_DAILY_DIGEST_TZ")
 
     # Slack agent (LLM-powered Q&A)
     slack_agent_enabled: bool = Field(default=True, validation_alias="SLACK_AGENT_ENABLED")
@@ -145,6 +150,13 @@ class Settings(BaseSettings):
     agent_allowed_github_repos: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_GITHUB_REPOS")
     agent_allowed_github_base_branches: str | None = Field(
         default=None, validation_alias="AGENT_ALLOWED_GITHUB_BASE_BRANCHES"
+    )
+    agent_allowed_slack_channels: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_SLACK_CHANNELS")
+    # Browser automation worker (Playwright)
+    browser_worker_url: str | None = Field(default=None, validation_alias="BROWSER_WORKER_URL")
+    # Comma-separated hostnames allowed for browser automation (deny by default if unset).
+    agent_allowed_browser_domains: str | None = Field(
+        default=None, validation_alias="AGENT_ALLOWED_BROWSER_DOMAINS"
     )
 
     # Self-modifying pipeline (PR creation + CI verification + ECS verification)

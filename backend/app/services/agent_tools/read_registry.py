@@ -14,6 +14,11 @@ from ..rfps_repo import get_rfp_by_id, list_rfps
 from ..s3_assets import get_object_text as s3_get_object_text
 from ..s3_assets import list_objects as s3_list_objects
 from ..s3_assets import presign_get_object as s3_presign_get_object
+from ..skills_repo import get_skill_index as skills_get_index
+from ..skills_repo import search_skills as skills_search_index
+from ..skills_store import get_skill_body_text as skills_get_body_text
+from ..tenant_memory_repo import list_blocks as tenant_memory_list
+from ..user_memory_repo import list_blocks as user_memory_list
 from ..workflow_tasks_repo import list_tasks_for_rfp
 from .allowlist import parse_csv, uniq, is_allowed_prefix
 from .aws_cognito import admin_get_user as cognito_admin_get_user
@@ -23,12 +28,33 @@ from .aws_ecs import describe_service as ecs_describe_service
 from .aws_ecs import describe_task_definition as ecs_describe_task_definition
 from .aws_ecs import list_tasks as ecs_list_tasks
 from .aws_logs import tail_log_group as logs_tail
+from .aws_logs_insights import search_logs as telemetry_search_logs
+from .aws_logs_insights import top_errors as telemetry_top_errors
+from .aws_s3 import head_object as s3_head_object
+from .aws_s3 import presign_put_object as s3_presign_put_object
 from .aws_secrets import describe_secret as secrets_describe_secret
 from .aws_sqs import get_queue_attributes as sqs_get_queue_attributes
 from .aws_sqs import get_queue_depth as sqs_get_queue_depth
+from .aws_dynamodb import describe_table as dynamodb_describe_table
+from .aws_dynamodb import list_tables as dynamodb_list_tables
+from ..browser_worker_client import (
+    click as bw_click,
+    close as bw_close,
+    extract as bw_extract,
+    goto as bw_goto,
+    new_context as bw_new_context,
+    new_page as bw_new_page,
+    trace_start as bw_trace_start,
+    trace_stop as bw_trace_stop,
+    screenshot as bw_screenshot,
+    type_text as bw_type_text,
+    wait_for as bw_wait_for,
+)
 from .github_api import get_pull as github_get_pull
 from .github_api import list_check_runs as github_list_check_runs
 from .github_api import list_pulls as github_list_pulls
+from .slack_read import get_thread as slack_get_thread
+from .slack_read import list_recent_messages as slack_list_recent_messages
 
 
 ToolFn = Callable[[dict[str, Any]], dict[str, Any]]
@@ -153,7 +179,7 @@ def _allowed_s3_prefixes() -> list[str]:
     if explicit:
         return explicit
     # Default allowlist (keep narrow; expand via env var if needed).
-    return ["rfp/", "team/", "contracting/"]
+    return ["rfp/", "team/", "contracting/", "agent/"]
 
 
 def _require_allowed_s3_key(key: str) -> str:
@@ -174,6 +200,352 @@ def _require_allowed_s3_prefix(prefix: str) -> str:
     if allowed and not is_allowed_prefix(p, allowed):
         raise ValueError("s3_prefix_not_allowed")
     return p
+
+
+def _tenant_id_default(email_domain: str | None = None) -> str:
+    # Prefer explicit domain if provided, else fall back to app-wide allowed domain.
+    dom = str(email_domain or "").strip().lower()
+    if dom and "@" in dom:
+        dom = dom.split("@", 1)[1].strip().lower()
+    return dom or str(getattr(settings, "allowed_email_domain", "") or "").strip().lower() or "default"
+
+
+def _clip_block(block: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
+    b = dict(block or {})
+    content = str(b.get("content") or "")
+    if len(content) > max_chars:
+        b["content"] = content[:max_chars] + "…"
+        b["contentTruncated"] = True
+    else:
+        b["contentTruncated"] = False
+    return b
+
+
+def _user_memory_load_tool(args: dict[str, Any]) -> dict[str, Any]:
+    user_sub = str(args.get("userSub") or "").strip()
+    if not user_sub:
+        return {"ok": False, "error": "missing_userSub"}
+    limit = max(1, min(50, int(args.get("limit") or 25)))
+    max_chars = max(500, min(20_000, int(args.get("maxChars") or 5000)))
+    try:
+        blocks = user_memory_list(user_sub=user_sub, limit=limit)
+        slim = [_clip_block(b, max_chars=max_chars) for b in blocks[:limit] if isinstance(b, dict)]
+        return {"ok": True, "userSub": user_sub, "blocks": slim}
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "user_memory_load_failed"}
+
+
+def _tenant_memory_load_tool(args: dict[str, Any]) -> dict[str, Any]:
+    tenant_id = str(args.get("tenantId") or "").strip().lower() or None
+    email_domain = str(args.get("emailDomain") or "").strip().lower() or None
+    tid = tenant_id or _tenant_id_default(email_domain)
+    limit = max(1, min(50, int(args.get("limit") or 25)))
+    max_chars = max(500, min(20_000, int(args.get("maxChars") or 5000)))
+    try:
+        blocks = tenant_memory_list(tenant_id=tid, limit=limit)
+        slim = [_clip_block(b, max_chars=max_chars) for b in blocks[:limit] if isinstance(b, dict)]
+        return {"ok": True, "tenantId": tid, "blocks": slim}
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "tenant_memory_load_failed"}
+
+
+def _memory_search_tool(args: dict[str, Any]) -> dict[str, Any]:
+    q = normalize_ws(str(args.get("query") or ""), max_chars=200)
+    if not q:
+        return {"ok": False, "error": "missing_query"}
+    ql = q.lower()
+    limit = max(1, min(25, int(args.get("limit") or 10)))
+    # Scope
+    user_sub = str(args.get("userSub") or "").strip() or None
+    tenant_id = str(args.get("tenantId") or "").strip().lower() or None
+    email_domain = str(args.get("emailDomain") or "").strip().lower() or None
+    tid = tenant_id or (_tenant_id_default(email_domain) if (tenant_id is None) else tenant_id)
+
+    hits: list[dict[str, Any]] = []
+
+    def _search_blocks(blocks: list[dict[str, Any]], *, scope: str) -> None:
+        nonlocal hits
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            title = str(b.get("title") or "")
+            content = str(b.get("content") or "")
+            hay = (title + "\n" + content).lower()
+            if ql not in hay:
+                continue
+            # Snippet
+            idx = hay.find(ql)
+            start = max(0, idx - 80)
+            end = min(len(content), idx + 220)
+            snippet = content[start:end].strip()
+            hits.append(
+                {
+                    "scope": scope,
+                    "blockId": b.get("blockId"),
+                    "title": title[:240],
+                    "snippet": (snippet[:400] + "…") if len(snippet) > 400 else snippet,
+                }
+            )
+            if len(hits) >= limit:
+                return
+
+    try:
+        if user_sub:
+            _search_blocks(user_memory_list(user_sub=user_sub, limit=50), scope="user")
+        if len(hits) < limit and tid:
+            _search_blocks(tenant_memory_list(tenant_id=tid, limit=50), scope="tenant")
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "memory_search_failed"}
+
+    return {"ok": True, "query": q, "hits": hits[:limit]}
+
+
+# --- Skills tools (SkillIndex in Dynamo + SkillBody in S3) ---
+
+
+def _skills_search_tool(args: dict[str, Any]) -> dict[str, Any]:
+    q = normalize_ws(str(args.get("query") or ""), max_chars=200) or None
+    tags = args.get("tags") if isinstance(args.get("tags"), list) else None
+    limit = int(args.get("limit") or 10)
+    next_token = str(args.get("nextToken") or "").strip() or None
+    try:
+        return skills_search_index(query=q, tags=tags, limit=limit, next_token=next_token)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "skills_search_failed"}
+
+
+def _skills_get_tool(args: dict[str, Any]) -> dict[str, Any]:
+    sid = str(args.get("skillId") or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing_skillId"}
+    try:
+        sk = skills_get_index(skill_id=sid)
+        if not sk:
+            return {"ok": False, "error": "not_found"}
+        return {"ok": True, "skill": sk}
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "skills_get_failed"}
+
+
+def _skills_load_tool(args: dict[str, Any]) -> dict[str, Any]:
+    sid = str(args.get("skillId") or "").strip()
+    if not sid:
+        return {"ok": False, "error": "missing_skillId"}
+    max_chars = max(2000, min(50_000, int(args.get("maxChars") or 20_000)))
+    try:
+        sk = skills_get_index(skill_id=sid)
+        if not sk:
+            return {"ok": False, "error": "not_found"}
+        s3_key = str(sk.get("s3Key") or "").strip()
+        if not s3_key:
+            return {"ok": False, "error": "skill_missing_s3Key"}
+        # Enforce S3 prefix allowlist before loading.
+        _require_allowed_s3_key(s3_key)
+        body = skills_get_body_text(key=s3_key, max_bytes=2 * 1024 * 1024, max_chars=max_chars)
+        if not body.get("ok"):
+            return body
+        return {"ok": True, "skill": sk, "body": body.get("text")}
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "skills_load_failed"}
+
+
+# --- Browser worker tools (Playwright) ---
+
+
+def _browser_new_context_tool(args: dict[str, Any]) -> dict[str, Any]:
+    ua = str(args.get("userAgent") or "").strip() or None
+    vw = args.get("viewportWidth")
+    vh = args.get("viewportHeight")
+    try:
+        return bw_new_context(user_agent=ua, viewport_width=int(vw) if vw is not None else None, viewport_height=int(vh) if vh is not None else None)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_new_context_failed"}
+
+
+def _browser_new_page_tool(args: dict[str, Any]) -> dict[str, Any]:
+    cid = str(args.get("contextId") or "").strip()
+    try:
+        return bw_new_page(context_id=cid)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_new_page_failed"}
+
+
+def _browser_goto_tool(args: dict[str, Any]) -> dict[str, Any]:
+    pid = str(args.get("pageId") or "").strip()
+    url = str(args.get("url") or "").strip()
+    wait_until = str(args.get("waitUntil") or "").strip() or None
+    timeout_ms = args.get("timeoutMs")
+    try:
+        return bw_goto(page_id=pid, url=url, wait_until=wait_until, timeout_ms=int(timeout_ms) if timeout_ms is not None else None)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_goto_failed"}
+
+
+def _browser_click_tool(args: dict[str, Any]) -> dict[str, Any]:
+    pid = str(args.get("pageId") or "").strip()
+    sel = str(args.get("selector") or "").strip()
+    timeout_ms = args.get("timeoutMs")
+    try:
+        return bw_click(page_id=pid, selector=sel, timeout_ms=int(timeout_ms) if timeout_ms is not None else None)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_click_failed"}
+
+
+def _browser_type_tool(args: dict[str, Any]) -> dict[str, Any]:
+    pid = str(args.get("pageId") or "").strip()
+    sel = str(args.get("selector") or "").strip()
+    txt = str(args.get("text") or "")
+    clear_first = bool(args.get("clearFirst") is True)
+    timeout_ms = args.get("timeoutMs")
+    try:
+        return bw_type_text(page_id=pid, selector=sel, text=txt, clear_first=clear_first, timeout_ms=int(timeout_ms) if timeout_ms is not None else None)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_type_failed"}
+
+
+def _browser_wait_for_tool(args: dict[str, Any]) -> dict[str, Any]:
+    pid = str(args.get("pageId") or "").strip()
+    sel = str(args.get("selector") or "").strip() or None
+    text = str(args.get("text") or "").strip() or None
+    timeout_ms = args.get("timeoutMs")
+    try:
+        return bw_wait_for(page_id=pid, selector=sel, text=text, timeout_ms=int(timeout_ms) if timeout_ms is not None else None)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_wait_for_failed"}
+
+
+def _browser_extract_tool(args: dict[str, Any]) -> dict[str, Any]:
+    pid = str(args.get("pageId") or "").strip()
+    sel = str(args.get("selector") or "").strip()
+    mode = str(args.get("mode") or "").strip() or None
+    attr = str(args.get("attribute") or "").strip() or None
+    try:
+        return bw_extract(page_id=pid, selector=sel, mode=mode, attribute=attr)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_extract_failed"}
+
+
+def _browser_screenshot_tool(args: dict[str, Any]) -> dict[str, Any]:
+    pid = str(args.get("pageId") or "").strip()
+    full_page = bool(args.get("fullPage") is True)
+    name = str(args.get("name") or "").strip() or None
+    try:
+        return bw_screenshot(page_id=pid, full_page=full_page, name=name)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_screenshot_failed"}
+
+
+def _browser_close_tool(args: dict[str, Any]) -> dict[str, Any]:
+    cid = str(args.get("contextId") or "").strip() or None
+    pid = str(args.get("pageId") or "").strip() or None
+    try:
+        return bw_close(context_id=cid, page_id=pid)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_close_failed"}
+
+
+def _browser_trace_start_tool(args: dict[str, Any]) -> dict[str, Any]:
+    cid = str(args.get("contextId") or "").strip()
+    screenshots = bool(args.get("screenshots") is True)
+    snapshots = bool(args.get("snapshots") is True)
+    sources = bool(args.get("sources") is True)
+    try:
+        return bw_trace_start(context_id=cid, screenshots=screenshots, snapshots=snapshots, sources=sources)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_trace_start_failed"}
+
+
+def _browser_trace_stop_tool(args: dict[str, Any]) -> dict[str, Any]:
+    cid = str(args.get("contextId") or "").strip()
+    name = str(args.get("name") or "").strip() or None
+    try:
+        return bw_trace_stop(context_id=cid, name=name)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "browser_trace_stop_failed"}
+
+
+# --- Telemetry tools (CloudWatch Logs Insights, bounded) ---
+
+
+def _telemetry_search_logs_tool(args: dict[str, Any]) -> dict[str, Any]:
+    q = normalize_ws(str(args.get("query") or ""), max_chars=2000)
+    groups = args.get("logGroupNames") if isinstance(args.get("logGroupNames"), list) else None
+    since = str(args.get("sinceIso") or "").strip() or None
+    until = str(args.get("untilIso") or "").strip() or None
+    limit = int(args.get("limit") or 50)
+    try:
+        return telemetry_search_logs(query=q, log_group_names=groups, since_iso=since, until_iso=until, limit=limit, timeout_s=15)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "telemetry_search_logs_failed"}
+
+
+def _telemetry_top_errors_tool(args: dict[str, Any]) -> dict[str, Any]:
+    lg = str(args.get("logGroupName") or "").strip()
+    lookback = int(args.get("lookbackMinutes") or 60)
+    limit = int(args.get("limit") or 10)
+    try:
+        return telemetry_top_errors(log_group_name=lg, lookback_minutes=lookback, limit=limit)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "telemetry_top_errors_failed"}
+
+
+def _dynamodb_describe_table_tool(args: dict[str, Any]) -> dict[str, Any]:
+    tn = str(args.get("tableName") or "").strip()
+    if not tn:
+        return {"ok": False, "error": "missing_tableName"}
+    try:
+        return dynamodb_describe_table(table_name=tn)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "dynamodb_describe_table_failed"}
+
+
+def _dynamodb_list_tables_tool(args: dict[str, Any]) -> dict[str, Any]:
+    limit = int(args.get("limit") or 20)
+    try:
+        return dynamodb_list_tables(limit=limit)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "dynamodb_list_tables_failed"}
+
+
+def _s3_head_object_tool(args: dict[str, Any]) -> dict[str, Any]:
+    k = str(args.get("key") or "").strip()
+    if not k:
+        return {"ok": False, "error": "missing_key"}
+    try:
+        return s3_head_object(key=k)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "s3_head_object_failed"}
+
+
+def _s3_presign_put_tool(args: dict[str, Any]) -> dict[str, Any]:
+    k = str(args.get("key") or "").strip()
+    ct = str(args.get("contentType") or "").strip() or None
+    exp = int(args.get("expiresIn") or 900)
+    if not k:
+        return {"ok": False, "error": "missing_key"}
+    try:
+        return s3_presign_put_object(key=k, content_type=ct, expires_in=exp)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "s3_presign_put_failed"}
+
+
+def _slack_list_recent_messages_tool(args: dict[str, Any]) -> dict[str, Any]:
+    ch = str(args.get("channel") or "").strip()
+    limit = int(args.get("limit") or 15)
+    try:
+        return slack_list_recent_messages(channel=ch, limit=limit)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "slack_list_recent_messages_failed"}
+
+
+def _slack_get_thread_tool(args: dict[str, Any]) -> dict[str, Any]:
+    ch = str(args.get("channel") or "").strip()
+    ts = str(args.get("threadTs") or "").strip()
+    limit = int(args.get("limit") or 25)
+    try:
+        return slack_get_thread(channel=ch, thread_ts=ts, limit=limit)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "slack_get_thread_failed"}
 
 
 # --- Existing platform browsing tools ---
@@ -598,6 +970,419 @@ def _github_list_check_runs_tool(args: dict[str, Any]) -> dict[str, Any]:
 
 
 READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
+    "slack_list_recent_messages": (
+        tool_def(
+            "slack_list_recent_messages",
+            "List recent messages in a Slack channel (read-only; bounded).",
+            {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1, "maxLength": 40},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                },
+                "required": ["channel"],
+                "additionalProperties": False,
+            },
+        ),
+        _slack_list_recent_messages_tool,
+    ),
+    "slack_get_thread": (
+        tool_def(
+            "slack_get_thread",
+            "Fetch a Slack thread (replies) for a channel + threadTs (bounded).",
+            {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1, "maxLength": 40},
+                    "threadTs": {"type": "string", "minLength": 1, "maxLength": 40},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                },
+                "required": ["channel", "threadTs"],
+                "additionalProperties": False,
+            },
+        ),
+        _slack_get_thread_tool,
+    ),
+    "dynamodb_describe_table": (
+        tool_def(
+            "dynamodb_describe_table",
+            "Describe a DynamoDB table (allowlisted).",
+            {
+                "type": "object",
+                "properties": {"tableName": {"type": "string", "minLength": 1, "maxLength": 255}},
+                "required": ["tableName"],
+                "additionalProperties": False,
+            },
+        ),
+        _dynamodb_describe_table_tool,
+    ),
+    "dynamodb_list_tables": (
+        tool_def(
+            "dynamodb_list_tables",
+            "List allowed DynamoDB tables (from allowlist; does not enumerate AWS).",
+            {
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _dynamodb_list_tables_tool,
+    ),
+    "s3_head_object": (
+        tool_def(
+            "s3_head_object",
+            "Get S3 object metadata (allowlisted prefixes; no body).",
+            {
+                "type": "object",
+                "properties": {"key": {"type": "string", "minLength": 1, "maxLength": 2048}},
+                "required": ["key"],
+                "additionalProperties": False,
+            },
+        ),
+        _s3_head_object_tool,
+    ),
+    "s3_presign_put": (
+        tool_def(
+            "s3_presign_put",
+            "Create a presigned PUT URL for an allowlisted S3 key.",
+            {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "minLength": 1, "maxLength": 2048},
+                    "contentType": {"type": "string", "maxLength": 200},
+                    "expiresIn": {"type": "integer", "minimum": 60, "maximum": 3600},
+                },
+                "required": ["key"],
+                "additionalProperties": False,
+            },
+        ),
+        _s3_presign_put_tool,
+    ),
+    "telemetry_search_logs": (
+        tool_def(
+            "telemetry_search_logs",
+            "Run a bounded CloudWatch Logs Insights query (allowlisted groups).",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "logGroupNames": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+                    "sinceIso": {"type": "string", "maxLength": 64},
+                    "untilIso": {"type": "string", "maxLength": 64},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        ),
+        _telemetry_search_logs_tool,
+    ),
+    "telemetry_top_errors": (
+        tool_def(
+            "telemetry_top_errors",
+            "Summarize top error signatures in a log group over a lookback window.",
+            {
+                "type": "object",
+                "properties": {
+                    "logGroupName": {"type": "string", "minLength": 1, "maxLength": 512},
+                    "lookbackMinutes": {"type": "integer", "minimum": 5, "maximum": 360},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                },
+                "required": ["logGroupName"],
+                "additionalProperties": False,
+            },
+        ),
+        _telemetry_top_errors_tool,
+    ),
+    "browser_new_context": (
+        tool_def(
+            "browser_new_context",
+            "Create a new isolated browser context (Playwright worker).",
+            {
+                "type": "object",
+                "properties": {
+                    "userAgent": {"type": "string", "maxLength": 300},
+                    "viewportWidth": {"type": "integer", "minimum": 320, "maximum": 3840},
+                    "viewportHeight": {"type": "integer", "minimum": 240, "maximum": 2160},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_new_context_tool,
+    ),
+    "browser_new_page": (
+        tool_def(
+            "browser_new_page",
+            "Create a new page in an existing browser context.",
+            {
+                "type": "object",
+                "properties": {"contextId": {"type": "string", "minLength": 1, "maxLength": 120}},
+                "required": ["contextId"],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_new_page_tool,
+    ),
+    "browser_goto": (
+        tool_def(
+            "browser_goto",
+            "Navigate to a URL (domain allowlisted).",
+            {
+                "type": "object",
+                "properties": {
+                    "pageId": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "url": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "waitUntil": {"type": "string", "maxLength": 40},
+                    "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 120000},
+                },
+                "required": ["pageId", "url"],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_goto_tool,
+    ),
+    "browser_click": (
+        tool_def(
+            "browser_click",
+            "Click an element by selector.",
+            {
+                "type": "object",
+                "properties": {
+                    "pageId": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "selector": {"type": "string", "minLength": 1, "maxLength": 600},
+                    "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 120000},
+                },
+                "required": ["pageId", "selector"],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_click_tool,
+    ),
+    "browser_type": (
+        tool_def(
+            "browser_type",
+            "Type into an input/textarea by selector.",
+            {
+                "type": "object",
+                "properties": {
+                    "pageId": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "selector": {"type": "string", "minLength": 1, "maxLength": 600},
+                    "text": {"type": "string", "minLength": 1, "maxLength": 5000},
+                    "clearFirst": {"type": "boolean"},
+                    "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 120000},
+                },
+                "required": ["pageId", "selector", "text"],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_type_tool,
+    ),
+    "browser_wait_for": (
+        tool_def(
+            "browser_wait_for",
+            "Wait for a selector or visible text.",
+            {
+                "type": "object",
+                "properties": {
+                    "pageId": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "selector": {"type": "string", "maxLength": 600},
+                    "text": {"type": "string", "maxLength": 400},
+                    "timeoutMs": {"type": "integer", "minimum": 1000, "maximum": 120000},
+                },
+                "required": ["pageId"],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_wait_for_tool,
+    ),
+    "browser_extract": (
+        tool_def(
+            "browser_extract",
+            "Extract text/html/attribute from the first element matching selector.",
+            {
+                "type": "object",
+                "properties": {
+                    "pageId": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "selector": {"type": "string", "minLength": 1, "maxLength": 600},
+                    "mode": {"type": "string", "maxLength": 20},
+                    "attribute": {"type": "string", "maxLength": 80},
+                },
+                "required": ["pageId", "selector"],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_extract_tool,
+    ),
+    "browser_screenshot": (
+        tool_def(
+            "browser_screenshot",
+            "Capture a screenshot and store it in S3 under agent/ prefix.",
+            {
+                "type": "object",
+                "properties": {
+                    "pageId": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "fullPage": {"type": "boolean"},
+                    "name": {"type": "string", "maxLength": 120},
+                },
+                "required": ["pageId"],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_screenshot_tool,
+    ),
+    "browser_trace_start": (
+        tool_def(
+            "browser_trace_start",
+            "Start Playwright tracing on a browser context.",
+            {
+                "type": "object",
+                "properties": {
+                    "contextId": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "screenshots": {"type": "boolean"},
+                    "snapshots": {"type": "boolean"},
+                    "sources": {"type": "boolean"},
+                },
+                "required": ["contextId"],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_trace_start_tool,
+    ),
+    "browser_trace_stop": (
+        tool_def(
+            "browser_trace_stop",
+            "Stop Playwright tracing and upload the trace zip to S3 (agent/ prefix).",
+            {
+                "type": "object",
+                "properties": {
+                    "contextId": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "name": {"type": "string", "maxLength": 120},
+                },
+                "required": ["contextId"],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_trace_stop_tool,
+    ),
+    "browser_close": (
+        tool_def(
+            "browser_close",
+            "Close a page and/or context to free resources.",
+            {
+                "type": "object",
+                "properties": {
+                    "contextId": {"type": "string", "maxLength": 120},
+                    "pageId": {"type": "string", "maxLength": 120},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _browser_close_tool,
+    ),
+    "user_memory_load": (
+        tool_def(
+            "user_memory_load",
+            "Load durable user memory blocks for a userSub (clipped).",
+            {
+                "type": "object",
+                "properties": {
+                    "userSub": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "maxChars": {"type": "integer", "minimum": 500, "maximum": 20000},
+                },
+                "required": ["userSub"],
+                "additionalProperties": False,
+            },
+        ),
+        _user_memory_load_tool,
+    ),
+    "tenant_memory_load": (
+        tool_def(
+            "tenant_memory_load",
+            "Load durable tenant memory blocks (shared org knowledge), clipped.",
+            {
+                "type": "object",
+                "properties": {
+                    "tenantId": {"type": "string", "maxLength": 120},
+                    "emailDomain": {"type": "string", "maxLength": 200},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                    "maxChars": {"type": "integer", "minimum": 500, "maximum": 20000},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _tenant_memory_load_tool,
+    ),
+    "memory_search": (
+        tool_def(
+            "memory_search",
+            "Search user+tenant memory blocks by keyword (bounded).",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "userSub": {"type": "string", "maxLength": 120},
+                    "tenantId": {"type": "string", "maxLength": 120},
+                    "emailDomain": {"type": "string", "maxLength": 200},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        ),
+        _memory_search_tool,
+    ),
+    "skills_search": (
+        tool_def(
+            "skills_search",
+            "Search available skills by name prefix and/or tags (metadata only; does not load bodies).",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "maxLength": 200},
+                    "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 25},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 25},
+                    "nextToken": {"type": "string", "maxLength": 2000},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _skills_search_tool,
+    ),
+    "skills_get": (
+        tool_def(
+            "skills_get",
+            "Get SkillIndex metadata for a skillId (does not load body).",
+            {
+                "type": "object",
+                "properties": {"skillId": {"type": "string", "minLength": 1, "maxLength": 60}},
+                "required": ["skillId"],
+                "additionalProperties": False,
+            },
+        ),
+        _skills_get_tool,
+    ),
+    "skills_load": (
+        tool_def(
+            "skills_load",
+            "Load a skill body from S3 (clipped). Use after selecting via skills_search/get.",
+            {
+                "type": "object",
+                "properties": {
+                    "skillId": {"type": "string", "minLength": 1, "maxLength": 60},
+                    "maxChars": {"type": "integer", "minimum": 2000, "maximum": 50000},
+                },
+                "required": ["skillId"],
+                "additionalProperties": False,
+            },
+        ),
+        _skills_load_tool,
+    ),
     "list_rfps": (
         tool_def(
             "list_rfps",

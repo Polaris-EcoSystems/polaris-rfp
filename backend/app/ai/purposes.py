@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Central inventory of AI purposes used across the app.
 
@@ -8,6 +6,8 @@ Why this exists:
   telemetry, and tuning defaults (reasoning/verbosity/token caps).
 - Keeping them in one place prevents drift between frontend UX and backend calls.
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal

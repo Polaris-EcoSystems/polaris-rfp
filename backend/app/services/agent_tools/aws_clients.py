@@ -50,6 +50,11 @@ def cognito_idp_client(region: str | None = None):
     return boto3.client("cognito-idp", region_name=reg, config=botocore_config())
 
 
+@lru_cache(maxsize=1)
+def dynamodb_client():
+    return boto3.client("dynamodb", region_name=settings.aws_region, config=botocore_config())
+
+
 def _ok(data: dict[str, Any] | None = None, **meta: Any) -> dict[str, Any]:
     out: dict[str, Any] = {"ok": True}
     if data is not None:

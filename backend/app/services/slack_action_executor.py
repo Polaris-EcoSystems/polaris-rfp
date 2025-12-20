@@ -12,10 +12,14 @@ from .agent_tools.aws_s3 import copy_object as s3_copy_object
 from .agent_tools.aws_s3 import delete_object as s3_delete_object
 from .agent_tools.aws_s3 import move_object as s3_move_object
 from .agent_tools.aws_sqs import redrive_dlq as sqs_redrive_dlq
+from .agent_tools.github_api import add_labels as github_add_labels
 from .agent_tools.github_api import comment_on_issue_or_pr as github_comment
 from .agent_tools.github_api import create_issue as github_create_issue
+from .agent_tools.github_api import dispatch_workflow as github_dispatch_workflow
+from .agent_tools.github_api import rerun_workflow_run as github_rerun_workflow_run
 from .rfps_repo import get_rfp_by_id, list_rfp_proposal_summaries
-from .user_profiles_repo import get_user_profile_by_slack_user_id, upsert_user_profile
+from .rfps_repo import update_rfp
+from .user_profiles_repo import get_user_profile, get_user_profile_by_slack_user_id, upsert_user_profile
 from .workflow_tasks_repo import (
     assign_task,
     complete_task,
@@ -54,6 +58,28 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
         created = seed_missing_tasks_for_stage(rfp_id=rfp_id, stage=stage, proposal_id=None)
         return {"ok": True, "action": k, "rfpId": rfp_id, "stage": stage, "createdCount": len(created)}
 
+    if k == "update_rfp_review":
+        rfp_id = str(a.get("rfpId") or "").strip()
+        decision = str(a.get("decision") or "").strip()
+        notes = str(a.get("notes") or a.get("note") or "").strip() or None
+        if not rfp_id:
+            return {"ok": False, "error": "missing_rfpId"}
+        if decision not in ("bid", "no_bid", "unreviewed"):
+            return {"ok": False, "error": "invalid_decision"}
+        existing = get_rfp_by_id(rfp_id)
+        if not existing:
+            return {"ok": False, "error": "rfp_not_found"}
+        review = existing.get("review") if isinstance(existing.get("review"), dict) else {}
+        next_review = dict(review)
+        next_review["decision"] = decision
+        if notes is not None:
+            next_review["notes"] = notes[:2000] if notes else None
+        next_review["updatedAt"] = _now_iso()
+        updated = update_rfp(rfp_id, {"review": next_review})
+        if not updated:
+            return {"ok": False, "error": "update_failed"}
+        return {"ok": True, "action": k, "rfpId": rfp_id, "review": updated.get("review")}
+
     if k == "assign_task":
         task_id = str(a.get("taskId") or "").strip()
         assignee = str(a.get("assigneeUserSub") or "").strip()
@@ -81,22 +107,56 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
 
     if k == "update_user_profile":
         # Slack-confirmed: persist user prefs/memory.
-        actor = str(a.get("_actorSlackUserId") or "").strip()
-        requested = str(a.get("_requestedBySlackUserId") or "").strip()
-        if not actor:
+        actor_slack = str(a.get("_actorSlackUserId") or "").strip() or None
+        actor_sub = str(a.get("_actorUserSub") or "").strip() or None
+        req_slack = str(a.get("_requestedBySlackUserId") or "").strip() or None
+        req_sub = str(a.get("_requestedByUserSub") or "").strip() or None
+
+        if not actor_slack and not actor_sub:
             return {"ok": False, "error": "missing_actor"}
-        if requested and actor != requested:
+        if req_slack and actor_slack and req_slack != actor_slack:
+            return {"ok": False, "error": "not_authorized_for_action"}
+        if req_sub and actor_sub and req_sub != actor_sub:
             return {"ok": False, "error": "not_authorized_for_action"}
 
-        profile = get_user_profile_by_slack_user_id(slack_user_id=actor)
-        if not profile:
-            return {"ok": False, "error": "slack_user_not_linked"}
+        profile: dict[str, Any] | None = None
+        user_sub: str | None = None
+        email_for_write: str | None = None
+        if actor_sub:
+            profile = get_user_profile(user_sub=actor_sub)
+            user_sub = actor_sub
+        if not profile and actor_slack:
+            profile = get_user_profile_by_slack_user_id(slack_user_id=actor_slack)
+            user_sub = str((profile or {}).get("_id") or (profile or {}).get("userSub") or "").strip() or None
 
-        user_sub = str(profile.get("_id") or profile.get("userSub") or "").strip()
+        # Best-effort fallback: resolve Slack -> email -> user_sub via Cognito, then upsert/create.
+        # This removes the need for manual "link Slack user id" for basic personalization.
+        if not user_sub and actor_slack:
+            try:
+                from .slack_actor_context import resolve_actor_context
+
+                ctx = resolve_actor_context(slack_user_id=actor_slack, slack_team_id=None, slack_enterprise_id=None)
+                if ctx.email:
+                    email_for_write = str(ctx.email).strip().lower() or None
+                if ctx.user_sub:
+                    user_sub = str(ctx.user_sub).strip() or None
+                    if not profile:
+                        profile = get_user_profile(user_sub=user_sub)
+            except Exception:
+                user_sub = None
+
         if not user_sub:
-            return {"ok": False, "error": "profile_missing_user_sub"}
+            # Keep a stable error code for Slack UX and dashboards.
+            return {"ok": False, "error": "slack_user_not_linked" if actor_slack else "user_not_resolved"}
+
+        # Normalize: allow profile to be missing; we can still upsert by user_sub.
+        profile = profile if isinstance(profile, dict) else {}
 
         updates: dict[str, Any] = {}
+
+        # Ensure Slack user id is linked going forward (enables fast GSI lookup).
+        if actor_slack and not str(profile.get("slackUserId") or "").strip():
+            updates.setdefault("slackUserId", actor_slack)
 
         # Preferred name
         if "preferredName" in a:
@@ -154,7 +214,8 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
         if not updates:
             return {"ok": True, "action": k, "updated": False, "message": "No changes requested."}
 
-        saved = upsert_user_profile(user_sub=user_sub, email=str(profile.get("email") or "") or None, updates=updates)
+        email_to_write = email_for_write or (str(profile.get("email") or "").strip().lower() or None)
+        saved = upsert_user_profile(user_sub=user_sub, email=email_to_write, updates=updates)
         return {
             "ok": True,
             "action": k,
@@ -343,6 +404,39 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
             res = github_comment(repo=repo, number=number, body=body)
         except Exception as e:
             res = {"ok": False, "error": str(e) or "github_comment_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "github_add_labels":
+        repo = str(a.get("repo") or "").strip() or None
+        number = int(a.get("number") or 0)
+        labels = a.get("labels") if isinstance(a.get("labels"), list) else []
+        try:
+            res = github_add_labels(repo=repo, number=number, labels=labels)
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "github_add_labels_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "github_rerun_workflow_run":
+        repo = str(a.get("repo") or "").strip() or None
+        run_id = int(a.get("runId") or 0)
+        try:
+            res = github_rerun_workflow_run(repo=repo, run_id=run_id)
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "github_rerun_workflow_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "github_dispatch_workflow":
+        repo = str(a.get("repo") or "").strip() or None
+        workflow = str(a.get("workflow") or "").strip()
+        ref = str(a.get("ref") or "").strip()
+        inputs = a.get("inputs") if isinstance(a.get("inputs"), dict) else None
+        try:
+            res = github_dispatch_workflow(repo=repo, workflow=workflow, ref=ref, inputs=inputs)
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "github_dispatch_workflow_failed"}
         _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
         return {"ok": bool(res.get("ok")), "action": k, "result": res}
 

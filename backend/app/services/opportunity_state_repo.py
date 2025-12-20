@@ -60,6 +60,9 @@ def default_state(*, rfp_id: str) -> dict[str, Any]:
         # Linkage to other domain objects (best-effort; may be empty early).
         "proposalIds": [],
         "contractingCaseId": None,
+        # Long-lived working summary (compacted from journal + events).
+        "summary": None,
+        "lastCompactedAt": None,
         # High-level workflow state.
         "stage": None,  # BidDecision|ProposalDraft|...|Contracting|...
         "owners": {},

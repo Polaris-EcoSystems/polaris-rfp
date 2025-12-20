@@ -12,6 +12,9 @@ from ..services.agent_jobs_repo import (
     try_mark_running,
 )
 from ..services.opportunity_state_repo import ensure_state_exists, patch_state, seed_from_platform
+from ..services.opportunity_compactor import run_opportunity_compaction
+from ..services.agent_daily_digest import run_daily_digest_and_reschedule
+from ..services.agent_self_improve import run_perch_time_once
 from ..services.slack_reply_tools import post_summary
 from ..services.self_modify_pipeline import get_pr_checks, open_pr_for_change_proposal, verify_ecs_rollout
 from ..services.slack_web import chat_post_message_result
@@ -83,6 +86,22 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                 completed += 1
                 continue
 
+            if job_type == "agent_daily_digest":
+                # Global, not tied to an RFP.
+                hours = int(payload.get("hours") or 24)
+                res = run_daily_digest_and_reschedule(hours=hours)
+                complete_job(job_id=jid, result=res)
+                completed += 1
+                continue
+
+            if job_type in ("agent_perch_time", "telemetry_self_improve"):
+                hours = int(payload.get("hours") or 6)
+                resched = payload.get("rescheduleMinutes")
+                res = run_perch_time_once(hours=hours, reschedule_minutes=int(resched) if resched is not None else 60)
+                complete_job(job_id=jid, result=res)
+                completed += 1
+                continue
+
             if job_type == "slack_nudge":
                 if not rid:
                     raise RuntimeError("missing_scope_rfpId")
@@ -93,6 +112,14 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     raise RuntimeError("missing_channel_or_text")
                 post_summary(rfp_id=rid, channel=channel, thread_ts=thread_ts, text=text)
                 complete_job(job_id=jid, result={"ok": True, "posted": True})
+                completed += 1
+                continue
+
+            if job_type in ("opportunity_compact", "memory_compact"):
+                if not rid:
+                    raise RuntimeError("missing_scope_rfpId")
+                res = run_opportunity_compaction(rfp_id=rid, journal_limit=int(payload.get("journalLimit") or 25))
+                complete_job(job_id=jid, result=res)
                 completed += 1
                 continue
 

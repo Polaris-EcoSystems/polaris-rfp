@@ -35,6 +35,68 @@ def get_user_profile(*, user_sub: str) -> dict[str, Any] | None:
     return normalize_user_profile_for_api(it)
 
 
+def user_email_index_pk(email: str) -> str:
+    em = str(email or "").strip().lower()
+    if not em or "@" not in em:
+        raise ValueError("email is required")
+    return f"USER_EMAIL#{em}"
+
+
+def get_user_sub_by_email(*, email: str) -> str | None:
+    """
+    Best-effort: lookup a user_sub by email using a lightweight primary-index mapping item.
+
+    Mapping item shape:
+      pk = USER_EMAIL#<email>
+      sk = USER#<userSub>
+      entityType = UserEmailIndex
+    """
+    em = str(email or "").strip().lower()
+    if not em or "@" not in em:
+        return None
+    pg = get_main_table().query_page(
+        index_name=None,
+        key_condition_expression=Key("pk").eq(user_email_index_pk(em)),
+        scan_index_forward=False,
+        limit=1,
+        next_token=None,
+    )
+    items = pg.items or []
+    it0 = items[0] if items else None
+    if not isinstance(it0, dict):
+        return None
+    sk = str(it0.get("sk") or "").strip()
+    if sk.startswith("USER#"):
+        sub = sk.removeprefix("USER#").strip()
+        return sub or None
+    sub2 = str(it0.get("userSub") or "").strip()
+    return sub2 or None
+
+
+def upsert_user_email_index(*, email: str, user_sub: str) -> dict[str, Any]:
+    """
+    Upsert the primary-index mapping item for email -> userSub.
+    """
+    em = str(email or "").strip().lower()
+    sub = str(user_sub or "").strip()
+    if not em or "@" not in em:
+        raise ValueError("email is required")
+    if not sub:
+        raise ValueError("user_sub is required")
+    now = now_iso()
+    item: dict[str, Any] = {
+        "pk": user_email_index_pk(em),
+        "sk": f"USER#{sub}",
+        "entityType": "UserEmailIndex",
+        "email": em,
+        "userSub": sub,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    get_main_table().put_item(item=item)
+    return dict(item)
+
+
 def get_user_profile_by_slack_user_id(*, slack_user_id: str) -> dict[str, Any] | None:
     """
     Lookup a user profile by Slack user id using GSI1.

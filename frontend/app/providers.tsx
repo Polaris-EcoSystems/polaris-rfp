@@ -1,5 +1,6 @@
 'use client'
 
+import AppErrorBoundary from '@/components/AppErrorBoundary'
 import { ToastProvider } from '@/components/ui/Toast'
 import { AuthProvider } from '@/lib/auth'
 import type { AbstractIntlMessages } from 'next-intl'
@@ -16,9 +17,11 @@ export default function Providers({
 }) {
   return (
     <NextIntlClientProvider locale={locale} messages={messages}>
-      <ToastProvider>
-        <AuthProvider>{children}</AuthProvider>
-      </ToastProvider>
+      <AppErrorBoundary>
+        <ToastProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </ToastProvider>
+      </AppErrorBoundary>
     </NextIntlClientProvider>
   )
 }

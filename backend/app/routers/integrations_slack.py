@@ -3,12 +3,11 @@ from __future__ import annotations
 import json
 import hmac
 import hashlib
-import re
 import time
 from urllib.parse import parse_qs
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
 from ..observability.logging import get_logger
 from ..settings import settings
@@ -18,13 +17,15 @@ from ..services.rfp_upload_jobs_repo import get_job
 from ..services.rfps_repo import create_rfp_from_analysis, get_rfp_by_id, list_rfps
 from ..services.slack_agent import run_slack_agent_question
 from ..services.slack_operator_agent import run_slack_operator_for_mention
+from ..services.slack_surfaces.dispatcher import handle_event_callback, handle_interactivity
+from ..services.slack_surfaces.workflows import handle_workflow_step_execute
 from ..services.slack_action_executor import execute_action
 from ..services.slack_actions_repo import get_action, mark_action_done
 from ..services.slack_actions_repo import create_action
-from ..services.slack_events_repo import mark_seen as slack_event_mark_seen
 from ..services.slack_rate_limiter import allow as slack_allow
 from ..services.slack_response_url import respond as respond_via_response_url
 from ..services.slack_secrets import get_secret_str
+from ..services.slack_actor_context import resolve_actor_context
 from ..services.slack_web import (
     download_slack_file,
     get_bot_token,
@@ -32,17 +33,37 @@ from ..services.slack_web import (
     list_recent_channel_pdfs,
     post_message_result,
     chat_post_message_result,
-    get_user_info,
-    slack_user_display_name,
+    slack_api_get,
 )
-from ..services.slack_reply_tools import ack_reaction
 from ..services.slack_pending_thread_links_repo import create_pending_link, get_pending_link, consume_pending_link
 from ..services.slack_thread_bindings_repo import set_binding
-from ..services.user_profiles_repo import get_user_profile_by_slack_user_id
+from ..services.agent_events_repo import append_event
 
 
 router = APIRouter(tags=["integrations"])
 log = get_logger("integrations_slack")
+
+def _extract_action_error(result: dict[str, Any]) -> str:
+    """
+    Normalize action execution errors into a single string.
+
+    `execute_action` often returns:
+      {"ok": bool, "action": str, "result": {"ok": bool, "error": "..."}}
+    while other call sites might return:
+      {"ok": bool, "error": "..."}
+    """
+    try:
+        e1 = str(result.get("error") or "").strip()
+        if e1:
+            return e1
+        inner = result.get("result")
+        if isinstance(inner, dict):
+            e2 = str(inner.get("error") or "").strip()
+            if e2:
+                return e2
+        return "unknown_error"
+    except Exception:
+        return "unknown_error"
 
 def _command_response_type(subcommand: str) -> str:
     # Per request: make all commands public except `job` which can contain
@@ -419,12 +440,11 @@ def _slack_agent_answer_task(
     or via chat.postMessage (app mention).
     """
     try:
-        # Best-effort identity enrichment + memory injection.
-        slack_user = get_user_info(user_id=user_id or "") if user_id else None
-        display_name = slack_user_display_name(slack_user) if slack_user else None
-        prof = (slack_user.get("profile") if isinstance(slack_user, dict) else {}) or {}
-        email = str(prof.get("email") or "").strip().lower() or None
-        user_profile = get_user_profile_by_slack_user_id(slack_user_id=user_id or "") if user_id else None
+        # Unified identity enrichment + memory injection.
+        ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
+        display_name = ctx.display_name
+        email = ctx.email
+        user_profile = ctx.user_profile
 
         ans = run_slack_agent_question(
             question=question,
@@ -541,43 +561,8 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
 
     # Event callbacks - respond quickly; best-effort handling only.
     if payload.get("type") == "event_callback":
-        # Deduplicate by event_id to avoid Slack retry storms.
-        ev_id = str(payload.get("event_id") or "").strip()
-        if ev_id and not slack_event_mark_seen(event_id=ev_id, ttl_seconds=600):
-            return {"ok": True}
-
-        ev = payload.get("event") or {}
-        ev_type = str(ev.get("type") or "").strip()
-
-        # Agentic Q&A on mentions: reply in-thread.
-        if ev_type == "app_mention" and is_slack_configured() and bool(settings.slack_agent_enabled):
-            channel = str(ev.get("channel") or "").strip() or None
-            user_id = str(ev.get("user") or "").strip() or None
-            thread_ts = str(ev.get("thread_ts") or ev.get("ts") or "").strip() or None
-            text = str(ev.get("text") or "").strip()
-            # Remove the mention token (<@U123...>) so the model sees only the question.
-            text = re.sub(r"<@[^>]+>", "", text).strip()
-            if not text:
-                text = "help"
-            # Rate limit by (user, channel) to avoid abuse.
-            if user_id and not slack_allow(key=f"slack_agent_user:{user_id}", limit=8, per_seconds=60):
-                return {"ok": True}
-            if channel and not slack_allow(key=f"slack_agent_channel:{channel}", limit=25, per_seconds=60):
-                return {"ok": True}
-            # Ack quickly (reaction); then respond async in thread.
-            if channel and thread_ts:
-                background_tasks.add_task(ack_reaction, channel=channel, timestamp=thread_ts, emoji="eyes")
-            background_tasks.add_task(
-                _slack_operator_mention_task,
-                question=text,
-                channel_id=channel,
-                user_id=user_id,
-                thread_ts=thread_ts,
-                correlation_id=ev_id or thread_ts,
-            )
-
-        log.info("slack_event_received", event_type=ev_type or None)
-        return {"ok": True}
+        res = handle_event_callback(payload=payload if isinstance(payload, dict) else {}, background_tasks=background_tasks)
+        return res.response_json or {"ok": bool(res.ok)}
 
     return {"ok": True}
 
@@ -630,6 +615,63 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
                 ]
             ),
         }
+
+    if sub in ("diag", "diagnostics"):
+        # Lightweight health + permissions probe.
+        token_present = bool(get_bot_token())
+        auth = slack_api_get(method="auth.test", params={}) if token_present else {"ok": False, "error": "missing_token"}
+        user_info = slack_api_get(method="users.info", params={"user": user_id}) if (token_present and user_id) else {"ok": False, "error": "missing_user_id"}
+        # Attempt email presence if users.info worked.
+        email = None
+        try:
+            if bool(user_info.get("ok")):
+                u = user_info.get("user") if isinstance(user_info.get("user"), dict) else {}
+                prof = u.get("profile") if isinstance(u.get("profile"), dict) else {}
+                email = str(prof.get("email") or "").strip().lower() or None
+        except Exception:
+            email = None
+
+        ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
+
+        lines = [
+            "*Polaris Slack diagnostics*",
+            f"- slack_enabled: `{bool(settings.slack_enabled)}`",
+            f"- slack_agent_enabled: `{bool(settings.slack_agent_enabled)}`",
+            f"- slack_agent_actions_enabled: `{bool(settings.slack_agent_actions_enabled)}`",
+            f"- bot_token_present: `{token_present}`",
+            "",
+            "*Slack API*",
+            f"- auth.test: `{bool(auth.get('ok'))}`" + (f" (error `{auth.get('error')}`)" if not auth.get("ok") else ""),
+            f"- users.info: `{bool(user_info.get('ok'))}`" + (f" (error `{user_info.get('error')}`)" if not user_info.get("ok") else ""),
+            f"- email_visible: `{bool(email)}`",
+            "",
+            "*Identity mapping*",
+            f"- slack_user_id: `{user_id}`",
+            f"- display_name: `{ctx.display_name or ''}`",
+            f"- email: `{ctx.email or ''}`",
+            f"- user_sub: `{ctx.user_sub or ''}`",
+            f"- user_profile_resolved: `{bool(ctx.user_profile)}`",
+            "",
+            "*Tips*",
+            "- If `users.info` fails with `missing_scope`, add `users:read` (and `users:read.email` for email mapping), then reinstall.",
+            "- If posting fails with `not_in_channel`, invite the bot to the channel.",
+        ]
+        try:
+            append_event(
+                rfp_id="rfp_slack_agent",
+                type="slack_diagnostics",
+                payload={
+                    "authOk": bool(auth.get("ok")),
+                    "usersInfoOk": bool(user_info.get("ok")),
+                    "emailVisible": bool(email),
+                    "userSubResolved": bool(ctx.user_sub),
+                },
+                inputs_redacted={"channelId": channel_id, "slackUserId": user_id},
+                created_by="slack_commands",
+            )
+        except Exception:
+            pass
+        return {"response_type": "ephemeral", "text": "\n".join([line for line in lines if line is not None])}
 
     if sub in ("link-thread", "linkthread"):
         if not user_id or not channel_id:
@@ -1202,12 +1244,25 @@ async def slack_interactions(request: Request):
     channel_id = str(((payload.get("channel") or {}) if isinstance(payload.get("channel"), dict) else {}).get("id") or "").strip() or None
     response_url = str(payload.get("response_url") or "").strip() or None
 
+    # New dispatcher handles shortcuts + modals. We keep legacy block_actions handling below
+    # until migrated, because it contains action execution + follow-up routing.
+    if ptype in ("message_action", "shortcut", "view_submission", "view_closed"):
+        res = handle_interactivity(payload=payload, background_tasks=None)
+        return res.response_json or {"response_type": "ephemeral", "text": "Got it."}
+
     # Handle Block Kit actions quickly (<3s) then post details via response_url.
     if ptype == "block_actions":
         actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
         act = actions[0] if actions else {}
         action_id = str(act.get("action_id") or "").strip()
         value = str(act.get("value") or "").strip()
+        msg_obj = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        msg_ts = str(msg_obj.get("ts") or "").strip() or None
+        msg_thread_ts = str(msg_obj.get("thread_ts") or "").strip() or None
+        # If the interactive prompt was posted in a thread, use the root thread ts.
+        # If it was posted in-channel, prefer replying in a new thread off that message.
+        default_thread_ts = msg_thread_ts or msg_ts
+        is_prompt_in_channel = bool(msg_ts) and not bool(msg_thread_ts)
 
         if action_id == "polaris_list_rfp_proposals":
             # Ack immediately then post followup.
@@ -1267,30 +1322,56 @@ async def slack_interactions(request: Request):
                 )
                 return {"response_type": "ephemeral", "text": "Action not found."}
 
+            # Prefer the channel/thread captured at proposal time, but fall back to
+            # the interactive payload (so results stay in the originating thread).
+            payload2 = stored.get("payload") if isinstance(stored.get("payload"), dict) else {}
+            ch_post = str(payload2.get("channelId") or "").strip() or channel_id or None
+            th_post = str(payload2.get("threadTs") or "").strip() or default_thread_ts or None
+
             if action_id == "polaris_cancel_action":
                 try:
                     mark_action_done(action_id=aid, status="cancelled", result={"ok": True})
                 except Exception:
                     pass
+                # Replace the interactive prompt (remove buttons) instead of deleting it,
+                # so the outcome stays in-thread and doesn't produce a separate follow-up
+                # message in the parent channel UI.
                 respond_via_response_url(
                     response_url=response_url,
-                    text="Cancelled.",
+                    # Avoid cluttering the main channel if the prompt was posted there.
+                    text="Cancelled. (see thread)" if is_prompt_in_channel else "Cancelled.",
                     response_type="ephemeral",
-                    delete_original=True,
+                    replace_original=True,
                 )
-                return {"response_type": "ephemeral", "text": "Cancelled."}
+                if ch_post and th_post:
+                    chat_post_message_result(text="Cancelled.", channel=ch_post, thread_ts=th_post, unfurl_links=False)
+                return Response(status_code=200)
 
             # Confirm
             kind = str(stored.get("kind") or "").strip()
-            payload2 = stored.get("payload") if isinstance(stored.get("payload"), dict) else {}
             args2 = payload2.get("args") if isinstance(payload2, dict) else {}
             args2 = args2 if isinstance(args2, dict) else {}
             # Inject actor + original requester to prevent action hijacking.
             if user_id:
                 args2["_actorSlackUserId"] = user_id
+                # Best-effort: also inject resolved user_sub to unlock "me" flows.
+                try:
+                    ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
+                    if ctx.user_sub:
+                        args2["_actorUserSub"] = ctx.user_sub
+                except Exception:
+                    pass
             req_by = str(payload2.get("requestedBySlackUserId") or "").strip() if isinstance(payload2, dict) else ""
             if req_by:
                 args2["_requestedBySlackUserId"] = req_by
+                # Mirror for userSub if available
+                try:
+                    # If the proposer stored a userSub, keep it authoritative.
+                    req_sub = str(payload2.get("requestedByUserSub") or "").strip()
+                    if req_sub:
+                        args2["_requestedByUserSub"] = req_sub
+                except Exception:
+                    pass
             # Inject Slack context for downstream tools (useful for follow-up posts).
             if isinstance(payload2, dict):
                 ch2 = str(payload2.get("channelId") or "").strip()
@@ -1302,6 +1383,11 @@ async def slack_interactions(request: Request):
                     args2["threadTs"] = th2
                 if q2 and "question" not in args2:
                     args2["question"] = q2
+            # Fall back to the interactive payload so execution follow-ups land in the thread.
+            if ch_post and "channelId" not in args2:
+                args2["channelId"] = ch_post
+            if th_post and "threadTs" not in args2:
+                args2["threadTs"] = th_post
 
             try:
                 result = execute_action(action_id=aid, kind=kind, args=args2)
@@ -1313,20 +1399,32 @@ async def slack_interactions(request: Request):
             except Exception:
                 pass
 
-            msg = "Done." if result.get("ok") else f"Failed: `{result.get('error')}`"
+            if result.get("ok"):
+                msg = "Done."
+            else:
+                err = _extract_action_error(result)
+                msg = f"Failed: `{err}`"
+
+            summary = "\n".join(
+                [
+                    msg,
+                    f"- action: `{kind}`",
+                    f"- action_id: `{aid}`",
+                ]
+            )
+            prompt_text = (msg + " (see thread)") if is_prompt_in_channel else summary
+
+            # Keep the outcome in the same thread by updating the interactive message,
+            # and (optionally) posting a normal threaded follow-up message for visibility.
             respond_via_response_url(
                 response_url=response_url,
-                text="\n".join(
-                    [
-                        msg,
-                        f"- action: `{kind}`",
-                        f"- action_id: `{aid}`",
-                    ]
-                ),
+                text=prompt_text,
                 response_type="ephemeral",
-                delete_original=True,
+                replace_original=True,
             )
-            return {"response_type": "ephemeral", "text": msg}
+            if ch_post and th_post:
+                chat_post_message_result(text=summary, channel=ch_post, thread_ts=th_post, unfurl_links=False)
+            return Response(status_code=200)
 
     log.info(
         "slack_interaction_received",
@@ -1339,3 +1437,20 @@ async def slack_interactions(request: Request):
         "response_type": "ephemeral",
         "text": "Got it.",
     }
+
+
+@router.post("/slack/workflow-steps")
+async def slack_workflow_steps(request: Request):
+    """
+    Slack Workflow Builder steps endpoint (Steps from Apps).
+    Configure Slack to POST workflow step payloads here.
+    """
+    await _require_slack_request(request)
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    ptype = str((payload or {}).get("type") or "").strip()
+    if ptype == "workflow_step_execute":
+        return handle_workflow_step_execute(payload=payload if isinstance(payload, dict) else {})
+    return {"ok": True}

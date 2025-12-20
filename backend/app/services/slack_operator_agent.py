@@ -381,6 +381,15 @@ def run_slack_operator_for_mention(
     if not q or not ch or not th:
         return SlackOperatorResult(did_post=False, text=None, meta={"error": "missing_params"})
 
+    # Best-effort identity resolution for safer write actions (and future "me" support).
+    try:
+        from .slack_actor_context import resolve_actor_context
+
+        actor_ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
+        actor_user_sub = actor_ctx.user_sub
+    except Exception:
+        actor_user_sub = None
+
     if not settings.openai_api_key:
         raise AiNotConfigured("OPENAI_API_KEY not configured")
 
@@ -429,14 +438,13 @@ def run_slack_operator_for_mention(
         # No RFP scope: delegate to the conversational read-only Slack agent.
         # This keeps @mentions responsive without requiring thread binding.
         try:
-            from .slack_web import chat_post_message_result, get_user_info, slack_user_display_name
-            from .user_profiles_repo import get_user_profile_by_slack_user_id
+            from .slack_web import chat_post_message_result
+            from .slack_actor_context import resolve_actor_context
 
-            slack_user = get_user_info(user_id=user_id or "") if user_id else None
-            display_name = slack_user_display_name(slack_user) if slack_user else None
-            prof = (slack_user.get("profile") if isinstance(slack_user, dict) else {}) or {}
-            email = str(prof.get("email") or "").strip().lower() or None
-            user_profile = get_user_profile_by_slack_user_id(slack_user_id=user_id or "") if user_id else None
+            ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
+            display_name = ctx.display_name
+            email = ctx.email
+            user_profile = ctx.user_profile
 
             ans = _sa.run_slack_agent_question(
                 question=q,
@@ -512,6 +520,50 @@ def run_slack_operator_for_mention(
 
     did_post = False
     steps = 0
+    did_load = False
+    did_patch = False
+    did_journal = False
+
+    def _inject_and_enforce(*, tool_name: str, tool_args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """
+        Enforce the operator run protocol:
+          - First: opportunity_load
+          - Before speaking (slack_post_summary / slack_ask_clarifying_question): write durable artifacts
+
+        Also inject correlationId into relevant tool args for traceability.
+        """
+        nonlocal did_load, did_patch, did_journal
+        name = str(tool_name or "").strip()
+        args2 = tool_args if isinstance(tool_args, dict) else {}
+
+        # Correlation id propagation (best-effort)
+        if corr and isinstance(args2, dict):
+            if name in ("event_append", "opportunity_patch", "slack_post_summary", "slack_ask_clarifying_question"):
+                if "correlationId" not in args2:
+                    args2["correlationId"] = corr
+            if name == "journal_append":
+                meta = args2.get("meta") if isinstance(args2.get("meta"), dict) else {}
+                if "correlationId" not in meta:
+                    meta["correlationId"] = corr
+                args2["meta"] = meta
+
+        # Load-first protocol (do not allow tool usage without state reconstruction).
+        if name not in ("opportunity_load", _sa.ACTION_TOOL_NAME) and not did_load:
+            return args2, {
+                "ok": False,
+                "error": "protocol_missing_opportunity_load",
+                "hint": "Call opportunity_load first to reconstruct context before using other tools.",
+            }
+
+        # Write-it-down protocol: before posting/asking, ensure we wrote durable artifacts.
+        if name in ("slack_post_summary", "slack_ask_clarifying_question") and not (did_patch or did_journal):
+            return args2, {
+                "ok": False,
+                "error": "protocol_missing_state_write",
+                "hint": "Before posting, call opportunity_patch and/or journal_append so the system remembers next invocation.",
+            }
+
+        return args2, None
 
     # Prefer Responses API; fall back to chat tools if needed.
     if not _sa._supports_responses_api(client):
@@ -565,40 +617,40 @@ def run_slack_operator_for_mention(
                 except Exception:
                     args = {}
 
+                args, proto_err = _inject_and_enforce(tool_name=name, tool_args=args if isinstance(args, dict) else {})
+                if proto_err is not None:
+                    messages.append({"role": "tool", "tool_call_id": call_id, "content": _sa._safe_json(proto_err)})
+                    continue
+
                 if name == "slack_post_summary" or name == "slack_ask_clarifying_question":
                     did_post = True
 
                 if name == _sa.ACTION_TOOL_NAME:
-                    # Reuse existing propose_action persistence; terminate.
-                    action = str((args or {}).get("action") or "").strip()
-                    aargs = (args or {}).get("args") if isinstance(args, dict) else {}
-                    summary = str((args or {}).get("summary") or "").strip()
-                    saved = _sa.create_action(
-                        kind=action or "unknown",
-                        payload={
-                            "action": action,
-                            "args": aargs if isinstance(aargs, dict) else {},
-                            "requestedBySlackUserId": user_id,
-                            "channelId": ch,
-                            "threadTs": th,
-                            "question": q,
-                        },
-                        ttl_seconds=900,
+                    # Use shared risk model: auto-execute low-risk, confirm risky.
+                    ans = _sa._handle_proposed_action(
+                        tool_args=args if isinstance(args, dict) else {},
+                        slack_user_id=user_id,
+                        user_sub=actor_user_sub,
+                        channel_id=ch,
+                        thread_ts=th,
+                        question=q,
+                        model=model,
+                        steps=steps,
+                        response_format="chat_tools",
                     )
-                    # Post confirmation prompt in thread.
                     try:
                         post_summary(
                             rfp_id=rfp_id,
                             channel=ch,
                             thread_ts=th,
-                            text=f"{summary}\n\nAction id: `{saved.get('actionId')}`",
-                            blocks=_sa._blocks_for_proposed_action(action_id=str(saved.get("actionId") or ""), summary=summary or action),
+                            text=str(ans.text or "").strip() or "Done.",
+                            blocks=ans.blocks,
                             correlation_id=corr,
                         )
                         did_post = True
                     except Exception:
                         pass
-                    return SlackOperatorResult(did_post=did_post, text=None, meta={"steps": steps, "proposedAction": saved})
+                    return SlackOperatorResult(did_post=did_post, text=None, meta={"steps": steps, "meta": ans.meta})
 
                 tool = OPERATOR_TOOLS.get(name)
                 if not tool:
@@ -610,6 +662,15 @@ def run_slack_operator_for_mention(
                     result = func(args if isinstance(args, dict) else {})
                 except Exception as e:
                     result = {"ok": False, "error": str(e) or "tool_failed"}
+
+                # Update protocol flags on success.
+                if bool(result.get("ok")):
+                    if name == "opportunity_load":
+                        did_load = True
+                    elif name == "opportunity_patch":
+                        did_patch = True
+                    elif name == "journal_append":
+                        did_journal = True
                 dur_ms = int((time.time() - started) * 1000)
                 try:
                     append_event(
@@ -617,6 +678,12 @@ def run_slack_operator_for_mention(
                         type="tool_call",
                         tool=name,
                         payload={"ok": bool(result.get("ok")), "durationMs": dur_ms},
+                        inputs_redacted={
+                            "argsKeys": [str(k) for k in list((args or {}).keys())[:60]] if isinstance(args, dict) else [],
+                        },
+                        outputs_redacted={
+                            "resultPreview": {k: result.get(k) for k in list(result.keys())[:30]} if isinstance(result, dict) else {},
+                        },
                         correlation_id=corr,
                     )
                 except Exception:
@@ -671,38 +738,39 @@ def run_slack_operator_for_mention(
             except Exception:
                 args = {}
 
+            args, proto_err = _inject_and_enforce(tool_name=name, tool_args=args if isinstance(args, dict) else {})
+            if proto_err is not None:
+                outputs.append(_sa._tool_output_item(call_id, _sa._safe_json(proto_err)))
+                continue
+
             if name in ("slack_post_summary", "slack_ask_clarifying_question"):
                 did_post = True
 
             if name == _sa.ACTION_TOOL_NAME:
-                action = str((args or {}).get("action") or "").strip()
-                aargs = (args or {}).get("args") if isinstance(args, dict) else {}
-                summary = str((args or {}).get("summary") or "").strip()
-                saved = _sa.create_action(
-                    kind=action or "unknown",
-                    payload={
-                        "action": action,
-                        "args": aargs if isinstance(aargs, dict) else {},
-                        "requestedBySlackUserId": user_id,
-                        "channelId": ch,
-                        "threadTs": th,
-                        "question": q,
-                    },
-                    ttl_seconds=900,
+                ans = _sa._handle_proposed_action(
+                    tool_args=args if isinstance(args, dict) else {},
+                    slack_user_id=user_id,
+                    user_sub=actor_user_sub,
+                    channel_id=ch,
+                    thread_ts=th,
+                    question=q,
+                    model=model,
+                    steps=steps,
+                    response_format="responses_tools",
                 )
                 try:
                     post_summary(
                         rfp_id=rfp_id,
                         channel=ch,
                         thread_ts=th,
-                        text=f"{summary}\n\nAction id: `{saved.get('actionId')}`",
-                        blocks=_sa._blocks_for_proposed_action(action_id=str(saved.get("actionId") or ""), summary=summary or action),
+                        text=str(ans.text or "").strip() or "Done.",
+                        blocks=ans.blocks,
                         correlation_id=corr,
                     )
                     did_post = True
                 except Exception:
                     pass
-                return SlackOperatorResult(did_post=did_post, text=None, meta={"steps": steps, "response_format": "responses_tools", "proposedAction": saved})
+                return SlackOperatorResult(did_post=did_post, text=None, meta={"steps": steps, "response_format": "responses_tools", "meta": ans.meta})
 
             tool = OPERATOR_TOOLS.get(name)
             if not tool:
@@ -714,6 +782,15 @@ def run_slack_operator_for_mention(
                 result = func(args if isinstance(args, dict) else {})
             except Exception as e:
                 result = {"ok": False, "error": str(e) or "tool_failed"}
+
+            # Update protocol flags on success.
+            if bool(result.get("ok")):
+                if name == "opportunity_load":
+                    did_load = True
+                elif name == "opportunity_patch":
+                    did_patch = True
+                elif name == "journal_append":
+                    did_journal = True
             dur_ms = int((time.time() - started) * 1000)
             try:
                 append_event(
@@ -721,6 +798,12 @@ def run_slack_operator_for_mention(
                     type="tool_call",
                     tool=name,
                     payload={"ok": bool(result.get("ok")), "durationMs": dur_ms},
+                    inputs_redacted={
+                        "argsKeys": [str(k) for k in list((args or {}).keys())[:60]] if isinstance(args, dict) else [],
+                    },
+                    outputs_redacted={
+                        "resultPreview": {k: result.get(k) for k in list(result.keys())[:30]} if isinstance(result, dict) else {},
+                    },
                     correlation_id=corr,
                 )
             except Exception:

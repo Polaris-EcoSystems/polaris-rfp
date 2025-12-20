@@ -11,8 +11,11 @@ from ..ai.context import clip_text, normalize_ws
 from ..ai.tuning import tuning_for
 from ..observability.logging import get_logger
 from ..settings import settings
+from .agent_events_repo import append_event
 from .agent_tools.read_registry import READ_TOOLS as READ_TOOLS_REGISTRY
-from .slack_actions_repo import create_action
+from .slack_actions_repo import create_action, get_action, mark_action_done
+from .slack_action_executor import execute_action
+from .slack_action_risk import classify_action_risk
 
 log = get_logger("slack_agent")
 
@@ -245,6 +248,7 @@ def _propose_action_tool_def() -> dict[str, Any]:
                         "assign_task",
                         "complete_task",
                         "update_user_profile",
+                        "update_rfp_review",
                         # Self-modifying pipeline (approval-gated)
                         "self_modify_open_pr",
                         "self_modify_check_pr",
@@ -259,10 +263,16 @@ def _propose_action_tool_def() -> dict[str, Any]:
                         "sqs_redrive_dlq",
                         "github_create_issue",
                         "github_comment",
+                        "github_add_labels",
+                        "github_rerun_workflow_run",
+                        "github_dispatch_workflow",
                     ],
                 },
                 "args": {"type": "object"},
                 "summary": {"type": "string", "maxLength": 400},
+                "risk": {"type": "string", "enum": ["low", "medium", "high", "destructive"]},
+                "requiresConfirmation": {"type": "boolean"},
+                "idempotencyKey": {"type": "string", "maxLength": 120},
             },
             "required": ["action", "args", "summary"],
             "additionalProperties": False,
@@ -296,6 +306,131 @@ def _blocks_for_proposed_action(*, action_id: str, summary: str) -> list[dict[st
     ]
 
 
+def _handle_proposed_action(
+    *,
+    tool_args: dict[str, Any],
+    slack_user_id: str | None,
+    user_sub: str | None,
+    channel_id: str | None,
+    thread_ts: str | None,
+    question: str,
+    model: str,
+    steps: int,
+    response_format: str,
+) -> SlackAgentAnswer:
+    action = str((tool_args or {}).get("action") or "").strip()
+    aargs = (tool_args or {}).get("args") if isinstance(tool_args, dict) else {}
+    aargs = aargs if isinstance(aargs, dict) else {}
+    summary = str((tool_args or {}).get("summary") or "").strip()
+    risk = str((tool_args or {}).get("risk") or "").strip().lower() or None
+    req_conf = (tool_args or {}).get("requiresConfirmation")
+    idem = str((tool_args or {}).get("idempotencyKey") or "").strip() or None
+
+    decision = classify_action_risk(action=action, args=aargs)
+    if risk not in ("low", "medium", "high", "destructive"):
+        risk = decision.risk
+    if not isinstance(req_conf, bool):
+        req_conf = bool(decision.requires_confirmation)
+
+    # Best-effort idempotency for Slack retries: keep a short-lived in-process cache.
+    cache_key = f"{str(slack_user_id or '').strip()}::{idem}" if idem else None
+    saved: dict[str, Any] | None = None
+    if cache_key:
+        try:
+            _ts, _aid = _IDEMPOTENCY_CACHE.get(cache_key, (0.0, None))
+            if _aid and (time.time() - float(_ts)) < 10 * 60:
+                existing = get_action(str(_aid))
+                if isinstance(existing, dict) and str(existing.get("status") or "") == "proposed":
+                    saved = existing
+        except Exception:
+            saved = None
+
+    if not saved:
+        saved = create_action(
+            kind=action or "unknown",
+            payload={
+                "action": action,
+                "args": aargs,
+                "summary": summary,
+                "risk": risk,
+                "requiresConfirmation": bool(req_conf),
+                "idempotencyKey": idem,
+                "requestedBySlackUserId": slack_user_id,
+                "channelId": channel_id,
+                "threadTs": thread_ts,
+                "question": question,
+            },
+            ttl_seconds=900,
+        )
+        if cache_key:
+            try:
+                _IDEMPOTENCY_CACHE[cache_key] = (time.time(), str(saved.get("actionId") or "").strip() or None)
+            except Exception:
+                pass
+    aid = str(saved.get("actionId") or "").strip()
+
+    # Confirm path (default for anything non-low-risk)
+    if bool(req_conf):
+        blocks = _blocks_for_proposed_action(action_id=aid, summary=summary or action)
+        return SlackAgentAnswer(
+            text=f"{summary}\n\nAction id: `{aid}`",
+            blocks=blocks,
+            meta={"model": model, "steps": steps, "response_format": response_format, "proposedAction": saved},
+        )
+
+    # Auto-execute low-risk actions immediately.
+    exec_args = dict(aargs)
+    if slack_user_id:
+        exec_args.setdefault("_actorSlackUserId", slack_user_id)
+        exec_args.setdefault("_requestedBySlackUserId", slack_user_id)
+    if user_sub:
+        exec_args.setdefault("_actorUserSub", user_sub)
+        exec_args.setdefault("_requestedByUserSub", user_sub)
+    if channel_id:
+        exec_args.setdefault("channelId", channel_id)
+    if thread_ts:
+        exec_args.setdefault("threadTs", thread_ts)
+    if question:
+        exec_args.setdefault("question", question)
+    try:
+        result = execute_action(action_id=aid, kind=action, args=exec_args)
+    except Exception as e:
+        result = {"ok": False, "error": str(e) or "execution_failed"}
+
+    try:
+        mark_action_done(action_id=aid, status="done" if result.get("ok") else "failed", result=result)
+    except Exception:
+        pass
+
+    # Best-effort audit (non-RFP-scoped, so we use a stable pseudo RFP id)
+    try:
+        append_event(
+            rfp_id="rfp_slack_agent",
+            type="action_auto_execute",
+            tool=action,
+            payload={"ok": bool(result.get("ok")), "risk": risk},
+            inputs_redacted={"argsKeys": [str(k) for k in list(exec_args.keys())[:60]]},
+            outputs_redacted={"resultPreview": {k: result.get(k) for k in list(result.keys())[:30]} if isinstance(result, dict) else {}},
+            created_by="slack_agent",
+        )
+    except Exception:
+        pass
+
+    if result.get("ok"):
+        msg = "Done."
+    else:
+        msg = f"Failed: `{result.get('error')}`"
+    return SlackAgentAnswer(
+        text="\n".join([summary or action or "Action", msg, f"Action id: `{aid}`"]).strip(),
+        blocks=None,
+        meta={"model": model, "steps": steps, "response_format": response_format, "autoExecuted": True, "result": result},
+    )
+
+
+# (ts, actionId)
+_IDEMPOTENCY_CACHE: dict[str, tuple[float, str | None]] = {}
+
+
 def run_slack_agent_question(
     *,
     question: str,
@@ -324,8 +459,8 @@ def run_slack_agent_question(
         name = preferred or full or str(user_display_name or "").strip()
         if name:
             src = "profile" if (preferred or full) else "Slack"
-            return SlackAgentAnswer(text=f"- Your name is *{name}* (from {src}).")
-        return SlackAgentAnswer(text="- I don’t know your name yet. Set it in your profile and I’ll remember it.")
+            return SlackAgentAnswer(text=f"Your name is *{name}* (from {src}).")
+        return SlackAgentAnswer(text="I don’t know your name yet. Set it in your profile and I’ll remember it.")
 
     if not settings.openai_api_key:
         raise AiNotConfigured("OPENAI_API_KEY not configured")
@@ -347,6 +482,9 @@ def run_slack_agent_question(
     prefs = prof.get("aiPreferences") if isinstance(prof.get("aiPreferences"), dict) else {}
     mem = str(prof.get("aiMemorySummary") or "").strip()
     user_ctx_lines: list[str] = []
+    user_sub = str(prof.get("_id") or prof.get("userSub") or "").strip()
+    if user_sub:
+        user_ctx_lines.append(f"- user_sub: {user_sub}")
     if effective_name:
         user_ctx_lines.append(f"- name: {effective_name}")
     if user_email:
@@ -377,13 +515,13 @@ def run_slack_agent_question(
             user_ctx or "- (none provided)",
             "",
             "Output rules:",
-            "- Be concise: 3–7 bullets maximum.",
+            "- Be concise. Prefer 1–2 short paragraphs, OR a short list when listing items.",
             "- Include deep links when referencing an item (use tool-provided `url` fields).",
             "- If you are uncertain, call a tool or ask a single clarifying question.",
             "- Do NOT invent IDs, dates, or numbers. Use tool results only.",
             "",
             "Slack formatting:",
-            "- Use mrkdwn bullets (`- ...`).",
+            "- Use bullets only when presenting a list (do not force bullets for single sentences).",
             "- Put IDs in backticks.",
         ]
     )
@@ -457,27 +595,16 @@ def run_slack_agent_question(
                     args = {}
 
                 if name == ACTION_TOOL_NAME:
-                    action = str((args or {}).get("action") or "").strip()
-                    aargs = (args or {}).get("args") if isinstance(args, dict) else {}
-                    summary = str((args or {}).get("summary") or "").strip()
-                    saved = create_action(
-                        kind=action or "unknown",
-                        payload={
-                            "action": action,
-                            "args": aargs if isinstance(aargs, dict) else {},
-                            "requestedBySlackUserId": user_id,
-                            "channelId": channel_id,
-                            "threadTs": thread_ts,
-                            "question": q,
-                        },
-                        ttl_seconds=600,
-                    )
-                    aid = str(saved.get("actionId") or "").strip()
-                    blocks = _blocks_for_proposed_action(action_id=aid, summary=summary or action)
-                    return SlackAgentAnswer(
-                        text=f"{summary}\n\nAction id: `{aid}`",
-                        blocks=blocks,
-                        meta={"model": model, "steps": steps, "response_format": "chat_tools", "proposedAction": saved},
+                    return _handle_proposed_action(
+                        tool_args=args if isinstance(args, dict) else {},
+                        slack_user_id=user_id,
+                        user_sub=user_sub or None,
+                        channel_id=channel_id,
+                        thread_ts=thread_ts,
+                        question=q,
+                        model=model,
+                        steps=steps,
+                        response_format="chat_tools",
                     )
 
                 tool = READ_TOOLS.get(name)
@@ -491,6 +618,25 @@ def run_slack_agent_question(
                     result = func(args if isinstance(args, dict) else {})
                 except Exception as e:
                     result = {"ok": False, "error": str(e) or "tool_failed"}
+                try:
+                    append_event(
+                        rfp_id="rfp_slack_agent",
+                        type="tool_call",
+                        tool=name,
+                        payload={"ok": bool(result.get("ok"))},
+                        inputs_redacted={
+                            "argsKeys": [str(k) for k in list((args or {}).keys())[:60]] if isinstance(args, dict) else [],
+                            "channelId": channel_id,
+                            "threadTs": thread_ts,
+                        },
+                        outputs_redacted={
+                            "resultPreview": {k: result.get(k) for k in list(result.keys())[:30]} if isinstance(result, dict) else {}
+                        },
+                        created_by="slack_agent",
+                        correlation_id=None,
+                    )
+                except Exception:
+                    pass
                 messages.append(
                     {"role": "tool", "tool_call_id": call_id, "content": _safe_json(result)}
                 )
@@ -545,27 +691,16 @@ def run_slack_agent_question(
 
             # Terminal: model proposed an action.
             if name == ACTION_TOOL_NAME:
-                action = str((args or {}).get("action") or "").strip()
-                aargs = (args or {}).get("args") if isinstance(args, dict) else {}
-                summary = str((args or {}).get("summary") or "").strip()
-                saved = create_action(
-                    kind=action or "unknown",
-                    payload={
-                        "action": action,
-                        "args": aargs if isinstance(aargs, dict) else {},
-                        "requestedBySlackUserId": user_id,
-                        "channelId": channel_id,
-                        "threadTs": thread_ts,
-                        "question": q,
-                    },
-                    ttl_seconds=600,
-                )
-                aid = str(saved.get("actionId") or "").strip()
-                blocks = _blocks_for_proposed_action(action_id=aid, summary=summary or action)
-                return SlackAgentAnswer(
-                    text=f"{summary}\n\nAction id: `{aid}`",
-                    blocks=blocks,
-                    meta={"model": model, "steps": steps, "response_id": prev_id, "proposedAction": saved},
+                return _handle_proposed_action(
+                    tool_args=args if isinstance(args, dict) else {},
+                    slack_user_id=user_id,
+                    user_sub=user_sub or None,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    question=q,
+                    model=model,
+                    steps=steps,
+                    response_format="responses_tools",
                 )
 
             tool = READ_TOOLS.get(name)
@@ -581,6 +716,25 @@ def run_slack_agent_question(
             dur_ms = int((time.time() - started) * 1000)
             try:
                 log.info("slack_agent_tool", tool=name, ok=bool(result.get("ok")), duration_ms=dur_ms)
+            except Exception:
+                pass
+            try:
+                append_event(
+                    rfp_id="rfp_slack_agent",
+                    type="tool_call",
+                    tool=name,
+                    payload={"ok": bool(result.get("ok")), "durationMs": dur_ms},
+                    inputs_redacted={
+                        "argsKeys": [str(k) for k in list((args or {}).keys())[:60]] if isinstance(args, dict) else [],
+                        "channelId": channel_id,
+                        "threadTs": thread_ts,
+                    },
+                    outputs_redacted={
+                        "resultPreview": {k: result.get(k) for k in list(result.keys())[:30]} if isinstance(result, dict) else {}
+                    },
+                    created_by="slack_agent",
+                    correlation_id=None,
+                )
             except Exception:
                 pass
             outputs.append(_tool_output_item(call_id, _safe_json(result)))

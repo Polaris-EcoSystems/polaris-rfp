@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  productionBrowserSourceMaps: true,
   // Produce a self-contained server bundle for Amplify Hosting (WEB_COMPUTE).
   output: 'standalone',
   turbopack: {

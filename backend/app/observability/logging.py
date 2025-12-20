@@ -5,14 +5,14 @@ import logging
 import sys
 from typing import Any
 
+from .context import get_request_id
+
 structlog: Any
 try:
     import structlog as _structlog
     structlog = _structlog
 except Exception:  # pragma: no cover
     structlog = None
-
-from .context import get_request_id
 
 
 def _add_request_id(_: logging.Logger, __: str, event_dict: dict) -> dict:
