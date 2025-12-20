@@ -11,6 +11,7 @@ from .middleware.auth import AuthMiddleware
 from .middleware.cors import build_allowed_origin_regex, build_allowed_origins
 from .middleware.request_context import RequestContextMiddleware
 from .observability.logging import configure_logging, get_logger
+from .observability.otel import configure_otel, instrument_app
 from .problem_details import problem_response
 from .db.dynamodb.errors import (
     DdbConflict,
@@ -28,10 +29,13 @@ from .routers.attachments import router as attachments_router
 from .routers.proposals import router as proposals_router
 from .routers.templates import router as templates_router
 from .routers.ai import router as ai_router
+from .routers.ai_jobs import router as ai_jobs_router
 from .routers.integrations_canva import router as canva_router
 from .routers.integrations_slack import router as slack_router
 from .routers.profile import router as profile_router
 from .routers.finder import router as finder_router
+from .routers.tasks import router as tasks_router
+from .routers.user_profile import router as user_profile_router
 from .settings import settings
 
 
@@ -39,6 +43,9 @@ def create_app() -> FastAPI:
     # Logging must be configured before the app starts handling requests.
     configure_logging(level="INFO")
     log = get_logger("startup")
+
+    # Optional tracing (no-op unless OTEL_ENABLED=true)
+    configure_otel(settings)
 
     app = FastAPI(
         title="Polaris RFP Backend",
@@ -91,10 +98,16 @@ def create_app() -> FastAPI:
     app.include_router(templates_router, prefix="/api/templates")
     app.include_router(content_router, prefix="/api/content")
     app.include_router(ai_router, prefix="/api/ai")
+    app.include_router(ai_jobs_router, prefix="/api/ai")
     app.include_router(canva_router, prefix="/api/integrations/canva")
     app.include_router(slack_router, prefix="/api/integrations")
     app.include_router(profile_router, prefix="/api/profile")
+    app.include_router(user_profile_router, prefix="/api")
     app.include_router(finder_router, prefix="/api/finder")
+    app.include_router(tasks_router, prefix="/api")
+
+    # Instrument after routers/middleware are attached.
+    instrument_app(app)
 
     return app
 

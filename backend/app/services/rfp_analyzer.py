@@ -11,6 +11,7 @@ import httpx
 from pypdf import PdfReader
 
 from ..ai.client import AiError, AiNotConfigured, call_json
+from ..ai.context import clip_text
 from ..ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI, RfpAnalysisAI
 from ..observability.logging import get_logger
 from ..settings import settings
@@ -245,11 +246,12 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
     # - schema adherence
     # - latency (parallel calls)
     # - resilience (a single field-group failure doesn't nuke everything)
-    text_clip = raw_text[:200000]
+    text_clip = clip_text(raw_text, max_chars=200000)
 
     def _prompt_meta() -> str:
         return (
             "Extract basic RFP metadata from the text.\n"
+            "Take time to reason step-by-step and cross-check the text, then output ONLY the JSON.\n"
             "Return JSON ONLY (no markdown):\n"
             "{"
             '"title": string, '
@@ -267,6 +269,7 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
         return (
             "Extract the key RFP dates.\n"
             "Use 'Not available' if unknown. Prefer MM/DD/YYYY when possible.\n"
+            "Take time to reason step-by-step and cross-check the text, then output ONLY the JSON.\n"
             "Return JSON ONLY:\n"
             "{"
             '"submissionDeadline": string, '
@@ -281,6 +284,7 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
     def _prompt_lists() -> str:
         return (
             "Extract lists from the RFP.\n"
+            "Take time to reason step-by-step and cross-check the text, then output ONLY the JSON.\n"
             "Return JSON ONLY:\n"
             "{"
             '"keyRequirements": string[], '

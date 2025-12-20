@@ -1,5 +1,9 @@
 import { getBackendBaseUrl } from '@/lib/server/backend'
-import { sessionCookieName } from '@/lib/session'
+import {
+  applyRequestIdHeader,
+  getOrCreateRequestId,
+} from '@/lib/server/requestId'
+import { sessionCookieName, sessionIdCookieName } from '@/lib/session'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
 
@@ -8,6 +12,42 @@ export const dynamic = 'force-dynamic'
 
 function isProd(): boolean {
   return process.env.NODE_ENV === 'production'
+}
+
+function maxAgeFromExpiresAt(expiresAt: number | null): number | null {
+  if (!expiresAt) return null
+  const now = Math.floor(Date.now() / 1000)
+  if (expiresAt <= now) return 0
+  return Math.max(60, Math.min(60 * 60 * 24 * 30, expiresAt - now))
+}
+
+async function tryRefreshWithSid(sid: string): Promise<{
+  ok: boolean
+  token?: string
+  maxAge?: number
+  status?: number
+}> {
+  const upstream = await fetch(
+    `${getBackendBaseUrl()}/api/auth/session/refresh`,
+    {
+      method: 'POST',
+      headers: { 'x-session-id': sid, accept: 'application/json' },
+      cache: 'no-store',
+    },
+  )
+  const data = await upstream.json().catch(() => ({}))
+  if (!upstream.ok || !data?.access_token)
+    return { ok: false, status: upstream.status }
+  const expiresAtRaw = data?.session_expires_at
+  const expiresAt =
+    typeof expiresAtRaw === 'number' ? Math.floor(expiresAtRaw) : null
+  const maxAge = maxAgeFromExpiresAt(expiresAt) ?? 60 * 60 * 8
+  return {
+    ok: true,
+    token: String(data.access_token),
+    maxAge,
+    status: upstream.status,
+  }
 }
 
 function buildUpstreamUrl(req: Request): string {
@@ -137,22 +177,52 @@ async function handler(
   req: Request,
   ctx: { params: Promise<{ path?: string[] }> },
 ) {
+  const requestId = getOrCreateRequestId(req)
   const { path } = await ctx.params
   const parts = Array.isArray(path) ? path : []
 
   if (!isAllowedProxyPath(parts)) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json(
+      { error: 'Not found', requestId },
+      { status: 404, headers: { 'x-request-id': requestId } },
+    )
   }
 
   if (!sameOriginGuard(req)) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    return NextResponse.json(
+      { error: 'Forbidden', requestId },
+      { status: 403, headers: { 'x-request-id': requestId } },
+    )
   }
 
   const cookieName = sessionCookieName()
   const cookieStore = await cookies()
-  const token = cookieStore.get(cookieName)?.value || ''
+  let token = cookieStore.get(cookieName)?.value || ''
+  const sid = cookieStore.get(sessionIdCookieName())?.value || ''
+  let rotatedMaxAge: number | null = null
+
+  // If the access token cookie is missing but we still have a refreshable session,
+  // refresh before proxying to the backend.
+  if (!token && sid) {
+    const r = await tryRefreshWithSid(sid)
+    if (r.ok && r.token) {
+      token = r.token
+      rotatedMaxAge = typeof r.maxAge === 'number' ? r.maxAge : null
+    } else if (r.status === 503) {
+      const res = NextResponse.json(
+        { error: 'Auth refresh temporarily unavailable', requestId },
+        { status: 503, headers: { 'x-request-id': requestId } },
+      )
+      res.headers.set('x-polaris-auth-refresh', 'unavailable')
+      return res
+    }
+  }
+
   if (!token) {
-    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+    return NextResponse.json(
+      { error: 'Not authenticated', requestId },
+      { status: 401, headers: { 'x-request-id': requestId } },
+    )
   }
 
   const upstreamUrl = buildUpstreamUrl(req)
@@ -163,10 +233,10 @@ async function handler(
     method === 'PATCH' ||
     method === 'DELETE'
 
-  const headers = stripHopByHopHeaders(req.headers)
-  headers.set('authorization', `Bearer ${token}`)
-  headers.set('x-forwarded-host', req.headers.get('host') || '')
-  headers.set(
+  const baseHeaders = stripHopByHopHeaders(req.headers)
+  applyRequestIdHeader(baseHeaders, requestId)
+  baseHeaders.set('x-forwarded-host', req.headers.get('host') || '')
+  baseHeaders.set(
     'x-forwarded-proto',
     req.headers.get('x-forwarded-proto') || 'https',
   )
@@ -174,19 +244,45 @@ async function handler(
   const body =
     method === 'GET' || method === 'HEAD' ? undefined : await req.arrayBuffer()
 
-  const ctrl = new AbortController()
-  const timeoutMs = 300_000
-  const t = setTimeout(() => ctrl.abort(), timeoutMs)
+  const fetchUpstream = async (tok: string) => {
+    const ctrl = new AbortController()
+    const timeoutMs = 300_000
+    const t = setTimeout(() => ctrl.abort(), timeoutMs)
+    const h = new Headers(baseHeaders)
+    h.set('authorization', `Bearer ${tok}`)
+    try {
+      return await fetch(upstreamUrl, {
+        method,
+        headers: h,
+        body,
+        redirect: 'manual',
+        cache: 'no-store',
+        signal: ctrl.signal,
+      })
+    } finally {
+      clearTimeout(t)
+    }
+  }
 
-  const upstream = await fetch(upstreamUrl, {
-    method,
-    headers,
-    body,
-    redirect: 'manual',
-    cache: 'no-store',
-    signal: ctrl.signal,
-  })
-  clearTimeout(t)
+  let upstream = await fetchUpstream(token)
+
+  // If backend says unauthorized, attempt a one-time refresh and retry.
+  if (upstream.status === 401 && sid) {
+    const r = await tryRefreshWithSid(sid)
+    if (r.ok && r.token) {
+      token = r.token
+      rotatedMaxAge = typeof r.maxAge === 'number' ? r.maxAge : rotatedMaxAge
+      upstream = await fetchUpstream(token)
+    } else if (r.status === 503) {
+      // Preserve cookies/session; indicate retryable failure.
+      const res = NextResponse.json(
+        { error: 'Auth refresh temporarily unavailable', requestId },
+        { status: 503, headers: { 'x-request-id': requestId } },
+      )
+      res.headers.set('x-polaris-auth-refresh', 'unavailable')
+      return res
+    }
+  }
 
   const resHeaders = new Headers()
   upstream.headers.forEach((value, key) => {
@@ -210,8 +306,9 @@ async function handler(
         error: 'Upstream redirect blocked',
         status: upstream.status,
         location: location || null,
+        requestId,
       },
-      { status: 502 },
+      { status: 502, headers: { 'x-request-id': requestId } },
     )
   }
 
@@ -229,9 +326,42 @@ async function handler(
     headers: resHeaders,
   })
 
-  // If backend says unauthorized, clear the browser cookie to prevent loops.
+  // Always provide an incident correlation id to the client.
+  // Prefer the backend's id if present; otherwise use the local id.
+  const upstreamRid =
+    upstream.headers.get('x-request-id') || upstream.headers.get('X-Request-Id')
+  res.headers.set('x-request-id', upstreamRid || requestId)
+
+  // If we refreshed, rotate cookies so subsequent requests don't re-401.
+  if (rotatedMaxAge && token) {
+    res.cookies.set(cookieName, token, {
+      httpOnly: true,
+      secure: isProd(),
+      sameSite: 'lax',
+      path: '/',
+      maxAge: rotatedMaxAge,
+    })
+    if (sid) {
+      res.cookies.set(sessionIdCookieName(), sid, {
+        httpOnly: true,
+        secure: isProd(),
+        sameSite: 'lax',
+        path: '/',
+        maxAge: rotatedMaxAge,
+      })
+    }
+  }
+
+  // If backend still says unauthorized, clear cookies to prevent loops.
   if (upstream.status === 401) {
     res.cookies.set(cookieName, '', {
+      httpOnly: true,
+      secure: isProd(),
+      sameSite: 'lax',
+      path: '/',
+      maxAge: 0,
+    })
+    res.cookies.set(sessionIdCookieName(), '', {
       httpOnly: true,
       secure: isProd(),
       sameSite: 'lax',

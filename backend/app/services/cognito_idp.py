@@ -117,6 +117,22 @@ def respond_to_custom_challenge(
     )
 
 
+def refresh_tokens(*, refresh_token: str) -> dict[str, Any]:
+    """
+    Refresh tokens using the app client's refresh token flow.
+    Returns the raw Cognito response containing AuthenticationResult.
+    """
+    rt = str(refresh_token or "").strip()
+    if not rt:
+        raise ValueError("refresh_token is required")
+    return client().admin_initiate_auth(
+        UserPoolId=settings.cognito_user_pool_id,
+        ClientId=settings.cognito_client_id,
+        AuthFlow="REFRESH_TOKEN_AUTH",
+        AuthParameters={"REFRESH_TOKEN": rt},
+    )
+
+
 def describe_user_pool(*, user_pool_id: str) -> dict[str, Any]:
     """
     Returns the user pool metadata including the attribute schema.

@@ -8,6 +8,7 @@ import { PipelineBreadcrumbs } from '@/components/ui/PipelineBreadcrumbs'
 import api, {
   Proposal,
   aiApi,
+  aiJobsApi,
   canvaApi,
   cleanPathToken,
   contentApi,
@@ -618,16 +619,54 @@ export default function ProposalDetailPage() {
 
     setGenerating(true)
     try {
-      const response = await proposalApi.generateSections(proposal._id)
-      setProposal(response.data.proposal)
+      // Prefer async job-based generation to avoid browser/proxy timeouts.
+      const start = await proposalApi.generateSectionsAsync(proposal._id)
+      const jobId = String(start.data?.job?.jobId || '')
+
+      if (!jobId) {
+        // Fallback to legacy synchronous generation
+        const response = await proposalApi.generateSections(proposal._id)
+        setProposal(response.data.proposal)
+        openInfo(
+          'AI sections',
+          'AI sections generated successfully!',
+          'success',
+        )
+        return
+      }
+
+      const maxMs = 8 * 60 * 1000
+      const startAt = Date.now()
+      let delayMs = 1200
+
+      while (true) {
+        if (Date.now() - startAt > maxMs) {
+          throw new Error('AI generation timed out')
+        }
+        await new Promise((r) => setTimeout(r, delayMs))
+        delayMs = Math.min(4000, Math.round(delayMs * 1.35))
+
+        const jobResp = await aiJobsApi.get(jobId)
+        const job = jobResp.data?.job
+        const status = String(job?.status || '')
+
+        if (status === 'completed') break
+        if (status === 'failed') {
+          throw new Error(String(job?.error || 'AI generation failed'))
+        }
+      }
+
+      const refreshed = await proposalApi.get(proposal._id)
+      setProposal(refreshed.data)
       openInfo('AI sections', 'AI sections generated successfully!', 'success')
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error generating AI sections:', error)
-      openInfo(
-        'AI generation failed',
-        'Failed to generate AI sections. Please try again.',
-        'error',
-      )
+      const message =
+        error?.response?.data?.error ||
+        error?.response?.data?.message ||
+        error?.message ||
+        'Failed to generate AI sections. Please try again.'
+      openInfo('AI generation failed', message, 'error')
     } finally {
       setGenerating(false)
     }

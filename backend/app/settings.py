@@ -51,13 +51,41 @@ class Settings(BaseSettings):
     # Optional: force OpenAI project/org for requests (prevents “wrong project” surprises).
     openai_project_id: str | None = Field(default=None, validation_alias="OPENAI_PROJECT_ID")
     openai_organization_id: str | None = Field(default=None, validation_alias="OPENAI_ORG_ID")
-    openai_model: str = Field(default="gpt-4o-mini", validation_alias="OPENAI_MODEL")
+    # GPT-5.2 is our default for backend AI workloads.
+    openai_model: str = Field(default="gpt-5.2", validation_alias="OPENAI_MODEL")
     openai_model_rfp_analysis: str | None = Field(default=None, validation_alias="OPENAI_MODEL_RFP_ANALYSIS")
     openai_model_section_titles: str | None = Field(default=None, validation_alias="OPENAI_MODEL_SECTION_TITLES")
     openai_model_text_edit: str | None = Field(default=None, validation_alias="OPENAI_MODEL_TEXT_EDIT")
     openai_model_generate_content: str | None = Field(default=None, validation_alias="OPENAI_MODEL_GENERATE_CONTENT")
     openai_model_proposal_sections: str | None = Field(default=None, validation_alias="OPENAI_MODEL_PROPOSAL_SECTIONS")
     openai_model_buyer_enrichment: str | None = Field(default=None, validation_alias="OPENAI_MODEL_BUYER_ENRICHMENT")
+    openai_model_slack_agent: str | None = Field(default=None, validation_alias="OPENAI_MODEL_SLACK_AGENT")
+    openai_model_rfp_section_summary: str | None = Field(
+        default=None, validation_alias="OPENAI_MODEL_RFP_SECTION_SUMMARY"
+    )
+    # Guardrail: clamp max output tokens (prevents accidental cost explosions).
+    openai_max_output_tokens_cap: int = Field(
+        default=4000, validation_alias="OPENAI_MAX_OUTPUT_TOKENS_CAP"
+    )
+
+    # GPT-5 family tuning knobs (Responses API).
+    # - reasoning effort controls how much the model "thinks" before answering
+    # - verbosity controls output length for text responses
+    #
+    # Defaults are chosen to optimize *data extraction quality* while keeping latency/cost reasonable:
+    # - JSON extraction: low reasoning + low verbosity
+    # - freeform writing: none reasoning (so temperature is supported) + medium verbosity
+    openai_reasoning_effort: str = Field(default="none", validation_alias="OPENAI_REASONING_EFFORT")
+    openai_reasoning_effort_json: str = Field(
+        default="low", validation_alias="OPENAI_REASONING_EFFORT_JSON"
+    )
+    openai_reasoning_effort_text: str = Field(
+        default="none", validation_alias="OPENAI_REASONING_EFFORT_TEXT"
+    )
+    openai_text_verbosity: str = Field(default="medium", validation_alias="OPENAI_TEXT_VERBOSITY")
+    openai_text_verbosity_json: str = Field(
+        default="low", validation_alias="OPENAI_TEXT_VERBOSITY_JSON"
+    )
 
     # Slack (optional; enables /api/integrations/slack/*)
     slack_enabled: bool = Field(default=False, validation_alias="SLACK_ENABLED")
@@ -72,6 +100,12 @@ class Settings(BaseSettings):
     # Prefer injecting a single Secrets Manager ARN and resolving keys at runtime.
     slack_secret_arn: str | None = Field(default=None, validation_alias="SLACK_SECRET_ARN")
 
+    # Slack agent (LLM-powered Q&A)
+    slack_agent_enabled: bool = Field(default=True, validation_alias="SLACK_AGENT_ENABLED")
+    slack_agent_actions_enabled: bool = Field(
+        default=True, validation_alias="SLACK_AGENT_ACTIONS_ENABLED"
+    )
+
     # Canva Connect (integration)
     canva_client_id: str | None = Field(default=None, validation_alias="CANVA_CLIENT_ID")
     canva_client_secret: str | None = Field(
@@ -82,6 +116,16 @@ class Settings(BaseSettings):
 
     # Legacy JWT secret still used for signed state in integrations (optional)
     jwt_secret: str | None = Field(default=None, validation_alias="JWT_SECRET")
+
+    # Observability (OpenTelemetry)
+    otel_enabled: bool = Field(default=False, validation_alias="OTEL_ENABLED")
+    otel_service_name: str | None = Field(
+        default="polaris-rfp-backend", validation_alias="OTEL_SERVICE_NAME"
+    )
+    # OTLP/HTTP endpoint (e.g. http://adot-collector:4318/v1/traces)
+    otel_exporter_otlp_endpoint: str | None = Field(
+        default=None, validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT"
+    )
 
     # ---- helpers / derived flags ----
     @property
@@ -178,6 +222,11 @@ class Settings(BaseSettings):
                 "openai_project_id_configured": _has(self.openai_project_id),
                 "openai_organization_id_configured": _has(self.openai_organization_id),
                 "openai_model": self.openai_model,
+                "openai_reasoning_effort": self.openai_reasoning_effort,
+                "openai_reasoning_effort_json": self.openai_reasoning_effort_json,
+                "openai_reasoning_effort_text": self.openai_reasoning_effort_text,
+                "openai_text_verbosity": self.openai_text_verbosity,
+                "openai_text_verbosity_json": self.openai_text_verbosity_json,
                 "canva_client_id": self.canva_client_id,
                 "canva_redirect_uri": self.canva_redirect_uri,
                 "canva_client_secret_configured": _has(self.canva_client_secret),
@@ -196,11 +245,17 @@ class Settings(BaseSettings):
         purpose = (purpose or "").strip().lower()
         override_map = {
             "rfp_analysis": self.openai_model_rfp_analysis,
+            # RFP analysis buckets share the same model override.
+            "rfp_analysis_meta": self.openai_model_rfp_analysis,
+            "rfp_analysis_dates": self.openai_model_rfp_analysis,
+            "rfp_analysis_lists": self.openai_model_rfp_analysis,
             "section_titles": self.openai_model_section_titles,
             "text_edit": self.openai_model_text_edit,
             "generate_content": self.openai_model_generate_content,
             "proposal_sections": self.openai_model_proposal_sections,
             "buyer_enrichment": self.openai_model_buyer_enrichment,
+            "slack_agent": self.openai_model_slack_agent,
+            "rfp_section_summary": self.openai_model_rfp_section_summary,
         }
         ov = override_map.get(purpose)
         if ov and str(ov).strip():

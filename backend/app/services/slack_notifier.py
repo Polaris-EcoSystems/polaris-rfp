@@ -5,7 +5,13 @@ from typing import Any
 from ..settings import settings
 from .rfps_repo import get_rfp_by_id
 from .slack_secrets import get_secret_str
-from .slack_web import post_message_result
+from .sessions_repo import list_sessions_for_user
+from .slack_web import (
+    chat_post_message_result,
+    lookup_user_id_by_email,
+    open_dm_channel,
+    post_message_result,
+)
 from ..observability.logging import get_logger
 
 
@@ -201,4 +207,129 @@ def notify_proposal_created(*, proposal_id: str, rfp_id: str, title: str) -> Non
     plink = f"<{_proposal_url(pid)}|Open proposal>" if pid else "(no proposalId)"
     rlink = f"<{_rfp_url(rid)}|Open RFP>" if rid else "(no rfpId)"
     post_message(text=f"Proposal created: *{t}* — {plink} • {rlink}")
+
+
+def _slack_rfp_machine_channel() -> str | None:
+    ch = (
+        str(settings.slack_rfp_machine_channel or "").strip()
+        or str(get_secret_str("SLACK_RFP_MACHINE_CHANNEL") or "").strip()
+        or None
+    )
+    return ch
+
+
+def _assignee_email_for_sub(user_sub: str) -> str | None:
+    sub = str(user_sub or "").strip()
+    if not sub:
+        return None
+    try:
+        sessions = list_sessions_for_user(sub=sub, limit=10)
+        for s in sessions or []:
+            if not isinstance(s, dict):
+                continue
+            em = str(s.get("email") or "").strip().lower()
+            if em and "@" in em:
+                return em
+    except Exception:
+        return None
+    return None
+
+
+def notify_task_assigned(*, task: dict[str, Any], actor_user_sub: str | None = None) -> None:
+    """
+    Notify #rfp-machine and DM the assignee (best-effort).
+    """
+    log = get_logger("slack_notifier")
+    ch = _slack_rfp_machine_channel()
+    if not ch:
+        return
+
+    rfp_id = str(task.get("rfpId") or "").strip()
+    task_id = str(task.get("taskId") or task.get("_id") or "").strip()
+    title = str(task.get("title") or "Task").strip() or "Task"
+    due = str(task.get("dueAt") or "").strip()
+    assignee_sub = str(task.get("assigneeUserSub") or "").strip()
+    assignee_name = str(task.get("assigneeDisplayName") or "").strip() or assignee_sub or "Unassigned"
+
+    rfp = None
+    try:
+        rfp = get_rfp_by_id(rfp_id) if rfp_id else None
+    except Exception:
+        rfp = None
+    rfp_title = str((rfp or {}).get("title") or "RFP").strip() if isinstance(rfp, dict) else "RFP"
+    rfp_link = f"<{_rfp_url(rfp_id)}|{rfp_title}>" if rfp_id else "RFP"
+
+    due_part = f" (due {due})" if due else ""
+    actor_part = f" by `{actor_user_sub}`" if actor_user_sub else ""
+    text = f"Task assigned{actor_part}: *{title}* → *{assignee_name}*{due_part}\n{rfp_link} `{rfp_id}`"
+
+    res = post_message_result(text=text, channel=ch, unfurl_links=False)
+    if not bool(res.get("ok")):
+        log.warning(
+            "slack_task_assigned_channel_failed",
+            task_id=task_id or None,
+            rfp_id=rfp_id or None,
+            channel=str(res.get("channel") or ch or "") or None,
+            error=str(res.get("error") or "") or None,
+        )
+
+    # DM assignee (lookup by email via session table, then Slack users.lookupByEmail)
+    if not assignee_sub:
+        return
+    email = _assignee_email_for_sub(assignee_sub)
+    if not email:
+        return
+    slack_uid = lookup_user_id_by_email(email)
+    if not slack_uid:
+        return
+    dm_channel = open_dm_channel(user_id=slack_uid)
+    if not dm_channel:
+        return
+
+    dm_text = f"You were assigned: *{title}*{due_part}\n{rfp_link}"
+    dm_res = chat_post_message_result(text=dm_text, channel=dm_channel, unfurl_links=False)
+    if not bool(dm_res.get("ok")):
+        log.warning(
+            "slack_task_assigned_dm_failed",
+            task_id=task_id or None,
+            rfp_id=rfp_id or None,
+            assignee_sub=assignee_sub or None,
+            error=str(dm_res.get("error") or "") or None,
+        )
+
+
+def notify_task_completed(*, task: dict[str, Any], actor_user_sub: str | None) -> None:
+    """
+    Notify #rfp-machine when a task is completed (best-effort).
+    """
+    log = get_logger("slack_notifier")
+    ch = _slack_rfp_machine_channel()
+    if not ch:
+        return
+
+    rfp_id = str(task.get("rfpId") or "").strip()
+    task_id = str(task.get("taskId") or task.get("_id") or "").strip()
+    title = str(task.get("title") or "Task").strip() or "Task"
+    assignee_name = str(task.get("assigneeDisplayName") or "").strip() or str(task.get("assigneeUserSub") or "").strip()
+    rfp = None
+    try:
+        rfp = get_rfp_by_id(rfp_id) if rfp_id else None
+    except Exception:
+        rfp = None
+    rfp_title = str((rfp or {}).get("title") or "RFP").strip() if isinstance(rfp, dict) else "RFP"
+    rfp_link = f"<{_rfp_url(rfp_id)}|{rfp_title}>" if rfp_id else "RFP"
+
+    who = f"`{actor_user_sub}`" if actor_user_sub else "Someone"
+    assigned_part = f" (assigned to {assignee_name})" if assignee_name else ""
+    text = f"Task completed by {who}: *{title}*{assigned_part}\n{rfp_link} `{rfp_id}`"
+
+    res = post_message_result(text=text, channel=ch, unfurl_links=False)
+    if not bool(res.get("ok")):
+        log.warning(
+            "slack_task_completed_channel_failed",
+            task_id=task_id or None,
+            rfp_id=rfp_id or None,
+            channel=str(res.get("channel") or ch or "") or None,
+            error=str(res.get("error") or "") or None,
+        )
 

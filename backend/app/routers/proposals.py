@@ -11,6 +11,8 @@ from fastapi.responses import StreamingResponse
 from ..ai.client import AiError, call_text
 from ..settings import settings
 from ..services import content_repo, templates_repo
+from ..services.ai_jobs_repo import create_job as create_ai_job
+from ..services.ai_jobs_repo import update_job as update_ai_job
 from ..services.proposals_repo import (
     create_proposal,
     delete_proposal,
@@ -20,12 +22,14 @@ from ..services.proposals_repo import (
     update_proposal_review,
 )
 from ..services.rfps_repo import get_rfp_by_id
+from ..services.rfps_repo import list_rfp_proposal_summaries
 from ..services.shared_section_formatters import (
     format_cover_letter_section,
     format_experience_section,
     format_title_section,
 )
 from ..services.slack_notifier import notify_proposal_created
+from ..services.workflow_tasks_repo import compute_pipeline_stage, seed_missing_tasks_for_stage
 from ..services.team_member_profiles import pick_team_member_bio, pick_team_member_experience
 from ..services.templates_catalog import get_builtin_template, to_generator_template
 from ..observability.logging import get_logger
@@ -513,6 +517,18 @@ def generate(body: dict, background_tasks: BackgroundTasks):
         # Best-effort only
         pass
 
+    # Best-effort: seed workflow tasks for the current stage (proposal just created).
+    try:
+        rid = str(proposal.get("rfpId") or rfp_id or "").strip()
+        if rid:
+            r = get_rfp_by_id(rid) or {}
+            ps = list_rfp_proposal_summaries(rid) or []
+            stage = compute_pipeline_stage(rfp=r, proposals_for_rfp=ps)
+            pid = str(proposal.get("_id") or "").strip() or None
+            seed_missing_tasks_for_stage(rfp_id=rid, stage=stage, proposal_id=pid)
+    except Exception:
+        pass
+
     return proposal
 
 
@@ -554,6 +570,127 @@ def generate_sections(id: str):
     return {"message": "Sections generated successfully", "sections": next_sections, "proposal": updated}
 
 
+@router.post("/{id}/generate-sections/async")
+def generate_sections_async(id: str, background_tasks: BackgroundTasks, request: Request):
+    """
+    Durable-ish async AI generation:
+    - Creates a DynamoDB-backed job record (pollable).
+    - Runs generation in a background task and updates both proposal and job status.
+
+    Note: This is still executed within the FastAPI worker. For full durability across
+    deployments/scale events, migrate the worker to a queue (SQS/Lambda/ECS worker).
+    """
+    proposal = get_proposal_by_id(id, include_sections=True)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+
+    if not settings.openai_api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+
+    rfp = get_rfp_by_id(str(proposal.get("rfpId")))
+    if not rfp:
+        raise HTTPException(status_code=404, detail="RFP not found")
+
+    company = None
+    if proposal.get("companyId"):
+        company = content_repo.get_company_by_company_id(str(proposal.get("companyId")))
+    if not company:
+        comps = content_repo.list_companies(limit=1)
+        company = comps[0] if comps else None
+
+    user = getattr(getattr(request, "state", None), "user", None)
+    user_sub = getattr(user, "sub", None) if user else None
+
+    job = create_ai_job(
+        user_sub=str(user_sub) if user_sub else None,
+        job_type="proposal_generate_sections",
+        payload={"proposalId": str(id), "rfpId": str(proposal.get("rfpId") or "")},
+    )
+    job_id = str(job.get("jobId") or "").strip()
+
+    started = _now_iso()
+    try:
+        update_proposal(
+            id,
+            {
+                "generationStatus": "queued",
+                "generationStartedAt": started,
+                "generationError": None,
+                "lastModifiedBy": "ai-generation",
+            },
+        )
+    except Exception:
+        pass
+
+    def _run() -> None:
+        try:
+            update_ai_job(job_id=job_id, updates_obj={"status": "running", "startedAt": _now_iso()})
+        except Exception:
+            pass
+        try:
+            update_proposal(
+                id,
+                {
+                    "generationStatus": "running",
+                    "generationError": None,
+                    "lastModifiedBy": "ai-generation",
+                },
+            )
+        except Exception:
+            pass
+
+        try:
+            sections = proposal.get("sections") or {}
+            next_sections: dict[str, Any] = {}
+            for name in sections.keys():
+                nm = str(name)
+                next_sections[nm] = {
+                    "content": _section_content_from_title(nm, rfp, company),
+                    "type": "ai",
+                    "lastModified": _now_iso(),
+                }
+
+            done = _now_iso()
+            update_proposal(
+                id,
+                {
+                    "sections": next_sections,
+                    "generationStatus": "complete",
+                    "generationCompletedAt": done,
+                    "generationError": None,
+                    "lastModifiedBy": "ai-generation",
+                },
+            )
+            try:
+                update_ai_job(job_id=job_id, updates_obj={"status": "completed", "finishedAt": done, "result": {"proposalId": str(id)}})
+            except Exception:
+                pass
+        except Exception as e:
+            done = _now_iso()
+            err = (str(e) or "generation_failed")[:800]
+            try:
+                update_proposal(
+                    id,
+                    {
+                        "generationStatus": "error",
+                        "generationCompletedAt": done,
+                        "generationError": err,
+                        "lastModifiedBy": "ai-generation",
+                    },
+                )
+            except Exception:
+                pass
+            try:
+                update_ai_job(job_id=job_id, updates_obj={"status": "failed", "finishedAt": done, "error": err})
+            except Exception:
+                pass
+
+    background_tasks.add_task(_run)
+
+    updated = get_proposal_by_id(id, include_sections=True) or proposal
+    return {"ok": True, "job": job, "proposal": updated}
+
+
 @router.get("/")
 def list_all(request: Request, page: int = 1, limit: int = 20, nextToken: str | None = None):
     try:
@@ -583,6 +720,17 @@ def update_one(id: str, body: dict):
     updated = update_proposal(id, {**(body or {}), "lastModifiedBy": "system"})
     if not updated:
         raise HTTPException(status_code=404, detail="Proposal not found")
+
+    # Best-effort: seed tasks on status transitions (stage is computed from latest proposal state).
+    try:
+        rid = str((updated or {}).get("rfpId") or "").strip()
+        if rid:
+            r = get_rfp_by_id(rid) or {}
+            ps = list_rfp_proposal_summaries(rid) or []
+            stage = compute_pipeline_stage(rfp=r, proposals_for_rfp=ps)
+            seed_missing_tasks_for_stage(rfp_id=rid, stage=stage, proposal_id=str(id))
+    except Exception:
+        pass
     return updated
 
 
@@ -791,4 +939,14 @@ def update_review(id: str, body: dict):
     }
 
     updated = update_proposal_review(id, next_review)
+    # Best-effort: stage may change based on review workflow; seed tasks.
+    try:
+        rid = str((updated or {}).get("rfpId") or "").strip()
+        if rid:
+            r = get_rfp_by_id(rid) or {}
+            ps = list_rfp_proposal_summaries(rid) or []
+            stage = compute_pipeline_stage(rfp=r, proposals_for_rfp=ps)
+            seed_missing_tasks_for_stage(rfp_id=rid, stage=stage, proposal_id=str(id))
+    except Exception:
+        pass
     return updated

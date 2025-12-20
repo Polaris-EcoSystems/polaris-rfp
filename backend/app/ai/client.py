@@ -5,7 +5,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -31,6 +31,77 @@ class AiUpstreamError(AiError):
 
 class AiParseError(AiError):
     pass
+
+
+_CIRCUIT_OPEN_UNTIL: float = 0.0
+_CONSECUTIVE_FAILURES: int = 0
+_LAST_FAILURE_AT: float = 0.0
+
+
+def _status_code(exc: Exception) -> int | None:
+    for attr in ("status_code", "status", "http_status"):
+        try:
+            v = getattr(exc, attr, None)
+            if v is not None:
+                return int(v)
+        except Exception:
+            pass
+    try:
+        resp = getattr(exc, "response", None)
+        v = getattr(resp, "status_code", None)
+        if v is not None:
+            return int(v)
+    except Exception:
+        pass
+    return None
+
+
+def _is_retryable(exc: Exception) -> bool:
+    code = _status_code(exc)
+    if code in (408, 409, 425, 429, 500, 502, 503, 504):
+        return True
+    msg = (str(exc) or "").lower()
+    if any(k in msg for k in ("timeout", "timed out", "temporarily unavailable", "connection", "rate limit")):
+        return True
+    return False
+
+
+def _circuit_check() -> None:
+    global _CIRCUIT_OPEN_UNTIL
+    now = time.time()
+    if _CIRCUIT_OPEN_UNTIL and now < _CIRCUIT_OPEN_UNTIL:
+        raise AiUpstreamError("ai_temporarily_unavailable")
+
+
+def _circuit_record_success() -> None:
+    global _CONSECUTIVE_FAILURES, _LAST_FAILURE_AT, _CIRCUIT_OPEN_UNTIL
+    _CONSECUTIVE_FAILURES = 0
+    _LAST_FAILURE_AT = 0.0
+    _CIRCUIT_OPEN_UNTIL = 0.0
+
+
+def _circuit_record_failure(exc: Exception) -> None:
+    """
+    Basic circuit breaker:
+    - If we see repeated retryable upstream failures, open the circuit briefly to avoid stampedes.
+    """
+    global _CONSECUTIVE_FAILURES, _LAST_FAILURE_AT, _CIRCUIT_OPEN_UNTIL
+    if not _is_retryable(exc):
+        return
+    now = time.time()
+    # If failures are spaced out, decay the counter.
+    if _LAST_FAILURE_AT and (now - _LAST_FAILURE_AT) > 60:
+        _CONSECUTIVE_FAILURES = 0
+    _LAST_FAILURE_AT = now
+    _CONSECUTIVE_FAILURES += 1
+    if _CONSECUTIVE_FAILURES >= 5:
+        # Open for a short period; callers should surface a retryable error.
+        _CIRCUIT_OPEN_UNTIL = now + 15
+
+
+def _is_gpt5_family(model: str) -> bool:
+    m = (model or "").strip().lower()
+    return m.startswith("gpt-5")
 
 
 def _is_model_access_error(e: Exception, *, model: str) -> bool:
@@ -74,9 +145,10 @@ class AiMeta:
     model: str
     attempts: int
     used_response_format: str | None
+    response_id: str | None = None
 
 
-def _client() -> Any:
+def _client(*, timeout_s: int = 60) -> Any:
     if not settings.openai_api_key:
         raise AiNotConfigured("OPENAI_API_KEY not configured")
     try:
@@ -101,7 +173,7 @@ def _client() -> Any:
     return OpenAI(
         api_key=settings.openai_api_key,
         max_retries=0,
-        timeout=60,
+        timeout=max(5, int(timeout_s or 60)),
         default_headers=headers or None,
     )
 
@@ -121,6 +193,26 @@ def _normalize_messages(messages: list[dict[str, str]], max_chars: int) -> list[
         content = _clip(str(m.get("content") or ""), max_chars)
         out.append({"role": role, "content": content})
     return out
+
+
+def _messages_to_single_input(messages: list[dict[str, str]]) -> str:
+    """
+    Convert chat-style messages to a single Responses API input string.
+
+    Most callers in this codebase send a single user prompt. When they include a system
+    message, we preserve it as a simple transcript prefix.
+    """
+    msgs = messages or []
+    if len(msgs) == 1 and (msgs[0].get("role") or "").strip() == "user":
+        return str(msgs[0].get("content") or "")
+
+    parts: list[str] = []
+    for m in msgs:
+        role = str(m.get("role") or "user").strip().upper()
+        content = str(m.get("content") or "")
+        parts.append(f"{role}:\n{content}".strip())
+    # Give the model a clear "next turn" marker.
+    return "\n\n".join(parts) + "\n\nASSISTANT:"
 
 
 def _extract_first_json_object(text: str) -> str | None:
@@ -159,6 +251,139 @@ def _should_retry_with_legacy_max_tokens(e: Exception) -> bool:
     return "unsupported parameter" in msg and "max_completion_tokens" in msg
 
 
+def _responses_text(resp: Any) -> str:
+    """
+    Best-effort extraction of output text from a Responses API response object.
+    """
+    # Newer SDKs provide `output_text` convenience property.
+    out = getattr(resp, "output_text", None)
+    if isinstance(out, str):
+        return out
+
+    # Fallback: walk response.output[*].content[*].text
+    try:
+        output = getattr(resp, "output", None) or []
+        chunks: list[str] = []
+        for item in output:
+            content = getattr(item, "content", None) or []
+            for c in content:
+                t = getattr(c, "text", None)
+                if isinstance(t, str) and t:
+                    chunks.append(t)
+        return "\n".join(chunks)
+    except Exception:
+        return ""
+
+
+def _responses_create_text(
+    *,
+    client: Any,
+    model: str,
+    purpose: str,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    reasoning_effort: str,
+    verbosity: str,
+) -> tuple[str, AiMeta]:
+    """
+    Call the Responses API and return plain text.
+    """
+    inp = _messages_to_single_input(messages)
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "input": inp,
+        "max_output_tokens": int(max_tokens),
+        "reasoning": {"effort": reasoning_effort},
+        "text": {"verbosity": verbosity},
+    }
+    # Per GPT-5.2 guidance: temperature/top_p/logprobs are only accepted with effort="none".
+    if str(reasoning_effort).strip().lower() == "none":
+        kwargs["temperature"] = float(temperature)
+
+    resp = client.responses.create(**kwargs)
+    out = _responses_text(resp).strip()
+    if not out:
+        raise AiParseError("empty_model_response")
+    return out, AiMeta(
+        purpose=purpose,
+        model=model,
+        attempts=1,
+        used_response_format="responses_text",
+        response_id=getattr(resp, "id", None),
+    )
+
+
+def _responses_create_json(
+    *,
+    client: Any,
+    model: str,
+    purpose: str,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    reasoning_effort: str,
+    verbosity: str,
+    response_model: type[T],
+) -> tuple[T, AiMeta]:
+    """
+    Call the Responses API and parse into a Pydantic model.
+
+    We still parse/validate server-side (do not trust the model).
+    """
+    inp = _messages_to_single_input(messages)
+
+    schema = response_model.model_json_schema()
+    schema = _normalize_openai_strict_json_schema(schema)
+
+    # Responses API structured outputs: text.format
+    # (If an upstream model doesn't support this, we'll fall back to Chat Completions.)
+    fmt: dict[str, Any] = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": response_model.__name__,
+            "schema": schema,
+            "strict": True,
+        },
+    }
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "input": inp,
+        "max_output_tokens": int(max_tokens),
+        "reasoning": {"effort": reasoning_effort},
+        "text": {"verbosity": verbosity, "format": fmt},
+    }
+    if str(reasoning_effort).strip().lower() == "none":
+        kwargs["temperature"] = float(temperature)
+
+    resp = client.responses.create(**kwargs)
+    content = _responses_text(resp).strip()
+    if not content:
+        raise AiParseError("empty_model_response")
+
+    raw_json = content
+    extracted = _extract_first_json_object(content)
+    if extracted:
+        raw_json = extracted
+    try:
+        data = json.loads(raw_json)
+    except Exception as e:
+        raise AiParseError(f"json_decode_error: {e}")
+    try:
+        parsed = response_model.model_validate(data)
+    except Exception as e:
+        raise AiParseError(f"schema_validation_error: {e}")
+
+    return parsed, AiMeta(
+        purpose=purpose,
+        model=model,
+        attempts=1,
+        used_response_format="responses_json_schema",
+        response_id=getattr(resp, "id", None),
+    )
+
+
 def call_text(
     *,
     purpose: str,
@@ -171,13 +396,46 @@ def call_text(
 ) -> tuple[str, AiMeta]:
     if not settings.openai_api_key:
         raise AiNotConfigured("OPENAI_API_KEY not configured")
-    client = _client()
+    _circuit_check()
+    # Clamp token output to reduce accidental cost explosions.
+    max_tokens = int(min(int(max_tokens), int(settings.openai_max_output_tokens_cap or max_tokens)))
+    client = _client(timeout_s=timeout_s)
     messages = _normalize_messages(messages, max_prompt_chars)
 
     last_err: Exception | None = None
     for model in _models_to_try(purpose):
         for attempt in range(1, max(1, int(retries) + 1) + 1):
             try:
+                # Prefer Responses API for GPT-5 family (supports reasoning/verbosity).
+                if _is_gpt5_family(model):
+                    eff = str(settings.openai_reasoning_effort_text or settings.openai_reasoning_effort or "none")
+                    vb = str(settings.openai_text_verbosity or "medium")
+                    out, meta = _responses_create_text(
+                        client=client,
+                        model=model,
+                        purpose=purpose,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        reasoning_effort=eff,
+                        verbosity=vb,
+                    )
+                    # Preserve retry semantics: stamp attempt count.
+                    _circuit_record_success()
+                    try:
+                        log.info(
+                            "ai_call_ok",
+                            purpose=purpose,
+                            model=model,
+                            attempts=attempt,
+                            response_format=meta.used_response_format,
+                            response_id=meta.response_id,
+                        )
+                    except Exception:
+                        pass
+                    return out, AiMeta(**(meta.__dict__ | {"attempts": attempt}))
+
+                # Fallback: Chat Completions (older models / streaming UX parity).
                 try:
                     completion = client.chat.completions.create(
                         model=model,
@@ -198,11 +456,23 @@ def call_text(
                 out = (completion.choices[0].message.content or "").strip()
                 if not out:
                     raise AiParseError("empty_model_response")
+                _circuit_record_success()
+                try:
+                    log.info(
+                        "ai_call_ok",
+                        purpose=purpose,
+                        model=model,
+                        attempts=attempt,
+                        response_format="chat_text",
+                    )
+                except Exception:
+                    pass
                 return out, AiMeta(
-                    purpose=purpose, model=model, attempts=attempt, used_response_format=None
+                    purpose=purpose, model=model, attempts=attempt, used_response_format="chat_text"
                 )
             except Exception as e:
                 last_err = e
+                _circuit_record_failure(e)
                 if _is_model_access_error(e, model=model):
                     log.warning(
                         "ai_model_unavailable",
@@ -218,6 +488,7 @@ def call_text(
                     model=model,
                     attempt=attempt,
                     error=str(e),
+                    status_code=_status_code(e),
                 )
                 time.sleep(
                     min(2.5, 0.3 * (2 ** (attempt - 1)) + random.random() * 0.15)
@@ -257,7 +528,9 @@ def call_json(
 
     if not settings.openai_api_key:
         raise AiNotConfigured("OPENAI_API_KEY not configured")
-    client = _client()
+    _circuit_check()
+    max_tokens = int(min(int(max_tokens), int(settings.openai_max_output_tokens_cap or max_tokens)))
+    client = _client(timeout_s=timeout_s)
     messages = _normalize_messages(messages, max_prompt_chars)
 
     schema = response_model.model_json_schema()
@@ -285,6 +558,50 @@ def call_json(
 
     for model in _models_to_try(purpose):
         for attempt in range(1, max(1, int(retries)) + 1):
+            # Prefer Responses API for GPT-5 family.
+            if _is_gpt5_family(model):
+                try:
+                    eff = str(settings.openai_reasoning_effort_json or settings.openai_reasoning_effort or "low")
+                    vb = str(settings.openai_text_verbosity_json or settings.openai_text_verbosity or "low")
+                    parsed, meta = _responses_create_json(
+                        client=client,
+                        model=model,
+                        purpose=purpose,
+                        messages=messages,
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        reasoning_effort=eff,
+                        verbosity=vb,
+                        response_model=response_model,
+                    )
+                    _circuit_record_success()
+                    try:
+                        log.info(
+                            "ai_call_ok",
+                            purpose=purpose,
+                            model=model,
+                            attempts=attempt,
+                            response_format=meta.used_response_format,
+                            response_id=meta.response_id,
+                        )
+                    except Exception:
+                        pass
+                    return parsed, AiMeta(**(meta.__dict__ | {"attempts": attempt}))
+                except Exception as e:
+                    # If Responses structured outputs aren't supported for the chosen model,
+                    # fall through to the Chat Completions path (which we know works for many models).
+                    last_err = e
+                    last_preview = None
+                    log.warning(
+                        "ai_json_responses_failed",
+                        purpose=purpose,
+                        model=model,
+                        attempt=attempt,
+                        error=str(e),
+                        status_code=_status_code(e),
+                    )
+                    # Continue with chat.completions modes below for this attempt.
+
             model_hard_failed = False
             for response_format, temp in modes:
                 used_rf = (
@@ -333,14 +650,26 @@ def call_json(
                     except Exception as e:
                         raise AiParseError(f"schema_validation_error: {e}")
 
+                    _circuit_record_success()
+                    try:
+                        log.info(
+                            "ai_call_ok",
+                            purpose=purpose,
+                            model=model,
+                            attempts=attempt,
+                            response_format=f"chat_{used_rf or 'none'}",
+                        )
+                    except Exception:
+                        pass
                     return parsed, AiMeta(
                         purpose=purpose,
                         model=model,
                         attempts=attempt,
-                        used_response_format=used_rf,
+                        used_response_format=f"chat_{used_rf or 'none'}",
                     )
                 except Exception as e:
                     last_err = e
+                    _circuit_record_failure(e)
                     last_preview = (locals().get("content") or "")[:240]
                     if _is_model_access_error(e, model=model):
                         log.warning(
@@ -359,6 +688,7 @@ def call_json(
                         response_format=used_rf,
                         error=str(e),
                         content_preview=last_preview,
+                        status_code=_status_code(e),
                     )
                     # try next mode without sleeping
                     continue
@@ -409,7 +739,9 @@ def stream_text(
     """
     if not settings.openai_api_key:
         raise AiNotConfigured("OPENAI_API_KEY not configured")
-    client = _client()
+    _circuit_check()
+    max_tokens = int(min(int(max_tokens), int(settings.openai_max_output_tokens_cap or max_tokens)))
+    client = _client(timeout_s=timeout_s)
     messages = _normalize_messages(messages, max_prompt_chars)
 
     last_err: Exception | None = None
@@ -434,6 +766,7 @@ def stream_text(
                     )
                 else:
                     raise
+            _circuit_record_success()
             return stream, AiMeta(
                 purpose=purpose,
                 model=model,
@@ -442,6 +775,7 @@ def stream_text(
             )
         except Exception as e:
             last_err = e
+            _circuit_record_failure(e)
             if _is_model_access_error(e, model=model):
                 log.warning(
                     "ai_model_unavailable",

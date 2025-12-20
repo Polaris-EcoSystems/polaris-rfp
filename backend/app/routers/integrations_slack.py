@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hmac
 import hashlib
+import re
 import time
 from urllib.parse import parse_qs
 from typing import Any
@@ -15,6 +16,11 @@ from ..services.rfp_analyzer import analyze_rfp
 from ..services.proposals_repo import list_proposals
 from ..services.rfp_upload_jobs_repo import get_job
 from ..services.rfps_repo import create_rfp_from_analysis, get_rfp_by_id, list_rfps
+from ..services.slack_agent import run_slack_agent_question
+from ..services.slack_action_executor import execute_action
+from ..services.slack_actions_repo import get_action, mark_action_done
+from ..services.slack_events_repo import mark_seen as slack_event_mark_seen
+from ..services.slack_rate_limiter import allow as slack_allow
 from ..services.slack_response_url import respond as respond_via_response_url
 from ..services.slack_secrets import get_secret_str
 from ..services.slack_web import (
@@ -24,6 +30,7 @@ from ..services.slack_web import (
     list_recent_channel_pdfs,
     post_message,
     post_message_result,
+    chat_post_message_result,
 )
 
 
@@ -389,8 +396,71 @@ async def _require_slack_request(request: Request) -> bytes:
     return body
 
 
+def _slack_agent_answer_task(
+    *,
+    question: str,
+    response_url: str | None,
+    channel_id: str | None,
+    user_id: str | None,
+    thread_ts: str | None,
+) -> None:
+    """
+    Background: run Slack agent and respond either via response_url (slash command)
+    or via chat.postMessage (app mention).
+    """
+    try:
+        ans = run_slack_agent_question(
+            question=question,
+            user_id=user_id,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+        )
+        txt = str(ans.text or "").strip() or "No answer."
+
+        if response_url:
+            respond_via_response_url(
+                response_url=response_url,
+                text=txt,
+                response_type="ephemeral",
+                blocks=ans.blocks,
+            )
+            return
+
+        # App mention reply: post into thread (best-effort).
+        if channel_id and is_slack_configured():
+            chat_post_message_result(
+                text=txt,
+                channel=channel_id,
+                blocks=ans.blocks,
+                unfurl_links=False,
+                thread_ts=thread_ts,
+            )
+    except Exception as e:
+        msg = str(e) or "agent_failed"
+        if response_url:
+            try:
+                respond_via_response_url(
+                    response_url=response_url,
+                    text=f"Sorry — I couldn’t answer that ({msg}).",
+                    response_type="ephemeral",
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                if channel_id and is_slack_configured():
+                    chat_post_message_result(
+                        text="Sorry — I couldn’t answer that (server error).",
+                        channel=channel_id,
+                        unfurl_links=False,
+                        thread_ts=thread_ts,
+                    )
+            except Exception:
+                pass
+
+
 @router.post("/slack/events")
-async def slack_events(request: Request):
+async def slack_events(request: Request, background_tasks: BackgroundTasks):
     await _require_slack_request(request)
     try:
         payload = await request.json()
@@ -403,22 +473,38 @@ async def slack_events(request: Request):
 
     # Event callbacks - respond quickly; best-effort handling only.
     if payload.get("type") == "event_callback":
+        # Deduplicate by event_id to avoid Slack retry storms.
+        ev_id = str(payload.get("event_id") or "").strip()
+        if ev_id and not slack_event_mark_seen(event_id=ev_id, ttl_seconds=600):
+            return {"ok": True}
+
         ev = payload.get("event") or {}
         ev_type = str(ev.get("type") or "").strip()
 
-        # Minimal starter: respond to app mentions with a help hint.
-        if ev_type == "app_mention" and is_slack_configured():
+        # Agentic Q&A on mentions: reply in-thread.
+        if ev_type == "app_mention" and is_slack_configured() and bool(settings.slack_agent_enabled):
             channel = str(ev.get("channel") or "").strip() or None
-            try:
-                # Post into the channel (threaded if possible).
-                # Slack threading uses "thread_ts" in payload; chat.postMessage supports it,
-                # but we keep it simple: include a plain response for now.
-                post_message(
-                    text="Try `/polaris help` to see available commands.",
-                    channel=channel,
-                )
-            except Exception:
-                pass
+            user_id = str(ev.get("user") or "").strip() or None
+            thread_ts = str(ev.get("thread_ts") or ev.get("ts") or "").strip() or None
+            text = str(ev.get("text") or "").strip()
+            # Remove the mention token (<@U123...>) so the model sees only the question.
+            text = re.sub(r"<@[^>]+>", "", text).strip()
+            if not text:
+                text = "help"
+            # Rate limit by (user, channel) to avoid abuse.
+            if user_id and not slack_allow(key=f"slack_agent_user:{user_id}", limit=8, per_seconds=60):
+                return {"ok": True}
+            if channel and not slack_allow(key=f"slack_agent_channel:{channel}", limit=25, per_seconds=60):
+                return {"ok": True}
+            # Ack quickly; respond async in thread.
+            background_tasks.add_task(
+                _slack_agent_answer_task,
+                question=text,
+                response_url=None,
+                channel_id=channel,
+                user_id=user_id,
+                thread_ts=thread_ts,
+            )
 
         log.info("slack_event_received", event_type=ev_type or None)
         return {"ok": True}
@@ -451,6 +537,7 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
                 [
                     "*Polaris RFP Slack commands*",
                     "- `/polaris help`",
+                    "- `/polaris ask <question>` (ask Polaris about RFPs/proposals/tasks/content)",
                     "- `/polaris recent [n]` (list latest RFPs)",
                     "- `/polaris search <keywords>` (search title/client/type)",
                     "- `/polaris upload [n]` (upload latest PDFs from this channel; default 1)",
@@ -467,6 +554,36 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
                     "- `/polaris job <jobId>` (RFP upload job status)",
                 ]
             ),
+        }
+
+    if sub in ("ask", "q"):
+        if not bool(settings.slack_agent_enabled):
+            return {"response_type": "ephemeral", "text": "Slack AI agent is disabled."}
+        if not args:
+            return {
+                "response_type": "ephemeral",
+                "text": "Usage: `/polaris ask <question>`",
+            }
+        if not response_url:
+            return {
+                "response_type": "ephemeral",
+                "text": "Missing response_url from Slack (cannot reply asynchronously).",
+            }
+        question = " ".join(args).strip()
+        # Rate limit by Slack user_id (best-effort).
+        if user_id and not slack_allow(key=f"slack_cmd_user:{user_id}", limit=10, per_seconds=60):
+            return {"response_type": "ephemeral", "text": "Slow down a bit and try again in a minute."}
+        background_tasks.add_task(
+            _slack_agent_answer_task,
+            question=question,
+            response_url=response_url,
+            channel_id=channel_id,
+            user_id=user_id,
+            thread_ts=None,
+        )
+        return {
+            "response_type": "ephemeral",
+            "text": "Thinking…",
         }
 
     if sub in ("channel", "chan", "whereami"):
@@ -903,6 +1020,72 @@ async def slack_interactions(request: Request):
                         response_type="ephemeral",
                     )
             return {"response_type": "ephemeral", "text": "Listing proposals…"}
+
+        if action_id in ("polaris_confirm_action", "polaris_cancel_action"):
+            if not response_url:
+                return {"response_type": "ephemeral", "text": "Missing response_url."}
+            if not bool(settings.slack_agent_actions_enabled):
+                respond_via_response_url(
+                    response_url=response_url,
+                    text="Actions are currently disabled.",
+                    response_type="ephemeral",
+                )
+                return {"response_type": "ephemeral", "text": "Actions disabled."}
+            aid = value
+            if not aid:
+                return {"response_type": "ephemeral", "text": "Missing action id."}
+            stored = get_action(aid)
+            if not stored:
+                respond_via_response_url(
+                    response_url=response_url,
+                    text="That action expired or was not found.",
+                    response_type="ephemeral",
+                )
+                return {"response_type": "ephemeral", "text": "Action not found."}
+
+            if action_id == "polaris_cancel_action":
+                try:
+                    mark_action_done(action_id=aid, status="cancelled", result={"ok": True})
+                except Exception:
+                    pass
+                respond_via_response_url(
+                    response_url=response_url,
+                    text="Cancelled.",
+                    response_type="ephemeral",
+                    delete_original=True,
+                )
+                return {"response_type": "ephemeral", "text": "Cancelled."}
+
+            # Confirm
+            kind = str(stored.get("kind") or "").strip()
+            payload2 = stored.get("payload") if isinstance(stored.get("payload"), dict) else {}
+            args2 = payload2.get("args") if isinstance(payload2, dict) else {}
+            args2 = args2 if isinstance(args2, dict) else {}
+
+            try:
+                result = execute_action(action_id=aid, kind=kind, args=args2)
+            except Exception as e:
+                result = {"ok": False, "error": str(e) or "execution_failed"}
+
+            try:
+                mark_action_done(action_id=aid, status="done" if result.get("ok") else "failed", result=result)
+            except Exception:
+                pass
+
+            msg = "Done." if result.get("ok") else f"Failed: `{result.get('error')}`"
+            respond_via_response_url(
+                response_url=response_url,
+                text="\n".join(
+                    [
+                        msg,
+                        f"- action: `{kind}`",
+                        f"- action_id: `{aid}`",
+                    ]
+                ),
+                response_type="ephemeral",
+                delete_original=True,
+            )
+            return {"response_type": "ephemeral", "text": msg}
 
     log.info(
         "slack_interaction_received",

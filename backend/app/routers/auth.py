@@ -3,8 +3,10 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 import base64
 import os
+import time
 
 from pydantic import BaseModel, EmailStr, Field
+from botocore.exceptions import ClientError
 
 from ..observability.logging import get_logger
 from ..services import cognito_idp
@@ -18,7 +20,20 @@ from ..services.magic_links_repo import (
     put_magic_session_for_email,
 )
 from ..services.password_reset import consume_password_reset, create_password_reset
+from ..services.sessions_repo import (
+    cache_access_token,
+    delete_session,
+    get_session,
+    list_sessions_for_user,
+    put_session,
+    release_refresh_lock,
+    touch_session,
+    try_acquire_refresh_lock,
+    try_get_recent_cached_access_token,
+)
+from ..services.token_crypto import decrypt_string, encrypt_string
 from ..settings import settings
+from ..auth.cognito import verify_bearer_token
 
 router = APIRouter(tags=["auth"])
 log = get_logger("auth")
@@ -228,10 +243,11 @@ class MagicLinkVerify(BaseModel):
     # Preferred: email is present on the link
     email: EmailStr | None = None
     code: str = Field(..., min_length=4)
+    remember: bool | None = None
 
 
 @router.post("/magic-link/verify")
-def verify_magic_link(body: MagicLinkVerify):
+def verify_magic_link(body: MagicLinkVerify, request: Request):
     if not settings.cognito_client_id or not settings.cognito_user_pool_id:
         raise HTTPException(status_code=500, detail="Cognito is not configured")
     if not settings.magic_link_table_name:
@@ -303,6 +319,10 @@ def verify_magic_link(body: MagicLinkVerify):
                     raise e
             auth = resp.get("AuthenticationResult") or {}
             id_token = auth.get("IdToken")
+            access_token = auth.get("AccessToken")
+            refresh_token = auth.get("RefreshToken")
+            if not access_token:
+                raise RuntimeError("No AccessToken returned")
             if not id_token:
                 raise RuntimeError("No IdToken returned")
 
@@ -313,11 +333,88 @@ def verify_magic_link(body: MagicLinkVerify):
             if magic_id:
                 delete_magic_session(magic_id=magic_id)
 
+            # Create a refreshable server-side session when Cognito provides a refresh token.
+            # This enables silent refresh without exposing refresh tokens to the browser.
+            sid: str | None = None
+            session_expires_at: int | None = None
+            try:
+                if refresh_token:
+                    raw_sid = base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("=")
+                    sid = raw_sid
+
+                    remember = bool(body.remember) if body.remember is not None else True
+                    ttl_seconds = 60 * 60 * 24 * 30 if remember else 60 * 60 * 8
+                    session_expires_at = int(time.time()) + int(ttl_seconds)
+
+                    # Best-effort: attach identifying info for debugging/auditing.
+                    sub = None
+                    em = None
+                    try:
+                        # Prefer id token for user info at login time (it includes email/name).
+                        vu = verify_bearer_token(str(id_token))
+                        sub = getattr(vu, "sub", None)
+                        em = getattr(vu, "email", None)
+                    except Exception:
+                        pass
+
+                    ua = request.headers.get("user-agent") or request.headers.get("User-Agent") or None
+                    ip = None
+                    try:
+                        xff = request.headers.get("x-forwarded-for") or request.headers.get("X-Forwarded-For")
+                        if xff:
+                            ip = str(xff).split(",")[0].strip()
+                        else:
+                            ip = getattr(getattr(request, "client", None), "host", None)
+                    except Exception:
+                        ip = None
+
+                    put_session(
+                        sid=sid,
+                        refresh_token_enc=str(encrypt_string(str(refresh_token)) or ""),
+                        expires_at=session_expires_at,
+                        session_kind="remember" if remember else "normal",
+                        sub=str(sub) if sub else None,
+                        email=str(em) if em else (str(email) if email else None),
+                        user_agent=ua,
+                        ip=str(ip) if ip else None,
+                    )
+
+                    # Enforce multi-device cap (newest-first; keep newest 5).
+                    try:
+                        if sub:
+                            items = list_sessions_for_user(sub=str(sub), limit=25)
+                            if len(items) > 5:
+                                # items are newest-first; delete overflow (oldest).
+                                for it in items[5:]:
+                                    try:
+                                        old_sid = str(it.get("sid") or "")
+                                        if old_sid and old_sid != sid:
+                                            delete_session(sid=old_sid)
+                                    except Exception:
+                                        continue
+                    except Exception:
+                        # never block login
+                        pass
+            except Exception as e:
+                # Do not fail login if session persistence fails; log for operators.
+                try:
+                    log.warning(
+                        "session_persist_failed",
+                        error_type=type(e).__name__,
+                        error=str(e)[:300] if str(e) else None,
+                    )
+                except Exception:
+                    pass
+
             return {
-                "access_token": id_token,
+                # API auth token (preferred): Cognito AccessToken
+                "access_token": access_token,
                 "token_type": "bearer",
+                # For backwards compatibility, keep a human-ish string.
                 "expires_in": "24h",
                 "returnTo": return_to,
+                "sid": sid,
+                "session_expires_at": session_expires_at,
             }
         except Exception as e:
             last_err = e
@@ -432,3 +529,254 @@ def me(request: Request):
         "family_name": family_name,
         "display_name": display_name or user.username,
     }
+
+
+@router.post("/session/refresh")
+def refresh_session(request: Request):
+    """
+    Refresh session tokens using a server-side stored refresh token.
+
+    Security model:
+    - The browser never sees the refresh token.
+    - This endpoint is intended to be called by the Next.js BFF.
+    """
+    sid = (
+        request.headers.get("x-session-id")
+        or request.headers.get("X-Session-Id")
+        or request.headers.get("x-sessionid")
+        or ""
+    ).strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="Missing session id")
+
+    item = get_session(sid=sid)
+    if not item:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    now = int(time.time())
+    try:
+        if int(item.get("expiresAt") or 0) <= now:
+            # Absolute session window expired.
+            try:
+                delete_session(sid=sid)
+            except Exception:
+                pass
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    rt_enc = str(item.get("refreshTokenEnc") or "")
+    rt = decrypt_string(rt_enc)
+    if not rt:
+        # Can't refresh without a refresh token.
+        try:
+            delete_session(sid=sid)
+        except Exception:
+            pass
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    acquired_lock = False
+    try:
+        # Stampede protection:
+        # - If another request is already refreshing, try to reuse the newly-minted token.
+        # - Otherwise acquire a short-lived lock and perform the refresh.
+        if not try_acquire_refresh_lock(sid=sid, lock_seconds=10):
+            # Wait briefly for the in-flight refresh to complete.
+            for _ in range(10):
+                tok = try_get_recent_cached_access_token(sid=sid, max_age_seconds=120)
+                if tok:
+                    touch_session(sid=sid, last_seen_at=now)
+                    return {
+                        "ok": True,
+                        "access_token": tok,
+                        "token_type": "bearer",
+                        "session_expires_at": int(item.get("expiresAt") or 0),
+                    }
+                time.sleep(0.15)
+
+            # As a fallback, if we have *any* cached token, return it to avoid hard failures.
+            tok = try_get_recent_cached_access_token(sid=sid, max_age_seconds=60 * 10)
+            if tok:
+                touch_session(sid=sid, last_seen_at=now)
+                return {
+                    "ok": True,
+                    "access_token": tok,
+                    "token_type": "bearer",
+                    "session_expires_at": int(item.get("expiresAt") or 0),
+                }
+
+        acquired_lock = True
+        resp = cognito_idp.refresh_tokens(refresh_token=str(rt))
+        auth = resp.get("AuthenticationResult") or {}
+        access_token = auth.get("AccessToken")
+        if not access_token:
+            raise RuntimeError("No AccessToken returned")
+
+        new_rt = auth.get("RefreshToken")
+        if new_rt:
+            touch_session(
+                sid=sid,
+                refresh_token_enc=str(encrypt_string(str(new_rt)) or ""),
+                last_seen_at=now,
+            )
+        else:
+            touch_session(sid=sid, last_seen_at=now)
+
+        # Cache the new token so concurrent refresh callers can reuse it without
+        # hitting Cognito.
+        cache_access_token(sid=sid, access_token=str(access_token))
+
+        return {
+            "ok": True,
+            "access_token": access_token,
+            "token_type": "bearer",
+            "session_expires_at": int(item.get("expiresAt") or 0),
+        }
+    except HTTPException:
+        raise
+    except ClientError as e:
+        # Distinguish between auth failure vs transient Cognito errors.
+        code = ""
+        try:
+            code = str((e.response or {}).get("Error", {}).get("Code") or "").strip()
+        except Exception:
+            code = ""
+
+        # Always release lock if we acquired it.
+        if acquired_lock:
+            try:
+                release_refresh_lock(sid=sid)
+            except Exception:
+                pass
+
+        if code in ("NotAuthorizedException", "InvalidRefreshTokenException"):
+            # Refresh token invalid/expired/revoked -> delete session.
+            try:
+                delete_session(sid=sid)
+            except Exception:
+                pass
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+        # Transient/unavailable: keep session and tell caller to retry.
+        if code in ("TooManyRequestsException", "ThrottlingException", "ServiceUnavailableException"):
+            raise HTTPException(status_code=503, detail="Auth refresh temporarily unavailable")
+
+        # Unknown ClientError: treat as transient to avoid logging users out.
+        raise HTTPException(status_code=503, detail="Auth refresh temporarily unavailable")
+    except Exception as e:
+        # Unknown failures: do not delete session; return 503 to avoid surprise logouts.
+        if acquired_lock:
+            try:
+                release_refresh_lock(sid=sid)
+            except Exception:
+                pass
+        raise HTTPException(status_code=503, detail="Auth refresh temporarily unavailable")
+    finally:
+        # Best-effort: ensure lock is released when we acquired it.
+        if acquired_lock:
+            try:
+                release_refresh_lock(sid=sid)
+            except Exception:
+                pass
+
+
+@router.post("/session/logout")
+def logout_session(request: Request):
+    sid = (
+        request.headers.get("x-session-id")
+        or request.headers.get("X-Session-Id")
+        or request.headers.get("x-sessionid")
+        or ""
+    ).strip()
+    if sid:
+        try:
+            delete_session(sid=sid)
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+class RevokeSessionRequest(BaseModel):
+    sid: str = Field(..., min_length=8)
+
+
+@router.get("/sessions")
+def list_sessions(request: Request):
+    user = getattr(request.state, "user", None)
+    sub = getattr(user, "sub", None)
+    if not sub:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Optional: BFF can pass current sid to mark it in the response.
+    current_sid = (
+        request.headers.get("x-session-id")
+        or request.headers.get("X-Session-Id")
+        or ""
+    ).strip()
+
+    items = list_sessions_for_user(sub=str(sub), limit=25)
+    out: list[dict[str, Any]] = []
+    for it in items:
+        sid = str(it.get("sid") or "")
+        out.append(
+            {
+                "sid": sid,
+                "sessionKind": str(it.get("sessionKind") or "normal"),
+                "createdAt": int(it.get("createdAt") or 0),
+                "lastSeenAt": int(it.get("lastSeenAt") or 0),
+                "ipPrefix": it.get("ipPrefix") or None,
+                "userAgent": it.get("userAgent") or None,
+                "isCurrent": bool(current_sid and sid and sid == current_sid),
+            }
+        )
+    return {"data": out}
+
+
+@router.post("/sessions/revoke")
+def revoke_session(body: RevokeSessionRequest, request: Request):
+    user = getattr(request.state, "user", None)
+    sub = getattr(user, "sub", None)
+    if not sub:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    sid = str(body.sid or "").strip()
+    it = get_session(sid=sid)
+    if not it:
+        return {"ok": True}
+    if str(it.get("sub") or "") != str(sub):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        delete_session(sid=sid)
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@router.post("/sessions/revoke-all")
+def revoke_all_sessions(request: Request):
+    user = getattr(request.state, "user", None)
+    sub = getattr(user, "sub", None)
+    if not sub:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    keep_sid = (
+        request.headers.get("x-session-id")
+        or request.headers.get("X-Session-Id")
+        or ""
+    ).strip()
+
+    items = list_sessions_for_user(sub=str(sub), limit=25)
+    for it in items:
+        sid = str(it.get("sid") or "").strip()
+        if not sid:
+            continue
+        if keep_sid and sid == keep_sid:
+            continue
+        try:
+            delete_session(sid=sid)
+        except Exception:
+            continue
+    return {"ok": True}

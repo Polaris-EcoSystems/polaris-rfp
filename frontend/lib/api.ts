@@ -70,26 +70,179 @@ api.interceptors.request.use(
 // Add response interceptor for debugging
 api.interceptors.response.use(
   (response: AxiosResponse) => {
+    // If server indicates auth refresh recovered, emit global UX signals.
+    try {
+      const hdr =
+        (response.headers &&
+          ((response.headers as any)['x-polaris-auth-refresh'] ||
+            (response.headers as any)['X-Polaris-Auth-Refresh'])) ||
+        null
+      if (String(hdr || '').toLowerCase() === 'recovered') {
+        const g = globalThis as typeof globalThis & {
+          __polaris_auth_refresh_degraded_since?: number | null
+        }
+        g.__polaris_auth_refresh_degraded_since = null
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('polaris:auth-refresh-recovered'))
+        }
+      }
+    } catch {
+      // ignore
+    }
     return response
   },
-  (error: AxiosError | any) => {
+  async (error: AxiosError | any) => {
+    const requestId = (() => {
+      try {
+        const hdr =
+          error?.response?.headers?.['x-request-id'] ||
+          error?.response?.headers?.['X-Request-Id']
+        if (typeof hdr === 'string' && hdr.trim()) return hdr.trim()
+        const bodyRid = error?.response?.data?.requestId
+        if (typeof bodyRid === 'string' && bodyRid.trim()) return bodyRid.trim()
+      } catch {
+        // ignore
+      }
+      return null
+    })()
+
     console.error('Response error:', {
       url: error.config?.url,
       status: error.response?.status,
       data: error.response?.data,
+      requestId,
       message: error.message,
     })
+
+    // Surface a correlation id for support when we hit server-side errors.
+    try {
+      const status = error.response?.status
+      if (
+        typeof window !== 'undefined' &&
+        requestId &&
+        typeof status === 'number' &&
+        status >= 500
+      ) {
+        window.dispatchEvent(
+          new CustomEvent('polaris:requestId', { detail: { requestId } }),
+        )
+      }
+    } catch {
+      // ignore
+    }
+
+    // If server indicates auth refresh is temporarily unavailable/recovered, emit global UX signals.
+    try {
+      const status = error.response?.status
+      const hdr =
+        (error.response?.headers &&
+          (error.response.headers['x-polaris-auth-refresh'] ||
+            error.response.headers['X-Polaris-Auth-Refresh'])) ||
+        null
+      if (status === 503 && String(hdr || '').toLowerCase() === 'unavailable') {
+        const g = globalThis as typeof globalThis & {
+          __polaris_auth_refresh_degraded_since?: number | null
+        }
+        if (!g.__polaris_auth_refresh_degraded_since) {
+          g.__polaris_auth_refresh_degraded_since = Date.now()
+        }
+        window.dispatchEvent(new Event('polaris:auth-refresh-unavailable'))
+      }
+    } catch {
+      // ignore
+    }
 
     // If the session is invalid/expired, clear server cookie and bounce to login.
     try {
       const status = error.response?.status
       const url = String(error.config?.url || '')
-      const isAuthEndpoint = url.includes('/api/session/')
+      const isAuthEndpoint =
+        url.includes('/api/session/') || url.includes('/api/auth/session/')
+      const cfg = error.config || {}
+      const alreadyRetried = Boolean((cfg as any).__polarisRetried)
 
-      if (status === 401 && !isAuthEndpoint && typeof window !== 'undefined') {
-        // best-effort: clear cookie via BFF
+      if (
+        status === 401 &&
+        !isAuthEndpoint &&
+        typeof window !== 'undefined' &&
+        !alreadyRetried
+      ) {
+        // Attempt a one-time silent refresh, then retry the original request.
         try {
-          void fetch('/api/session/logout', { method: 'POST' })
+          ;(cfg as any).__polarisRetried = true
+          const refreshed = await (async () => {
+            const g = globalThis as typeof globalThis & {
+              __polaris_refresh_promise?: Promise<boolean> | null
+              __polaris_refresh_unavailable_until?: number | null
+            }
+            const now = Date.now()
+            if (
+              g.__polaris_refresh_unavailable_until &&
+              now < g.__polaris_refresh_unavailable_until
+            ) {
+              return false
+            }
+            if (!g.__polaris_refresh_promise) {
+              g.__polaris_refresh_promise = fetch('/api/session/refresh', {
+                method: 'POST',
+              })
+                .then((r) => {
+                  // If refresh is temporarily unavailable, don't log the user out.
+                  // Also set a short cooldown to avoid hammering.
+                  if (r.status === 503) {
+                    try {
+                      const g = globalThis as typeof globalThis & {
+                        __polaris_auth_refresh_degraded_since?: number | null
+                      }
+                      if (!g.__polaris_auth_refresh_degraded_since) {
+                        g.__polaris_auth_refresh_degraded_since = Date.now()
+                      }
+                      window.dispatchEvent(
+                        new Event('polaris:auth-refresh-unavailable'),
+                      )
+                    } catch {
+                      // ignore
+                    }
+                    g.__polaris_refresh_unavailable_until = Date.now() + 10_000
+                    return false
+                  }
+                  return Boolean(r.ok)
+                })
+                .catch(() => false)
+                .finally(() => {
+                  g.__polaris_refresh_promise = null
+                })
+            }
+            return await g.__polaris_refresh_promise
+          })()
+
+          if (refreshed) {
+            try {
+              const g = globalThis as typeof globalThis & {
+                __polaris_auth_refresh_degraded_since?: number | null
+              }
+              g.__polaris_auth_refresh_degraded_since = null
+              window.dispatchEvent(new Event('polaris:auth-refresh-recovered'))
+            } catch {
+              // ignore
+            }
+            return await api.request(cfg)
+          }
+        } catch {
+          // fall through to logout/redirect
+        }
+
+        // If refresh is currently unavailable, do NOT bounce to login.
+        try {
+          const g = globalThis as typeof globalThis & {
+            __polaris_refresh_unavailable_until?: number | null
+          }
+          if (
+            g.__polaris_refresh_unavailable_until &&
+            Date.now() < g.__polaris_refresh_unavailable_until
+          ) {
+            return Promise.reject(error)
+          }
         } catch {
           // ignore
         }
@@ -103,6 +256,13 @@ api.interceptors.response.use(
           pathname.startsWith('/reset-password/')
 
         if (!isPublic) {
+          // best-effort: clear cookie via BFF
+          try {
+            void fetch('/api/session/logout', { method: 'POST' })
+          } catch {
+            // ignore
+          }
+
           const from = encodeURIComponent(`${pathname}${search}`)
           window.location.href = `/login?from=${from}`
         }
@@ -186,6 +346,27 @@ export interface Proposal {
   updatedAt: string
 }
 
+export type WorkflowTaskStatus = 'open' | 'done' | 'cancelled'
+
+export interface WorkflowTask {
+  _id: string
+  taskId: string
+  rfpId: string
+  proposalId?: string | null
+  stage: string
+  templateId: string
+  title: string
+  description?: string
+  status: WorkflowTaskStatus
+  assigneeUserSub?: string | null
+  assigneeDisplayName?: string | null
+  createdAt: string
+  updatedAt: string
+  dueAt?: string | null
+  completedAt?: string | null
+  completedByUserSub?: string | null
+}
+
 export interface Template {
   id: string
   name: string
@@ -210,6 +391,44 @@ export interface CognitoProfileResponse {
   claims: Record<string, any>
   attributes: CognitoProfileAttribute[]
   schema: { name: string; required: boolean; mutable: boolean }[]
+}
+
+export interface UserProfile {
+  _id: string
+  userSub: string
+  email?: string | null
+  fullName?: string | null
+  jobTitles?: string[]
+  certifications?: string[]
+  resumeAssets?: {
+    assetId: string
+    fileName?: string | null
+    contentType?: string | null
+    s3Key: string
+    s3Uri?: string | null
+    uploadedAt?: string | null
+  }[]
+  profileCompletedAt?: string | null
+  onboardingVersion?: number
+  linkedTeamMemberId?: string | null
+  slackUserId?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
+export const userProfileApi = {
+  get: () =>
+    api.get<{
+      ok: boolean
+      user: { sub: string; email?: string | null; username?: string | null }
+      profile: UserProfile
+      isComplete: boolean
+    }>(proxyUrl('/api/user-profile')),
+  update: (data: Partial<UserProfile>) =>
+    api.put(proxyUrl('/api/user-profile'), data),
+  presignResume: (data: { fileName: string; contentType: string }) =>
+    api.post(proxyUrl('/api/user-profile/resume/presign'), data),
+  complete: () => api.post(proxyUrl('/api/user-profile/complete'), null),
 }
 
 // ---- Response helpers ----
@@ -426,6 +645,36 @@ export const rfpApi = {
     ),
 }
 
+export const tasksApi = {
+  listForRfp: (rfpId: string) =>
+    api.get<{ data: WorkflowTask[] }>(
+      proxyUrl(`/api/rfp/${cleanPathToken(rfpId)}/tasks`),
+    ),
+  seedForRfp: (rfpId: string) =>
+    api.post<{ ok: boolean; data: WorkflowTask[] }>(
+      proxyUrl(`/api/rfp/${cleanPathToken(rfpId)}/tasks/seed`),
+      null,
+    ),
+  assign: (
+    taskId: string,
+    data: { assigneeUserSub: string; assigneeDisplayName?: string | null },
+  ) =>
+    api.post<{ ok: boolean; task: WorkflowTask }>(
+      proxyUrl(`/api/tasks/${cleanPathToken(taskId)}/assign`),
+      data,
+    ),
+  complete: (taskId: string) =>
+    api.post<{ ok: boolean; task: WorkflowTask }>(
+      proxyUrl(`/api/tasks/${cleanPathToken(taskId)}/complete`),
+      null,
+    ),
+  reopen: (taskId: string) =>
+    api.post<{ ok: boolean; task: WorkflowTask }>(
+      proxyUrl(`/api/tasks/${cleanPathToken(taskId)}/reopen`),
+      null,
+    ),
+}
+
 // Proposal API calls
 export const proposalApi = {
   generate: (data: {
@@ -441,6 +690,13 @@ export const proposalApi = {
       proxyUrl(
         `/api/proposals/${cleanPathToken(proposalId)}/generate-sections`,
       ),
+    ),
+  generateSectionsAsync: (proposalId: string) =>
+    api.post(
+      proxyUrl(
+        `/api/proposals/${cleanPathToken(proposalId)}/generate-sections/async`,
+      ),
+      null,
     ),
   updateContentLibrarySection: (
     proposalId: string,
@@ -694,6 +950,11 @@ export const aiApi = {
     context?: string
     contentType?: string
   }) => api.post(proxyUrl('/api/ai/generate-content'), data),
+}
+
+export const aiJobsApi = {
+  get: (jobId: string) =>
+    api.get(proxyUrl(`/api/ai/jobs/${cleanPathToken(jobId)}`)),
 }
 
 // Finder (LinkedIn) API calls

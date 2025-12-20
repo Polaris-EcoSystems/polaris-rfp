@@ -38,6 +38,7 @@ import {
 import api, { extractList, proxyUrl, rfpApi, type RFP } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import GlobalSearch from './GlobalSearch'
+import AuthRefreshStatus from './AuthRefreshStatus'
 import Modal from './ui/Modal'
 
 interface LayoutProps {
@@ -777,6 +778,7 @@ export default function Layout({ children }: LayoutProps) {
         <main className="min-h-screen">
           <div className="py-8">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+              <AuthRefreshStatus />
               {children}
             </div>
           </div>

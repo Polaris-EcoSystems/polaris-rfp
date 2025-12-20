@@ -13,8 +13,10 @@ import {
   proxyUrl,
   RFP,
   rfpApi,
+  tasksApi,
   Template,
   templateApi,
+  WorkflowTask,
 } from '@/lib/api'
 import {
   BuildingOfficeIcon,
@@ -65,6 +67,9 @@ export default function RFPDetailPage() {
   const [sourcePdfError, setSourcePdfError] = useState<string | null>(null)
 
   const [rfp, setRfp] = useState<RFP | null>(null)
+  const [workflowTasks, setWorkflowTasks] = useState<WorkflowTask[]>([])
+  const [workflowTasksLoading, setWorkflowTasksLoading] = useState(false)
+  const [meSub, setMeSub] = useState<string>('')
   const [templates, setTemplates] = useState<Template[]>([])
   const [rfpProposals, setRfpProposals] = useState<any[]>([])
   const [proposalsLoading, setProposalsLoading] = useState(false)
@@ -746,15 +751,21 @@ export default function RFPDetailPage() {
     defaultOpen: boolean
   }[] = useMemo(
     () => [
-      { id: 'suitability', label: 'Suitability', defaultOpen: true },
+      // Order matters: this drives TOC ordering + persisted open/close defaults.
+      // Requested flow: Overview → Deliverables & criteria → Suitability.
       { id: 'overview', label: 'Overview', defaultOpen: true },
-      { id: 'requirements', label: 'Key requirements', defaultOpen: true },
       {
         id: 'deliverables',
         label: 'Deliverables & criteria',
+        defaultOpen: true,
+      },
+      { id: 'suitability', label: 'Suitability', defaultOpen: true },
+      { id: 'requirements', label: 'Key requirements', defaultOpen: false },
+      {
+        id: 'attachments',
+        label: 'Attachments',
         defaultOpen: false,
       },
-      { id: 'attachments', label: 'Attachments', defaultOpen: false },
       { id: 'buyers', label: 'Buyers', defaultOpen: false },
       { id: 'generate', label: 'Generate proposal', defaultOpen: false },
       { id: 'proposals', label: 'Proposals', defaultOpen: false },
@@ -1178,25 +1189,67 @@ export default function RFPDetailPage() {
     rightMeta?: ReactNode
   }) => {
     const isOpen = Boolean(openSections[sid])
+    const toggleOpen = () => {
+      // Some browsers / frameworks can unexpectedly reset scroll on stateful
+      // collapses (especially with large layout changes). Preserve position.
+      const y = window.scrollY
+      setSectionOpen(sid, !isOpen)
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          if (Math.abs(window.scrollY - y) > 2) window.scrollTo({ top: y })
+        }),
+      )
+    }
     return (
       <section id={sid} className="scroll-mt-32 lg:scroll-mt-24">
         <div className="group rounded-xl border border-gray-200 bg-white shadow-sm">
           <div className="px-5 py-4 flex items-start justify-between gap-3">
             <button
               type="button"
-              onClick={() => setSectionOpen(sid, !isOpen)}
-              className="flex-1 text-left"
+              onClick={toggleOpen}
+              className="flex-1 text-left min-w-0"
+              aria-expanded={isOpen}
+              aria-controls={`${sid}--panel`}
             >
-              <div className="text-sm font-semibold text-gray-900">{title}</div>
-              <div className="mt-1 text-xs text-gray-500">
-                {isOpen ? 'Hide' : 'Show'}
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-gray-900">
+                    {title}
+                  </div>
+                  <div className="mt-1 text-xs text-gray-500">
+                    {isOpen ? 'Collapse' : 'Expand'}
+                  </div>
+                </div>
+                <div className="shrink-0 mt-0.5 text-gray-400">
+                  <svg
+                    className={`h-5 w-5 transition-transform ${
+                      isOpen ? 'rotate-180' : ''
+                    }`}
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    aria-hidden="true"
+                    focusable="false"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </div>
               </div>
             </button>
             {rightMeta ? (
-              <div className="text-xs text-gray-600 pt-0.5">{rightMeta}</div>
+              <div className="text-xs text-gray-600 pt-0.5 shrink-0">
+                {rightMeta}
+              </div>
             ) : null}
           </div>
-          {isOpen ? <div className="px-5 pb-5 pt-0">{children}</div> : null}
+          {isOpen ? (
+            <div id={`${sid}--panel`} className="px-5 pb-5 pt-0 min-w-0">
+              {children}
+            </div>
+          ) : null}
         </div>
       </section>
     )
@@ -1266,6 +1319,44 @@ export default function RFPDetailPage() {
       void loadRFP(id)
     }
   }, [id])
+
+  useEffect(() => {
+    if (!rfp?._id) return
+    let cancelled = false
+
+    ;(async () => {
+      setWorkflowTasksLoading(true)
+      try {
+        const [tasksResp, meResp] = await Promise.all([
+          tasksApi.listForRfp(rfp._id).catch(() => null),
+          fetch('/api/session/me', { method: 'GET' }).catch(() => null),
+        ])
+
+        try {
+          const meJson = await meResp?.json?.().catch(() => null)
+          const sub = String(meJson?.sub || '').trim()
+          if (sub && !cancelled) setMeSub(sub)
+        } catch {
+          // ignore
+        }
+
+        const list = tasksResp ? extractList<WorkflowTask>(tasksResp) : []
+        if (!cancelled) setWorkflowTasks(list)
+      } finally {
+        if (!cancelled) setWorkflowTasksLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [rfp?._id])
+
+  const refreshWorkflowTasks = async () => {
+    if (!rfp?._id) return
+    const resp = await tasksApi.listForRfp(rfp._id)
+    setWorkflowTasks(extractList<WorkflowTask>(resp))
+  }
 
   useEffect(() => {
     // Clear selection when switching RFPs or when buyer list changes significantly.
@@ -1776,6 +1867,148 @@ export default function RFPDetailPage() {
               </div>
             </div>
           )}
+
+          {/* Workflow tasks */}
+          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+              <div className="text-sm font-semibold text-gray-900">
+                Workflow
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await tasksApi.seedForRfp(rfp._id)
+                      await refreshWorkflowTasks()
+                    } catch {
+                      // ignore
+                    }
+                  }}
+                  className="text-xs font-medium px-3 py-1.5 rounded-md bg-gray-100 hover:bg-gray-200 text-gray-900"
+                >
+                  Seed tasks
+                </button>
+              </div>
+            </div>
+            <div className="p-5">
+              {workflowTasksLoading ? (
+                <div className="text-sm text-gray-600">Loading tasks…</div>
+              ) : workflowTasks.length === 0 ? (
+                <div className="text-sm text-gray-600">
+                  No tasks yet. Click “Seed tasks” to generate stage tasks.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {workflowTasks
+                    .slice()
+                    .sort((a, b) => {
+                      const order = (s: string) =>
+                        s === 'open' ? 0 : s === 'done' ? 1 : 2
+                      const ao = order(String(a.status || ''))
+                      const bo = order(String(b.status || ''))
+                      if (ao !== bo) return ao - bo
+                      const ad = a?.dueAt
+                        ? new Date(a.dueAt).getTime()
+                        : Number.POSITIVE_INFINITY
+                      const bd = b?.dueAt
+                        ? new Date(b.dueAt).getTime()
+                        : Number.POSITIVE_INFINITY
+                      if (ad !== bd) return ad - bd
+                      return (
+                        new Date(String(a.createdAt || '')).getTime() -
+                        new Date(String(b.createdAt || '')).getTime()
+                      )
+                    })
+                    .slice(0, 20)
+                    .map((task) => (
+                      <div
+                        key={task._id}
+                        className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-gray-200 p-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`text-[11px] font-semibold rounded-full px-2 py-0.5 ${
+                                task.status === 'open'
+                                  ? 'bg-amber-50 text-amber-800 ring-1 ring-amber-200'
+                                  : task.status === 'done'
+                                  ? 'bg-green-50 text-green-800 ring-1 ring-green-200'
+                                  : 'bg-gray-100 text-gray-700 ring-1 ring-gray-200'
+                              }`}
+                            >
+                              {task.status}
+                            </span>
+                            <div className="text-sm font-semibold text-gray-900 truncate">
+                              {task.title}
+                            </div>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-600 truncate">
+                            {task.assigneeDisplayName ||
+                              task.assigneeUserSub ||
+                              'Unassigned'}
+                            {task.dueAt ? ` • due ${task.dueAt}` : ''}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {meSub &&
+                          task.status === 'open' &&
+                          String(task.assigneeUserSub || '') !== meSub ? (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await tasksApi.assign(task._id, {
+                                    assigneeUserSub: 'me',
+                                  })
+                                  await refreshWorkflowTasks()
+                                } catch {
+                                  // ignore
+                                }
+                              }}
+                              className="text-xs font-medium px-3 py-1.5 rounded-md bg-white border border-gray-200 hover:bg-gray-50"
+                            >
+                              Assign me
+                            </button>
+                          ) : null}
+                          {task.status === 'open' ? (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await tasksApi.complete(task._id)
+                                  await refreshWorkflowTasks()
+                                } catch {
+                                  // ignore
+                                }
+                              }}
+                              className="text-xs font-semibold px-3 py-1.5 rounded-md bg-primary-600 hover:bg-primary-700 text-white"
+                            >
+                              Mark done
+                            </button>
+                          ) : task.status === 'done' ? (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                try {
+                                  await tasksApi.reopen(task._id)
+                                  await refreshWorkflowTasks()
+                                } catch {
+                                  // ignore
+                                }
+                              }}
+                              className="text-xs font-medium px-3 py-1.5 rounded-md bg-white border border-gray-200 hover:bg-gray-50"
+                            >
+                              Reopen
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+          </div>
 
           {/* Hero */}
           <div className="rounded-2xl border border-gray-200 bg-white/80 backdrop-blur shadow-sm">
@@ -2415,81 +2648,6 @@ export default function RFPDetailPage() {
                 </div>
               </div>
 
-              <Section
-                sid="suitability"
-                title="Suitability"
-                rightMeta={
-                  typeof (rfp as any)?.fitScore === 'number'
-                    ? `Fit ${(rfp as any).fitScore}`
-                    : undefined
-                }
-              >
-                <SectionAiSummaryCard sid="suitability" />
-                {Array.isArray(rfp.dateWarnings) &&
-                  rfp.dateWarnings.length > 0 && (
-                    <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
-                      <div className="text-sm font-semibold text-amber-900">
-                        Timing / sanity warnings
-                      </div>
-                      <ul className="mt-2 text-sm text-amber-800 list-disc pl-5 space-y-1">
-                        {rfp.dateWarnings.slice(0, 10).map((w, idx) => (
-                          <li key={idx}>{w}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                {typeof (rfp as any)?.fitScore === 'number' && (
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold text-slate-900">
-                        Buyer Profiles fit score
-                      </div>
-                      <div className="text-sm font-semibold text-slate-900">
-                        {(rfp as any).fitScore}
-                      </div>
-                    </div>
-                    {Array.isArray((rfp as any)?.fitReasons) &&
-                      (rfp as any).fitReasons.length > 0 && (
-                        <ul className="mt-2 text-sm text-slate-700 list-disc pl-5 space-y-1">
-                          {(rfp as any).fitReasons
-                            .slice(0, 12)
-                            .map((w: any, idx: any) => (
-                              <li key={idx}>{w}</li>
-                            ))}
-                        </ul>
-                      )}
-                  </div>
-                )}
-
-                {(rfp as any)?.rawText ? (
-                  <div className="mt-4 text-xs text-gray-500">
-                    Extracted text length:{' '}
-                    <span className="font-semibold">
-                      {String((rfp as any).rawText || '').length}
-                    </span>
-                    {typeof (rfp as any)?._analysis?.usedAi === 'boolean' ? (
-                      <>
-                        {' '}
-                        • AI:{' '}
-                        <span className="font-semibold">
-                          {(rfp as any)?._analysis?.usedAi ? 'on' : 'off'}
-                        </span>
-                      </>
-                    ) : null}
-                    {(rfp as any)?._analysis?.model ? (
-                      <>
-                        {' '}
-                        • Model:{' '}
-                        <span className="font-semibold">
-                          {(rfp as any)?._analysis?.model}
-                        </span>
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
-              </Section>
-
               <Section sid="overview" title="Overview">
                 <SectionAiSummaryCard sid="overview" />
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -2575,6 +2733,205 @@ export default function RFPDetailPage() {
                     </div>
                   </div>
                 </div>
+              </Section>
+
+              <Section sid="deliverables" title="Deliverables & criteria">
+                <SectionAiSummaryCard sid="deliverables" />
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">
+                      Expected deliverables
+                    </div>
+                    <div className="mt-2">
+                      {rfp.deliverables && rfp.deliverables.length > 0 ? (
+                        <ul className="space-y-2">
+                          {rfp.deliverables
+                            .slice(0, 12)
+                            .map((deliverable, idx) => (
+                              <li key={idx} className="flex items-start gap-3">
+                                <div className="mt-2 h-2 w-2 rounded-full bg-green-600" />
+                                <div className="text-sm text-gray-800 break-words min-w-0">
+                                  {deliverable}
+                                </div>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          No specific deliverables identified.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">
+                      Evaluation criteria
+                    </div>
+                    <div className="mt-2">
+                      {(rfp as any).evaluationCriteria &&
+                      (rfp as any).evaluationCriteria.length > 0 ? (
+                        <ul className="space-y-2">
+                          {(rfp as any).evaluationCriteria
+                            .slice(0, 12)
+                            .map((criteria: any, idx: number) => (
+                              <li key={idx} className="flex items-start gap-3">
+                                <div className="mt-2 h-2 w-2 rounded-full bg-yellow-600" />
+                                <div className="text-sm text-gray-800 break-words min-w-0">
+                                  {typeof criteria === 'string'
+                                    ? criteria
+                                    : criteria?.criteria ||
+                                      'Evaluation criterion'}
+                                </div>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          No evaluation criteria specified.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="lg:col-span-2">
+                    <div className="text-sm font-semibold text-gray-900">
+                      Critical information
+                    </div>
+                    <div className="mt-2">
+                      {rfp.criticalInformation &&
+                      rfp.criticalInformation.length > 0 ? (
+                        <ul className="space-y-2">
+                          {rfp.criticalInformation
+                            .slice(0, 12)
+                            .map((info, idx) => (
+                              <li key={idx} className="flex items-start gap-3">
+                                <div className="mt-2 h-2 w-2 rounded-full bg-red-600" />
+                                <div className="text-sm text-gray-800 break-words min-w-0">
+                                  {info}
+                                </div>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          No critical information identified.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="lg:col-span-2">
+                    <div className="text-sm font-semibold text-gray-900">
+                      Clarification questions
+                    </div>
+                    <div className="mt-2">
+                      {rfp.clarificationQuestions &&
+                      rfp.clarificationQuestions.length > 0 ? (
+                        <div className="space-y-2">
+                          {rfp.clarificationQuestions
+                            .slice(0, 25)
+                            .map((question, index) => (
+                              <div
+                                key={index}
+                                className="flex items-start py-3 px-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                              >
+                                <span className="flex-shrink-0 inline-flex items-center justify-center h-6 w-6 rounded-full bg-primary-100 text-primary-600 text-xs font-medium mr-3 mt-0.5">
+                                  {index + 1}
+                                </span>
+                                <p className="text-sm text-gray-700 leading-relaxed flex-1 break-words min-w-0">
+                                  {question}
+                                </p>
+                              </div>
+                            ))}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          No clarification questions identified.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </Section>
+
+              <Section
+                sid="suitability"
+                title="Suitability"
+                rightMeta={
+                  typeof (rfp as any)?.fitScore === 'number'
+                    ? `Fit ${(rfp as any).fitScore}`
+                    : undefined
+                }
+              >
+                <SectionAiSummaryCard sid="suitability" />
+                {Array.isArray(rfp.dateWarnings) &&
+                  rfp.dateWarnings.length > 0 && (
+                    <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                      <div className="text-sm font-semibold text-amber-900">
+                        Timing / sanity warnings
+                      </div>
+                      <ul className="mt-2 text-sm text-amber-800 list-disc pl-5 space-y-1">
+                        {rfp.dateWarnings.slice(0, 10).map((w, idx) => (
+                          <li key={idx} className="break-words">
+                            {w}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                {typeof (rfp as any)?.fitScore === 'number' && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-slate-900">
+                        Buyer Profiles fit score
+                      </div>
+                      <div className="text-sm font-semibold text-slate-900">
+                        {(rfp as any).fitScore}
+                      </div>
+                    </div>
+                    {Array.isArray((rfp as any)?.fitReasons) &&
+                      (rfp as any).fitReasons.length > 0 && (
+                        <ul className="mt-2 text-sm text-slate-700 list-disc pl-5 space-y-1">
+                          {(rfp as any).fitReasons
+                            .slice(0, 12)
+                            .map((w: any, idx: any) => (
+                              <li key={idx} className="break-words">
+                                {w}
+                              </li>
+                            ))}
+                        </ul>
+                      )}
+                  </div>
+                )}
+
+                {(rfp as any)?.rawText ? (
+                  <div className="mt-4 text-xs text-gray-500 break-words">
+                    Extracted text length:{' '}
+                    <span className="font-semibold">
+                      {String((rfp as any).rawText || '').length}
+                    </span>
+                    {typeof (rfp as any)?._analysis?.usedAi === 'boolean' ? (
+                      <>
+                        {' '}
+                        • AI:{' '}
+                        <span className="font-semibold">
+                          {(rfp as any)?._analysis?.usedAi ? 'on' : 'off'}
+                        </span>
+                      </>
+                    ) : null}
+                    {(rfp as any)?._analysis?.model ? (
+                      <>
+                        {' '}
+                        • Model:{' '}
+                        <span className="font-semibold">
+                          {(rfp as any)?._analysis?.model}
+                        </span>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
               </Section>
 
               <Section
@@ -2750,126 +3107,6 @@ export default function RFPDetailPage() {
                     No specific requirements identified.
                   </div>
                 )}
-              </Section>
-
-              <Section sid="deliverables" title="Deliverables & criteria">
-                <SectionAiSummaryCard sid="deliverables" />
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">
-                      Expected deliverables
-                    </div>
-                    <div className="mt-2">
-                      {rfp.deliverables && rfp.deliverables.length > 0 ? (
-                        <ul className="space-y-2">
-                          {rfp.deliverables
-                            .slice(0, 12)
-                            .map((deliverable, idx) => (
-                              <li key={idx} className="flex items-start gap-3">
-                                <div className="mt-2 h-2 w-2 rounded-full bg-green-600" />
-                                <div className="text-sm text-gray-800">
-                                  {deliverable}
-                                </div>
-                              </li>
-                            ))}
-                        </ul>
-                      ) : (
-                        <div className="text-sm text-gray-500">
-                          No specific deliverables identified.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">
-                      Evaluation criteria
-                    </div>
-                    <div className="mt-2">
-                      {(rfp as any).evaluationCriteria &&
-                      (rfp as any).evaluationCriteria.length > 0 ? (
-                        <ul className="space-y-2">
-                          {(rfp as any).evaluationCriteria
-                            .slice(0, 12)
-                            .map((criteria: any, idx: number) => (
-                              <li key={idx} className="flex items-start gap-3">
-                                <div className="mt-2 h-2 w-2 rounded-full bg-yellow-600" />
-                                <div className="text-sm text-gray-800">
-                                  {typeof criteria === 'string'
-                                    ? criteria
-                                    : criteria?.criteria ||
-                                      'Evaluation criterion'}
-                                </div>
-                              </li>
-                            ))}
-                        </ul>
-                      ) : (
-                        <div className="text-sm text-gray-500">
-                          No evaluation criteria specified.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-2">
-                    <div className="text-sm font-semibold text-gray-900">
-                      Critical information
-                    </div>
-                    <div className="mt-2">
-                      {rfp.criticalInformation &&
-                      rfp.criticalInformation.length > 0 ? (
-                        <ul className="space-y-2">
-                          {rfp.criticalInformation
-                            .slice(0, 12)
-                            .map((info, idx) => (
-                              <li key={idx} className="flex items-start gap-3">
-                                <div className="mt-2 h-2 w-2 rounded-full bg-red-600" />
-                                <div className="text-sm text-gray-800">
-                                  {info}
-                                </div>
-                              </li>
-                            ))}
-                        </ul>
-                      ) : (
-                        <div className="text-sm text-gray-500">
-                          No critical information identified.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-2">
-                    <div className="text-sm font-semibold text-gray-900">
-                      Clarification questions
-                    </div>
-                    <div className="mt-2">
-                      {rfp.clarificationQuestions &&
-                      rfp.clarificationQuestions.length > 0 ? (
-                        <div className="space-y-2">
-                          {rfp.clarificationQuestions
-                            .slice(0, 25)
-                            .map((question, index) => (
-                              <div
-                                key={index}
-                                className="flex items-start py-3 px-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
-                              >
-                                <span className="flex-shrink-0 inline-flex items-center justify-center h-6 w-6 rounded-full bg-primary-100 text-primary-600 text-xs font-medium mr-3 mt-0.5">
-                                  {index + 1}
-                                </span>
-                                <p className="text-sm text-gray-700 leading-relaxed flex-1">
-                                  {question}
-                                </p>
-                              </div>
-                            ))}
-                        </div>
-                      ) : (
-                        <div className="text-sm text-gray-500">
-                          No clarification questions identified.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
               </Section>
 
               <Section

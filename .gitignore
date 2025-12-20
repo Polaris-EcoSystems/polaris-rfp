@@ -26,6 +26,7 @@ logs/
 
 # Docker
 docker-compose.override.yml
+.dynamodb/
 
 # Temporary files
 *.tmp

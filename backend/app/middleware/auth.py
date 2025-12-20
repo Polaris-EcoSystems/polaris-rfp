@@ -13,9 +13,20 @@ def is_public_path(path: str) -> bool:
     if path == "/":
         return True
 
-    # Keep compatibility with legacy backend:
-    # /api/auth/me is protected, but auth entrypoints are public.
-    if path.startswith("/api/auth/") and path not in ("/api/auth/me",):
+    # Auth entrypoints that must remain public.
+    # Everything else under /api/auth/* should require a bearer token unless
+    # explicitly listed here.
+    if path in (
+        "/api/auth/login",
+        "/api/auth/signup",
+        "/api/auth/magic-link/request",
+        "/api/auth/magic-link/verify",
+        "/api/auth/request-password-reset",
+        "/api/auth/reset-password",
+        # Called by the Next.js BFF using an opaque sid header (no bearer).
+        "/api/auth/session/refresh",
+        "/api/auth/session/logout",
+    ):
         return True
 
     # Slack integration endpoints are authenticated via Slack signatures,

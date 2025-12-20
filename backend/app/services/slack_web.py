@@ -70,6 +70,100 @@ def slack_api_get(*, method: str, params: dict[str, Any] | None = None) -> dict[
         return {"ok": False, "error": "request_failed"}
 
 
+def slack_api_post(*, method: str, json: dict[str, Any] | None = None) -> dict[str, Any]:
+    """
+    Call a Slack Web API POST endpoint, returning its decoded JSON payload.
+    """
+    token = get_bot_token()
+    if not token:
+        return {"ok": False, "error": "slack_not_configured"}
+
+    m = str(method or "").strip().lstrip("/")
+    if not m:
+        return {"ok": False, "error": "invalid_method"}
+
+    try:
+        resp = httpx.post(
+            f"https://slack.com/api/{m}",
+            headers={"Authorization": f"Bearer {token}"},
+            json=json or {},
+            timeout=20.0,
+        )
+        data = resp.json() if resp.content else {}
+        if not isinstance(data, dict):
+            return {"ok": False, "error": "invalid_response"}
+        return data
+    except Exception as e:
+        log.warning("slack_api_post_exception", method=m, error=str(e) or "unknown_error")
+        return {"ok": False, "error": "request_failed"}
+
+
+def lookup_user_id_by_email(email: str) -> str | None:
+    """
+    Best-effort Slack user lookup by email.
+    Requires scope: users:read.email
+    """
+    em = str(email or "").strip().lower()
+    if not em or "@" not in em:
+        return None
+    resp = slack_api_get(method="users.lookupByEmail", params={"email": em})
+    if not bool(resp.get("ok")):
+        return None
+    user = resp.get("user")
+    if not isinstance(user, dict):
+        return None
+    uid = str(user.get("id") or "").strip()
+    return uid or None
+
+
+def open_dm_channel(*, user_id: str) -> str | None:
+    """
+    Open (or find) a DM channel for a user.
+    Requires scope: im:write
+    """
+    uid = str(user_id or "").strip()
+    if not uid:
+        return None
+    resp = slack_api_post(method="conversations.open", json={"users": uid})
+    if not bool(resp.get("ok")):
+        return None
+    ch = resp.get("channel")
+    if isinstance(ch, dict):
+        cid = str(ch.get("id") or "").strip()
+        return cid or None
+    return None
+
+
+def chat_post_message_result(
+    *,
+    text: str,
+    channel: str,
+    blocks: list[dict[str, Any]] | None = None,
+    unfurl_links: bool = False,
+    thread_ts: str | None = None,
+    reply_broadcast: bool | None = None,
+) -> dict[str, Any]:
+    """
+    Post a message and return Slack's response (ok/error/channel/ts).
+    """
+    ch = str(channel or "").strip()
+    if not ch:
+        return {"ok": False, "error": "missing_channel"}
+    payload: dict[str, Any] = {
+        "channel": ch,
+        "text": str(text or "").strip() or "(no text)",
+        "unfurl_links": bool(unfurl_links),
+        "unfurl_media": bool(unfurl_links),
+    }
+    if blocks:
+        payload["blocks"] = blocks
+    if thread_ts and str(thread_ts).strip():
+        payload["thread_ts"] = str(thread_ts).strip()
+    if reply_broadcast is not None:
+        payload["reply_broadcast"] = bool(reply_broadcast)
+    return slack_api_post(method="chat.postMessage", json=payload)
+
+
 def list_recent_channel_pdfs(*, channel_id: str, max_files: int = 1, max_messages: int = 50) -> list[dict[str, Any]]:
     """
     Best-effort: scan recent channel history and return up to N PDF file objects.

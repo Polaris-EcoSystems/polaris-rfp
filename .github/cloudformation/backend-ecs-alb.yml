@@ -181,6 +181,173 @@ Resources:
       LogGroupName: !Sub '/ecs/polaris-backend-${Environment}'
       RetentionInDays: 14
 
+  # ---- Observability (CloudWatch) ----
+  Alb5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'polaris-backend-alb-5xx-${Environment}'
+      AlarmDescription: !Sub 'ALB 5xx responses (polaris-backend ${Environment})'
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_ELB_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  Target5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'polaris-backend-target-5xx-${Environment}'
+      AlarmDescription: !Sub 'Target 5xx responses (polaris-backend ${Environment})'
+      Namespace: AWS/ApplicationELB
+      MetricName: HTTPCode_Target_5XX_Count
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt TargetGroup.TargetGroupFullName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  TargetLatencyP95Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'polaris-backend-latency-p95-${Environment}'
+      AlarmDescription: !Sub 'Target response time p95 too high (polaris-backend ${Environment})'
+      Namespace: AWS/ApplicationELB
+      MetricName: TargetResponseTime
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !GetAtt TargetGroup.TargetGroupFullName
+      ExtendedStatistic: p95
+      Period: 60
+      EvaluationPeriods: 5
+      DatapointsToAlarm: 3
+      Threshold: 2
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  EcsCpuHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'polaris-backend-ecs-cpu-high-${Environment}'
+      AlarmDescription: !Sub 'ECS CPU utilization high (polaris-backend ${Environment})'
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref EcsCluster
+        - Name: ServiceName
+          Value: !Ref EcsService
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 10
+      DatapointsToAlarm: 5
+      Threshold: 80
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  EcsMemoryHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'polaris-backend-ecs-memory-high-${Environment}'
+      AlarmDescription: !Sub 'ECS memory utilization high (polaris-backend ${Environment})'
+      Namespace: AWS/ECS
+      MetricName: MemoryUtilization
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref EcsCluster
+        - Name: ServiceName
+          Value: !Ref EcsService
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 10
+      DatapointsToAlarm: 5
+      Threshold: 85
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  BackendDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub 'polaris-backend-${Environment}'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "ALB + Target 5xx (sum)",
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 60,
+                "metrics": [
+                  [ "AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}" ],
+                  [ ".", "HTTPCode_Target_5XX_Count", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", "TargetGroup", "${TargetGroup.TargetGroupFullName}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "Latency p50/p95 (TargetResponseTime)",
+                "region": "${AWS::Region}",
+                "period": 60,
+                "metrics": [
+                  [ "AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", "TargetGroup", "${TargetGroup.TargetGroupFullName}", { "stat": "p50" } ],
+                  [ ".", "TargetResponseTime", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}", "TargetGroup", "${TargetGroup.TargetGroupFullName}", { "stat": "p95" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "ECS CPU/Memory (avg)",
+                "region": "${AWS::Region}",
+                "stat": "Average",
+                "period": 60,
+                "metrics": [
+                  [ "AWS/ECS", "CPUUtilization", "ClusterName", "${EcsCluster}", "ServiceName", "${EcsService}" ],
+                  [ ".", "MemoryUtilization", "ClusterName", "${EcsCluster}", "ServiceName", "${EcsService}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "title": "RequestCount (sum)",
+                "region": "${AWS::Region}",
+                "stat": "Sum",
+                "period": 60,
+                "metrics": [
+                  [ "AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${LoadBalancer.LoadBalancerFullName}" ]
+                ]
+              }
+            }
+          ]
+        }
+
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:

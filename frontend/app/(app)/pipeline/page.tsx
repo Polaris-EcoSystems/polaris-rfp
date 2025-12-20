@@ -1,7 +1,7 @@
 'use client'
 
-import type { Proposal, RFP } from '@/lib/api'
-import { extractList, proposalApi, rfpApi } from '@/lib/api'
+import type { Proposal, RFP, WorkflowTask } from '@/lib/api'
+import { extractList, proposalApi, rfpApi, tasksApi } from '@/lib/api'
 import {
   ArrowRightIcon,
   CheckCircleIcon,
@@ -103,6 +103,10 @@ export default function PipelinePage() {
   const t = useTranslations()
   const [rfps, setRfps] = useState<RFP[]>([])
   const [proposals, setProposals] = useState<Proposal[]>([])
+  const [tasksByRfp, setTasksByRfp] = useState<Record<string, WorkflowTask[]>>(
+    {},
+  )
+  const [meSub, setMeSub] = useState<string>('')
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
 
@@ -120,18 +124,79 @@ export default function PipelinePage() {
     const load = async () => {
       setLoading(true)
       try {
-        const [rResp, pResp] = await Promise.all([
+        const [rResp, pResp, meResp] = await Promise.all([
           rfpApi.list(),
           proposalApi.list(),
+          fetch('/api/session/me', { method: 'GET' }).catch(() => null),
         ])
-        setRfps(extractList<RFP>(rResp))
+        const rList = extractList<RFP>(rResp)
+        setRfps(rList)
         setProposals(extractList<Proposal>(pResp))
+
+        // Current user (for "assign to me" UX)
+        try {
+          const meJson = await meResp?.json?.().catch(() => null)
+          const sub = String(meJson?.sub || '').trim()
+          if (sub) setMeSub(sub)
+        } catch {
+          // ignore
+        }
+
+        // Best-effort: prefetch tasks for the first N RFPs to keep the pipeline snappy.
+        try {
+          const ids = rList.map((r) => String(r?._id || '')).filter(Boolean)
+          const slice = ids.slice(0, 50)
+          const results: Array<[string, WorkflowTask[]]> = await Promise.all(
+            slice.map(async (rid): Promise<[string, WorkflowTask[]]> => {
+              try {
+                const resp = await tasksApi.listForRfp(rid)
+                return [rid, extractList<WorkflowTask>(resp)]
+              } catch {
+                return [rid, [] as WorkflowTask[]]
+              }
+            }),
+          )
+          const next: Record<string, WorkflowTask[]> = {}
+          results.forEach(([rid, tasks]) => {
+            next[rid] = tasks
+          })
+          setTasksByRfp(next)
+        } catch {
+          // ignore
+        }
       } finally {
         setLoading(false)
       }
     }
     void load()
   }, [])
+
+  const openTasks = (rfpId: string): WorkflowTask[] => {
+    const tasks = tasksByRfp[String(rfpId || '')] || []
+    return tasks
+      .filter((x) => String(x?.status || '') === 'open')
+      .sort((a, b) => {
+        const ad = a?.dueAt
+          ? new Date(a.dueAt).getTime()
+          : Number.POSITIVE_INFINITY
+        const bd = b?.dueAt
+          ? new Date(b.dueAt).getTime()
+          : Number.POSITIVE_INFINITY
+        if (ad !== bd) return ad - bd
+        return (
+          new Date(String(a?.createdAt || '')).getTime() -
+          new Date(String(b?.createdAt || '')).getTime()
+        )
+      })
+  }
+
+  const refreshTasksForRfp = async (rfpId: string) => {
+    const rid = String(rfpId || '').trim()
+    if (!rid) return
+    const resp = await tasksApi.listForRfp(rid)
+    const list = extractList<WorkflowTask>(resp)
+    setTasksByRfp((prev) => ({ ...prev, [rid]: list }))
+  }
 
   const proposalsByRfp = useMemo(() => {
     const out: Record<string, Proposal[]> = {}
@@ -365,6 +430,7 @@ export default function PipelinePage() {
                     const due = deadlineMeta(rfp)
                     const action = nextAction(rfp, proposals)
                     const hint = nextStepHint(s.id, proposals)
+                    const open = openTasks(rfp._id)
 
                     const dueTone =
                       due.tone === 'bad'
@@ -426,6 +492,87 @@ export default function PipelinePage() {
                             {t('pipeline.next')}
                           </span>{' '}
                           {hint}
+                        </div>
+
+                        {/* Workflow tasks */}
+                        <div className="mt-2">
+                          {open.length > 0 ? (
+                            <div className="space-y-1">
+                              {open.slice(0, 3).map((task) => (
+                                <div
+                                  key={task._id}
+                                  className="flex items-center justify-between gap-2 rounded border border-gray-200 bg-gray-50 px-2 py-1"
+                                >
+                                  <div className="min-w-0">
+                                    <div className="text-[11px] font-medium text-gray-900 truncate">
+                                      {task.title}
+                                    </div>
+                                    <div className="text-[10px] text-gray-600 truncate">
+                                      {task.assigneeDisplayName ||
+                                        task.assigneeUserSub ||
+                                        'Unassigned'}
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    {meSub &&
+                                    String(task.assigneeUserSub || '') !==
+                                      meSub ? (
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          try {
+                                            await tasksApi.assign(task._id, {
+                                              assigneeUserSub: 'me',
+                                            })
+                                            await refreshTasksForRfp(rfp._id)
+                                          } catch {
+                                            // ignore
+                                          }
+                                        }}
+                                        className="text-[10px] px-2 py-1 rounded bg-white border border-gray-200 hover:bg-gray-100"
+                                      >
+                                        Assign me
+                                      </button>
+                                    ) : null}
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        try {
+                                          await tasksApi.complete(task._id)
+                                          await refreshTasksForRfp(rfp._id)
+                                        } catch {
+                                          // ignore
+                                        }
+                                      }}
+                                      className="text-[10px] px-2 py-1 rounded bg-white border border-gray-200 hover:bg-gray-100"
+                                    >
+                                      Done
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="text-[11px] text-gray-500">
+                                No open tasks
+                              </div>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await tasksApi.seedForRfp(rfp._id)
+                                    await refreshTasksForRfp(rfp._id)
+                                  } catch {
+                                    // ignore
+                                  }
+                                }}
+                                className="text-[10px] px-2 py-1 rounded bg-white border border-gray-200 hover:bg-gray-100"
+                              >
+                                Seed tasks
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         <div className="mt-2 flex items-center justify-between">

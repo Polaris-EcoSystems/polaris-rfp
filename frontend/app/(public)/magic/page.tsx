@@ -65,6 +65,14 @@ export default function MagicLinkPage() {
         }
 
         const dest = finalReturnTo || returnTo || '/'
+        // Important: use a hard navigation after setting the session cookie.
+        // Next's client router can reuse prefetched unauthenticated redirects
+        // (and/or AuthGuard can evaluate before the new cookie is reflected),
+        // which looks like "bounced back to login" until a manual refresh.
+        if (typeof window !== 'undefined') {
+          window.location.replace(dest)
+          return
+        }
         router.replace(dest)
       } finally {
         setLoading(false)

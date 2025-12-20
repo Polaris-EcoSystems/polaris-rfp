@@ -1,52 +1,136 @@
-# RFP Proposal Generation System
+# Polaris RFP
 
-A comprehensive system for Eighth Generation Consulting to quickly create high-quality, winning proposals by leveraging template structures, content libraries, and intelligent customization.
+Polaris is a production-oriented RFP intake and proposal generation system.
 
-## Architecture
+## Architecture (current)
 
-- **Backend**: FastAPI (Python) with PostgreSQL/MongoDB
-- **Frontend**: Next.js with React
-- **AI**: OpenAI API integration
-- **Export**: PDF generation with ReportLab
+- **Frontend**: Next.js (App Router) with a server-side BFF under `/api/**` that proxies to the backend and attaches auth.
+- **Backend**: FastAPI (Python) running on ECS Fargate behind an ALB.
+- **Auth**: AWS Cognito (custom challenge / magic-link) + server-side session refresh.
+- **Data**: DynamoDB (primary persistence) + S3 (uploaded assets/source PDFs, headshots, etc.).
+- **AI**: OpenAI API (model configurable per purpose).
+- **Infra**: CloudFormation nested stacks under `.github/cloudformation/` (Amplify + ECS/ALB + Cognito + DynamoDB + S3).
 
-## Quick Start
+## Local development (golden path)
+
+### Prerequisites
+
+- **Node.js**: 20+
+- **Python**: 3.11+
+- **Docker**: for DynamoDB Local
+
+### 1) Configure environment
+
+Copy the example env file and set local overrides:
+
+```bash
+cp environment.example .env
+```
+
+Recommended local values (edit `.env`):
+
+- `API_BASE_URL=http://localhost:8080`
+- `NEXT_PUBLIC_API_BASE_URL=http://localhost:8080`
+- `FRONTEND_BASE_URL=http://localhost:3000`
+- `FRONTEND_URL=http://localhost:3000`
+- `DDB_ENDPOINT=http://localhost:8000`
+- `DDB_TABLE_NAME=polaris-rfp-local`
+
+Notes:
+
+- Most `/api/**` endpoints require Cognito bearer auth. For a fully working local UI sign-in flow, you need valid `COGNITO_USER_POOL_ID` and `COGNITO_CLIENT_ID` values (typically from a dev stack deployed via CloudFormation).
+
+### 2) Start everything
+
+Run a single command to start DynamoDB Local + backend + frontend:
+
+```bash
+./scripts/dev.sh
+```
+
+This will:
+
+- Start DynamoDB Local via Docker Compose
+- Create/upgrade the backend venv and run `uvicorn app.main:app --reload`
+- Install frontend deps (if missing) and run `next dev`
+
+## Manual development commands
+
+### DynamoDB Local
+
+```bash
+docker compose up -d
+```
+
+Optional admin UI: `http://localhost:8001`
 
 ### Backend
+
 ```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # or `venv\Scripts\activate` on Windows
-pip install -r requirements.txt
-uvicorn main:app --reload
+python -m venv backend/.venv
+source backend/.venv/bin/activate
+pip install -r backend/requirements.txt
+PORT=8080 uvicorn app.main:app --reload --app-dir backend
 ```
 
 ### Frontend
+
 ```bash
 cd frontend
 npm install
-npm run dev
+API_BASE_URL=http://localhost:8080 npm run dev
 ```
 
-## Development Commands
+## Testing
 
 - **Backend tests**: `cd backend && pytest`
 - **Frontend tests**: `cd frontend && npm test`
-- **Lint backend**: `cd backend && flake8 .`
-- **Lint frontend**: `cd frontend && npm run lint`
-- **Type check**: `cd backend && mypy .`
+- **Frontend lint**: `cd frontend && npm run lint`
 
-## Project Structure
+## Slack integration (commands + agent)
 
-```
-backend/           # FastAPI backend
-├── app/
-│   ├── models/    # Data models
-│   ├── services/  # Business logic
-│   ├── api/       # API endpoints
-│   └── core/      # Configuration
-frontend/          # Next.js frontend
-├── components/    # React components
-├── pages/         # Next.js pages
-└── lib/          # Utilities
-docs/             # Documentation
+The backend exposes Slack endpoints under:
+
+- `/api/integrations/slack/commands` (slash commands, including `/polaris ask …`)
+- `/api/integrations/slack/events` (Events API, including `app_mention`)
+- `/api/integrations/slack/interactions` (Block Kit button clicks, action confirmations)
+
+### Required environment variables
+
+- `SLACK_ENABLED=true`
+- `SLACK_SIGNING_SECRET=...`
+- `SLACK_BOT_TOKEN=...` (recommended `xoxb-...`)
+- `SLACK_DEFAULT_CHANNEL=...` (optional; used by some notifications)
+- `SLACK_RFP_MACHINE_CHANNEL=...` (optional; recommended: channel ID like `C…`/`G…`)
+
+Optional:
+
+- `SLACK_SECRET_ARN=...` (use AWS Secrets Manager instead of env vars)
+- `SLACK_AGENT_ENABLED=true|false`
+- `SLACK_AGENT_ACTIONS_ENABLED=true|false` (controls whether the agent may propose actions that require confirmation)
+
+### Slack app scopes (recommended)
+
+Minimum for `/polaris ask` + `@Polaris` Q&A:
+
+- `commands`
+- `chat:write`
+- `app_mentions:read`
+
+For `/polaris upload` (ingest latest PDFs from a channel):
+
+- `files:read`
+- `conversations.history` (public channels) and/or `groups:history` (private channels)
+
+For task assignment DMs (optional):
+
+- `users:read.email`
+- `im:write`
+
+## Repo layout
+
+```text
+backend/   # FastAPI app + services + DynamoDB repos
+frontend/  # Next.js App Router UI + BFF route handlers
+.github/   # CloudFormation templates and deployment workflow
 ```

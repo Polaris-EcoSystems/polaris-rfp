@@ -10,9 +10,11 @@ from ..ai.schemas import (
     AiGenerateContentRequest,
     AiGenerateContentResponse,
 )
+from ..observability.logging import get_logger
 from ..settings import settings
 
 router = APIRouter(tags=["ai"])
+log = get_logger("api.ai")
 
 
 @router.post("/edit-text")
@@ -69,6 +71,17 @@ def edit_text(body: dict):
             temperature=0.7,
             retries=2,
         )
+        try:
+            log.info(
+                "ai_call",
+                purpose=_meta.purpose,
+                model=_meta.model,
+                attempts=_meta.attempts,
+                response_format=_meta.used_response_format,
+                response_id=_meta.response_id,
+            )
+        except Exception:
+            pass
         return AiEditTextResponse(
             editedText=edited_text,
             originalText=text_to_process,
@@ -79,7 +92,8 @@ def edit_text(body: dict):
     except AiNotConfigured:
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
     except AiUpstreamError as e:
-        raise HTTPException(status_code=502, detail={"error": "AI upstream failure", "details": str(e)})
+        code = 503 if str(e) == "ai_temporarily_unavailable" else 502
+        raise HTTPException(status_code=code, detail={"error": "AI upstream failure", "details": str(e)})
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -141,6 +155,17 @@ def generate_content(body: dict):
             temperature=0.6,
             retries=2,
         )
+        try:
+            log.info(
+                "ai_call",
+                purpose=_meta.purpose,
+                model=_meta.model,
+                attempts=_meta.attempts,
+                response_format=_meta.used_response_format,
+                response_id=_meta.response_id,
+            )
+        except Exception:
+            pass
         return AiGenerateContentResponse(
             content=generated,
             prompt=prompt,
@@ -151,7 +176,8 @@ def generate_content(body: dict):
     except AiNotConfigured:
         raise HTTPException(status_code=500, detail="OpenAI API key not configured")
     except AiUpstreamError as e:
-        raise HTTPException(status_code=502, detail={"error": "AI upstream failure", "details": str(e)})
+        code = 503 if str(e) == "ai_temporarily_unavailable" else 502
+        raise HTTPException(status_code=code, detail={"error": "AI upstream failure", "details": str(e)})
     except Exception as e:
         raise HTTPException(
             status_code=500,

@@ -20,6 +20,7 @@ from ..services.rfps_repo import (
     now_iso,
     update_rfp,
 )
+from ..services.workflow_tasks_repo import compute_pipeline_stage, seed_missing_tasks_for_stage
 from ..services.attachments_repo import list_attachments
 from ..services.s3_assets import (
     get_assets_bucket_name,
@@ -45,6 +46,7 @@ from ..services.slack_notifier import (
 from ..observability.logging import get_logger
 from ..settings import settings
 from ..ai.client import call_text, stream_text, AiNotConfigured, AiError, AiUpstreamError
+from ..ai.context import clip_text
 from ..ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI
 
 import json
@@ -723,7 +725,7 @@ def ai_refresh_stream(id: str):
         )
 
     source_name = str(rfp.get("fileName") or rfp.get("title") or "rfp").strip()
-    text_clip = raw_text[:200000]
+    text_clip = clip_text(raw_text, max_chars=200000)
 
     def sse(event: str, data: dict[str, Any]) -> bytes:
         return (
@@ -734,6 +736,7 @@ def ai_refresh_stream(id: str):
     def _prompt_meta() -> str:
         return (
             "Extract basic RFP metadata from the text.\n"
+            "Take time to reason step-by-step and cross-check the text, then output ONLY the JSON.\n"
             "Return JSON ONLY (no markdown):\n"
             "{"
             '"title": string, '
@@ -751,6 +754,7 @@ def ai_refresh_stream(id: str):
         return (
             "Extract the key RFP dates.\n"
             "Use 'Not available' if unknown. Prefer MM/DD/YYYY when possible.\n"
+            "Take time to reason step-by-step and cross-check the text, then output ONLY the JSON.\n"
             "Return JSON ONLY:\n"
             "{"
             '"submissionDeadline": string, '
@@ -765,6 +769,7 @@ def ai_refresh_stream(id: str):
     def _prompt_lists() -> str:
         return (
             "Extract lists from the RFP.\n"
+            "Take time to reason step-by-step and cross-check the text, then output ONLY the JSON.\n"
             "Return JSON ONLY:\n"
             "{"
             '"keyRequirements": string[], '
@@ -930,7 +935,7 @@ def ai_summary_stream(id: str):
         raise HTTPException(status_code=409, detail="RFP has no rawText")
 
     source_name = str(rfp.get("fileName") or rfp.get("title") or "rfp").strip()
-    text_clip = raw_text[:120000]
+    text_clip = clip_text(raw_text, max_chars=120000)
 
     def sse(event: str, data: dict[str, Any]) -> bytes:
         return (
@@ -953,26 +958,22 @@ def ai_summary_stream(id: str):
         )
 
         try:
-            stream, meta = stream_text(
+            # Prefer GPT-5.2 Responses API path (non-stream) and stream deltas ourselves.
+            full, meta = call_text(
                 purpose="generate_content",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1200,
                 temperature=0.3,
                 timeout_s=120,
+                retries=2,
             )
-
-            buf: list[str] = []
-            for ev in stream:
-                try:
-                    delta = (ev.choices[0].delta.content or "")  # type: ignore[attr-defined]
-                except Exception:
-                    delta = ""
-                if not delta:
-                    continue
-                buf.append(delta)
-                yield sse("delta", {"text": delta})
-
-            full = "".join(buf).strip()
+            full = (full or "").strip()
+            if full:
+                # Emit in small chunks so Slack/clients feel "streaming" without relying on
+                # upstream token streaming semantics (which vary by model/API).
+                step = 80
+                for i in range(0, len(full), step):
+                    yield sse("delta", {"text": full[i : i + step]})
             if full:
                 try:
                     update_rfp(id, {"aiSummary": full, "aiSummaryUpdatedAt": now_iso()})
@@ -1040,7 +1041,7 @@ def ai_section_summary(id: str, body: dict = Body(...)):
         raise HTTPException(status_code=409, detail="RFP has no rawText")
 
     # Keep prompt sizes bounded and deterministic.
-    text_clip = raw_text[:120000]
+    text_clip = clip_text(raw_text, max_chars=120000)
     title = str(rfp.get("title") or "").strip()
     client = str(rfp.get("clientName") or "").strip()
     submission_deadline = str(rfp.get("submissionDeadline") or "").strip()
@@ -1279,6 +1280,21 @@ def update_review(id: str, request: Request, body: dict = Body(...)):
     updated = update_rfp(id, {"review": review})
     if not updated:
         raise HTTPException(status_code=404, detail="RFP not found")
+
+    # Best-effort: seed workflow tasks for the current pipeline stage.
+    try:
+        proposals = list_rfp_proposal_summaries(id)
+        stage = compute_pipeline_stage(rfp=updated or {}, proposals_for_rfp=proposals or [])
+        proposal_id: str | None = None
+        try:
+            if proposals:
+                p = sorted(proposals, key=lambda x: str(x.get("updatedAt") or ""), reverse=True)[0]
+                proposal_id = str(p.get("proposalId") or "").strip() or None
+        except Exception:
+            proposal_id = None
+        seed_missing_tasks_for_stage(rfp_id=id, stage=stage, proposal_id=proposal_id)
+    except Exception:
+        pass
 
     # Keep compatibility with frontend expecting embedded attachments.
     try:

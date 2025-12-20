@@ -14,6 +14,16 @@ import {
   profileApi,
 } from '@/lib/api'
 
+type UserSession = {
+  sid: string
+  sessionKind: string
+  createdAt: number
+  lastSeenAt: number
+  ipPrefix?: string | null
+  userAgent?: string | null
+  isCurrent?: boolean
+}
+
 function toAttrMap(attrs: CognitoProfileAttribute[]): Record<string, string> {
   const out: Record<string, string> = {}
   for (const a of attrs || []) out[a.name] = a.value ?? ''
@@ -25,6 +35,8 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [profile, setProfile] = useState<CognitoProfileResponse | null>(null)
+  const [sessions, setSessions] = useState<UserSession[]>([])
+  const [sessionsLoading, setSessionsLoading] = useState(false)
 
   const [values, setValues] = useState<Record<string, string>>({})
   const originalValues = useMemo(
@@ -61,6 +73,71 @@ export default function ProfilePage() {
       mounted = false
     }
   }, [toast])
+
+  const loadSessions = async () => {
+    try {
+      setSessionsLoading(true)
+      const resp = await fetch('/api/session/sessions', { cache: 'no-store' })
+      if (!resp.ok) throw new Error('failed')
+      const data = (await resp.json().catch(() => ({ data: [] }))) as any
+      setSessions(Array.isArray(data?.data) ? data.data : [])
+    } catch {
+      toast.error('Failed to load sessions')
+    } finally {
+      setSessionsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadSessions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const revokeSession = async (sid: string) => {
+    try {
+      const resp = await fetch('/api/session/sessions/revoke', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sid }),
+      })
+      if (!resp.ok) throw new Error('failed')
+      toast.success('Session revoked')
+      await loadSessions()
+    } catch {
+      toast.error('Failed to revoke session')
+    }
+  }
+
+  const revokeAllOtherSessions = async () => {
+    try {
+      const resp = await fetch('/api/session/sessions/revoke-all', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'others' }),
+      })
+      if (!resp.ok) throw new Error('failed')
+      toast.success('Other sessions revoked')
+      await loadSessions()
+    } catch {
+      toast.error('Failed to revoke other sessions')
+    }
+  }
+
+  const revokeAllSessions = async () => {
+    try {
+      const resp = await fetch('/api/session/sessions/revoke-all', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'all' }),
+      })
+      if (!resp.ok) throw new Error('failed')
+      toast.success('Signed out everywhere')
+      // Server will clear cookies; page will redirect on next request.
+      window.location.href = '/login'
+    } catch {
+      toast.error('Failed to sign out everywhere')
+    }
+  }
 
   const hasChanges = useMemo(() => {
     if (!profile) return false
@@ -259,6 +336,102 @@ export default function ProfilePage() {
             the attribute in Cognito.
           </div>
         </CardFooter>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-gray-900">
+                Active sessions
+              </div>
+              <div className="text-xs text-gray-600">
+                Manage signed-in devices (max 5 sessions).
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={sessionsLoading}
+                onClick={loadSessions}
+              >
+                Refresh
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={sessionsLoading || sessions.length === 0}
+                onClick={revokeAllOtherSessions}
+              >
+                Revoke others
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={sessionsLoading || sessions.length === 0}
+                onClick={revokeAllSessions}
+              >
+                Sign out everywhere
+              </Button>
+            </div>
+          </div>
+        </CardHeader>
+        <CardBody>
+          {sessionsLoading ? (
+            <div className="text-sm text-gray-600">Loading sessions…</div>
+          ) : sessions.length === 0 ? (
+            <div className="text-sm text-gray-600">No sessions found.</div>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {sessions.map((s) => (
+                <div
+                  key={s.sid}
+                  className="py-3 flex items-start justify-between gap-4"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-gray-900 flex items-center gap-2">
+                      <span>
+                        {s.sessionKind === 'remember' ? 'Remembered' : 'Normal'}
+                      </span>
+                      {s.isCurrent ? (
+                        <span className="text-xs text-gray-600">(This device)</span>
+                      ) : null}
+                    </div>
+                    <div className="mt-1 text-xs text-gray-600 space-y-0.5">
+                      <div>
+                        Last seen:{' '}
+                        {s.lastSeenAt
+                          ? new Date(s.lastSeenAt * 1000).toLocaleString()
+                          : '—'}
+                      </div>
+                      <div>
+                        Created:{' '}
+                        {s.createdAt
+                          ? new Date(s.createdAt * 1000).toLocaleString()
+                          : '—'}
+                      </div>
+                      {s.ipPrefix ? <div>IP: {s.ipPrefix}</div> : null}
+                      {s.userAgent ? (
+                        <div className="truncate">UA: {s.userAgent}</div>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      disabled={sessionsLoading}
+                      onClick={() => revokeSession(s.sid)}
+                    >
+                      Revoke
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardBody>
       </Card>
 
       <Card>
