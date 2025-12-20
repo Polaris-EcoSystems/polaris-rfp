@@ -72,6 +72,9 @@ def describe_service(*, cluster: str | None, service: str | None) -> dict[str, A
                 "updatedAt": str(d.get("updatedAt") or "") or None,
             }
         )
+    events_raw = sv.get("events")
+    events_list: list[Any] = events_raw if isinstance(events_raw, list) else []
+
     return {
         "ok": True,
         "cluster": c,
@@ -85,9 +88,10 @@ def describe_service(*, cluster: str | None, service: str | None) -> dict[str, A
         "eventsPreview": [
             {
                 "createdAt": str(e.get("createdAt") or "") or None,
-                "message": str(e.get("message") or "")[:400] if isinstance(e, dict) else "",
+                "message": str(e.get("message") or "")[:400],
             }
-            for e in (sv.get("events") if isinstance(sv.get("events"), list) else [])[:8]
+            for e in events_list[:8]
+            if isinstance(e, dict)
         ],
     }
 

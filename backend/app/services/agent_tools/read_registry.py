@@ -113,7 +113,8 @@ def _slim_value(v: Any, *, depth: int = 0, max_depth: int = 3) -> Any:
 def _slim_item(item: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
-    return _slim_value(item, depth=0, max_depth=3)  # type: ignore[return-value]
+    out = _slim_value(item, depth=0, max_depth=3)
+    return out if isinstance(out, dict) else None
 
 
 def _allowed_ddb_tables() -> list[str]:
