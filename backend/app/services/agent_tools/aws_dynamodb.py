@@ -34,6 +34,8 @@ def describe_table(*, table_name: str) -> dict[str, Any]:
     t = (resp or {}).get("Table") if isinstance(resp, dict) else None
     table: dict[str, Any] = t if isinstance(t, dict) else {}
     # Trim to a compact, safe subset.
+    gsis_raw = table.get("GlobalSecondaryIndexes")
+    gsis: list[Any] = gsis_raw if isinstance(gsis_raw, list) else []
     out = {
         "TableName": table.get("TableName"),
         "TableStatus": table.get("TableStatus"),
@@ -49,7 +51,7 @@ def describe_table(*, table_name: str) -> dict[str, Any]:
                 "Projection": (g or {}).get("Projection"),
                 "IndexStatus": (g or {}).get("IndexStatus"),
             }
-            for g in (table.get("GlobalSecondaryIndexes") if isinstance(table.get("GlobalSecondaryIndexes"), list) else [])[:10]
+            for g in gsis[:10]
         ],
     }
     return {"ok": True, "table": out}

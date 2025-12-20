@@ -69,7 +69,8 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
         existing = get_rfp_by_id(rfp_id)
         if not existing:
             return {"ok": False, "error": "rfp_not_found"}
-        review = existing.get("review") if isinstance(existing.get("review"), dict) else {}
+        review_raw = existing.get("review")
+        review: dict[str, Any] = review_raw if isinstance(review_raw, dict) else {}
         next_review = dict(review)
         next_review["decision"] = decision
         if notes is not None:
@@ -141,7 +142,8 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
                 if ctx.user_sub:
                     user_sub = str(ctx.user_sub).strip() or None
                     if not profile:
-                        profile = get_user_profile(user_sub=user_sub)
+                        if user_sub:
+                            profile = get_user_profile(user_sub=user_sub)
             except Exception:
                 user_sub = None
 
@@ -410,7 +412,9 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
     if k == "github_add_labels":
         repo = str(a.get("repo") or "").strip() or None
         number = int(a.get("number") or 0)
-        labels = a.get("labels") if isinstance(a.get("labels"), list) else []
+        raw_labels = a.get("labels")
+        labels_any: list[Any] = raw_labels if isinstance(raw_labels, list) else []
+        labels: list[str] = [str(x).strip() for x in labels_any if str(x).strip()][:50]
         try:
             res = github_add_labels(repo=repo, number=number, labels=labels)
         except Exception as e:

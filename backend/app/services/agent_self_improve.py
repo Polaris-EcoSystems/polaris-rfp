@@ -40,7 +40,8 @@ def _failure_facts(*, since_iso: str, limit: int = 400) -> list[dict[str, Any]]:
         t = str(e.get("type") or "").strip()
         if t not in ("tool_call", "agent_job_failed"):
             continue
-        payload = e.get("payload") if isinstance(e.get("payload"), dict) else {}
+        payload_raw = e.get("payload")
+        payload: dict[str, Any] = payload_raw if isinstance(payload_raw, dict) else {}
         ok = bool(payload.get("ok")) if t == "tool_call" else False
         if t == "tool_call" and ok:
             continue
@@ -116,7 +117,7 @@ def run_perch_time_once(*, hours: int = 6, reschedule_minutes: int | None = 60) 
             job_type="agent_perch_time",
             scope={"env": settings.normalized_environment},
             payload={"hours": h, "rescheduleMinutes": int(reschedule_minutes)},
-            due_iso=due,
+            due_at=due,
         )
 
     return {"ok": True, "hours": h, "since": since, "factsCount": len(facts), "report": report}

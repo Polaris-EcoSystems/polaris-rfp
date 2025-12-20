@@ -50,7 +50,8 @@ def _tool_failure_summary(*, since_iso: str, limit: int = 500) -> list[tuple[str
             continue
         if str(e.get("type") or "") != "tool_call":
             continue
-        payload = e.get("payload") if isinstance(e.get("payload"), dict) else {}
+        payload_raw = e.get("payload")
+        payload: dict[str, Any] = payload_raw if isinstance(payload_raw, dict) else {}
         ok = bool(payload.get("ok"))
         if ok:
             continue
@@ -105,7 +106,8 @@ def _already_sent_for_date(*, date_str: str) -> bool:
             continue
         if str(e.get("type") or "") != "agent_daily_digest_sent":
             continue
-        payload = e.get("payload") if isinstance(e.get("payload"), dict) else {}
+        payload_raw = e.get("payload")
+        payload: dict[str, Any] = payload_raw if isinstance(payload_raw, dict) else {}
         if str(payload.get("date") or "").strip() == date_str:
             return True
     return False
@@ -131,7 +133,7 @@ def run_daily_digest_and_reschedule(*, hours: int = 24) -> dict[str, Any]:
 
     if _already_sent_for_date(date_str=date_str):
         # Still ensure it's scheduled.
-        create_job(job_type="agent_daily_digest", scope={"env": settings.normalized_environment}, payload={"hours": hours}, due_iso=next_due)
+        create_job(job_type="agent_daily_digest", scope={"env": settings.normalized_environment}, payload={"hours": hours}, due_at=next_due)
         return DigestSendResult(ok=True, date=date_str, slackPosted=False, emailSent=False, nextDueIso=next_due).__dict__
 
     digest = build_agent_daily_digest(hours=hours)
@@ -174,7 +176,7 @@ def run_daily_digest_and_reschedule(*, hours: int = 24) -> dict[str, Any]:
         pass
 
     # Self-reschedule
-    create_job(job_type="agent_daily_digest", scope={"env": settings.normalized_environment}, payload={"hours": hours}, due_iso=next_due)
+    create_job(job_type="agent_daily_digest", scope={"env": settings.normalized_environment}, payload={"hours": hours}, due_at=next_due)
 
     return DigestSendResult(ok=True, date=date_str, slackPosted=slack_posted, emailSent=email_sent, nextDueIso=next_due).__dict__
 

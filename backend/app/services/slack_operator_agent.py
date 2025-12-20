@@ -542,7 +542,8 @@ def run_slack_operator_for_mention(
                 if "correlationId" not in args2:
                     args2["correlationId"] = corr
             if name == "journal_append":
-                meta = args2.get("meta") if isinstance(args2.get("meta"), dict) else {}
+                meta_raw = args2.get("meta")
+                meta: dict[str, Any] = meta_raw if isinstance(meta_raw, dict) else {}
                 if "correlationId" not in meta:
                     meta["correlationId"] = corr
                 args2["meta"] = meta

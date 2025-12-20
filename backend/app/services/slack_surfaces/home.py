@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..observability.logging import get_logger
-from ..settings import settings
-from ..services.slack_actor_context import resolve_actor_context
-from ..services.slack_web import slack_api_post
-from ..services.rfps_repo import get_rfp_by_id, list_rfps
-from ..services.workflow_tasks_repo import list_tasks_for_rfp
+from ...observability.logging import get_logger
+from ...settings import settings
+from ..slack_actor_context import resolve_actor_context
+from ..slack_web import slack_api_post
+from ..rfps_repo import get_rfp_by_id, list_rfps
+from ..workflow_tasks_repo import list_tasks_for_rfp
 
 log = get_logger("slack_home")
 
@@ -32,9 +32,14 @@ def _home_view(*, user_id: str) -> dict[str, Any]:
     header = "North Star RFP"
 
     ctx = resolve_actor_context(slack_user_id=uid, slack_team_id=None, slack_enterprise_id=None)
-    prof = ctx.user_profile if isinstance(ctx.user_profile, dict) else {}
-    prefs = prof.get("aiPreferences") if isinstance(prof.get("aiPreferences"), dict) else {}
-    pinned_ids = [str(x).strip() for x in _safe_list(prefs.get("pinnedRfpIds"), max_items=12) if str(x).strip()]
+    prof: dict[str, Any] = ctx.user_profile if isinstance(ctx.user_profile, dict) else {}
+    prefs_raw = prof.get("aiPreferences")
+    prefs: dict[str, Any] = prefs_raw if isinstance(prefs_raw, dict) else {}
+    pinned_ids = [
+        str(x).strip()
+        for x in _safe_list(prefs.get("pinnedRfpIds"), max_items=12)
+        if str(x).strip()
+    ]
     action_policy = str(prefs.get("actionPolicy") or "confirm_risky").strip()
 
     # Recent RFPs
@@ -139,7 +144,8 @@ def on_app_home_opened(*, payload: dict[str, Any]) -> None:
     Publishes a Home tab view via views.publish.
     """
     try:
-        ev = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+        ev = payload.get("event")
+        ev = ev if isinstance(ev, dict) else {}
         user_id = str(ev.get("user") or "").strip()
         if not user_id:
             return

@@ -5,7 +5,12 @@ import time
 import urllib.parse
 from typing import Any
 
-from playwright.sync_api import sync_playwright
+try:
+    from playwright.sync_api import sync_playwright
+except Exception:  # pragma: no cover
+    # Optional dependency: allow importing the backend without Playwright installed
+    # (e.g. unit tests, lightweight deployments).
+    sync_playwright = None  # type: ignore[assignment]
 
 
 class LinkedInSessionError(RuntimeError):
@@ -39,6 +44,8 @@ def validate_linkedin_session(
 
     Raises LinkedInSessionError on invalid/expired session.
     """
+    if sync_playwright is None:
+        raise RuntimeError("playwright is not installed (required for LinkedIn automation)")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=bool(headless))
         context = browser.new_context(storage_state=storage_state)
@@ -147,6 +154,8 @@ def discover_people_for_company(
 ) -> list[dict[str, Any]]:
     max_people = max(1, min(200, int(max_people or 50)))
 
+    if sync_playwright is None:
+        raise RuntimeError("playwright is not installed (required for LinkedIn automation)")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=bool(headless))
         context = browser.new_context(storage_state=storage_state)

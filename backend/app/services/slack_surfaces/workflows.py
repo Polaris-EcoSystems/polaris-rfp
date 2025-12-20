@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..observability.logging import get_logger
-from ..services.agent_events_repo import append_event
-from ..services.slack_events_repo import mark_seen
-from ..services.slack_web import chat_post_message_result, slack_api_post
+from ...observability.logging import get_logger
+from ..agent_events_repo import append_event
+from ..slack_events_repo import mark_seen
+from ..slack_web import chat_post_message_result, slack_api_post
 
 log = get_logger("slack_workflows")
 
@@ -31,11 +31,14 @@ def handle_workflow_step_execute(*, payload: dict[str, Any]) -> dict[str, Any]:
         if not mark_seen(event_id=f"wf:{wseid}", ttl_seconds=600):
             return {"ok": True}
 
-    step = payload.get("workflow_step") if isinstance(payload.get("workflow_step"), dict) else {}
-    inputs = step.get("inputs") if isinstance(step.get("inputs"), dict) else {}
+    step = payload.get("workflow_step")
+    step2: dict[str, Any] = step if isinstance(step, dict) else {}
+    inputs_raw = step2.get("inputs")
+    inputs: dict[str, Any] = inputs_raw if isinstance(inputs_raw, dict) else {}
 
     def _input(name: str) -> str:
-        raw = inputs.get(name) if isinstance(inputs.get(name), dict) else {}
+        raw0 = inputs.get(name)
+        raw: dict[str, Any] = raw0 if isinstance(raw0, dict) else {}
         return str(raw.get("value") or "").strip()
 
     channel = _input("channel")

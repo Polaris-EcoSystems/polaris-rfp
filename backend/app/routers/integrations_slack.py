@@ -625,8 +625,10 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
         email = None
         try:
             if bool(user_info.get("ok")):
-                u = user_info.get("user") if isinstance(user_info.get("user"), dict) else {}
-                prof = u.get("profile") if isinstance(u.get("profile"), dict) else {}
+                u_raw = user_info.get("user")
+                u: dict[str, Any] = u_raw if isinstance(u_raw, dict) else {}
+                prof_raw = u.get("profile")
+                prof: dict[str, Any] = prof_raw if isinstance(prof_raw, dict) else {}
                 email = str(prof.get("email") or "").strip().lower() or None
         except Exception:
             email = None
@@ -1324,7 +1326,8 @@ async def slack_interactions(request: Request):
 
             # Prefer the channel/thread captured at proposal time, but fall back to
             # the interactive payload (so results stay in the originating thread).
-            payload2 = stored.get("payload") if isinstance(stored.get("payload"), dict) else {}
+            stored_payload_raw = stored.get("payload")
+            payload2: dict[str, Any] = stored_payload_raw if isinstance(stored_payload_raw, dict) else {}
             ch_post = str(payload2.get("channelId") or "").strip() or channel_id or None
             th_post = str(payload2.get("threadTs") or "").strip() or default_thread_ts or None
 
@@ -1349,7 +1352,8 @@ async def slack_interactions(request: Request):
 
             # Confirm
             kind = str(stored.get("kind") or "").strip()
-            args2 = payload2.get("args") if isinstance(payload2, dict) else {}
+            args_raw = payload2.get("args")
+            args2 = args_raw if isinstance(args_raw, dict) else {}
             args2 = args2 if isinstance(args2, dict) else {}
             # Inject actor + original requester to prevent action hijacking.
             if user_id:
@@ -1361,7 +1365,7 @@ async def slack_interactions(request: Request):
                         args2["_actorUserSub"] = ctx.user_sub
                 except Exception:
                     pass
-            req_by = str(payload2.get("requestedBySlackUserId") or "").strip() if isinstance(payload2, dict) else ""
+            req_by = str(payload2.get("requestedBySlackUserId") or "").strip()
             if req_by:
                 args2["_requestedBySlackUserId"] = req_by
                 # Mirror for userSub if available
@@ -1373,16 +1377,15 @@ async def slack_interactions(request: Request):
                 except Exception:
                     pass
             # Inject Slack context for downstream tools (useful for follow-up posts).
-            if isinstance(payload2, dict):
-                ch2 = str(payload2.get("channelId") or "").strip()
-                th2 = str(payload2.get("threadTs") or "").strip()
-                q2 = str(payload2.get("question") or "").strip()
-                if ch2 and "channelId" not in args2:
-                    args2["channelId"] = ch2
-                if th2 and "threadTs" not in args2:
-                    args2["threadTs"] = th2
-                if q2 and "question" not in args2:
-                    args2["question"] = q2
+            ch2 = str(payload2.get("channelId") or "").strip()
+            th2 = str(payload2.get("threadTs") or "").strip()
+            q2 = str(payload2.get("question") or "").strip()
+            if ch2 and "channelId" not in args2:
+                args2["channelId"] = ch2
+            if th2 and "threadTs" not in args2:
+                args2["threadTs"] = th2
+            if q2 and "question" not in args2:
+                args2["question"] = q2
             # Fall back to the interactive payload so execution follow-ups land in the thread.
             if ch_post and "channelId" not in args2:
                 args2["channelId"] = ch_post

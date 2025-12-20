@@ -66,7 +66,8 @@ def search_logs(
         out = logs_client().get_query_results(queryId=qid)
         status = str((out or {}).get("status") or "").strip() or status
         if status in ("Complete", "Failed", "Cancelled", "Timeout"):
-            results = out.get("results") if isinstance(out, dict) else []
+            raw_results = out.get("results") if isinstance(out, dict) else None
+            results = raw_results if isinstance(raw_results, list) else []
             break
         time.sleep(0.6)
 

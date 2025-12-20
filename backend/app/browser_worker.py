@@ -189,7 +189,14 @@ async def new_page(req: NewPageRequest) -> NewPageResponse:
 @app.post("/v1/goto")
 async def goto(req: GotoRequest) -> dict[str, Any]:
     pg = _require_page(req.pageId)
-    await pg.goto(req.url, wait_until=req.waitUntil or "load", timeout=req.timeoutMs or 30000)
+    from typing import Literal, cast
+
+    WaitUntil = Literal["commit", "domcontentloaded", "load", "networkidle"]
+    raw = str(req.waitUntil or "").strip().lower()
+    wait_until: WaitUntil = "load"
+    if raw in ("commit", "domcontentloaded", "load", "networkidle"):
+        wait_until = cast(WaitUntil, raw)
+    await pg.goto(req.url, wait_until=wait_until, timeout=req.timeoutMs or 30000)
     return {"ok": True, "pageId": req.pageId, "url": req.url}
 
 

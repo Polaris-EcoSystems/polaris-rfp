@@ -40,7 +40,8 @@ def run_opportunity_compaction(
 
     ensure_state_exists(rfp_id=rid)
     state = get_state(rfp_id=rid) or {}
-    st = state.get("state") if isinstance(state.get("state"), dict) else {}
+    st_raw = state.get("state") if isinstance(state, dict) else None
+    st: dict[str, Any] = st_raw if isinstance(st_raw, dict) else {}
 
     entries = list_recent_entries(rfp_id=rid, limit=max(1, min(40, int(journal_limit or 25))))
     # Keep prompt bounded; include only key fields.

@@ -84,7 +84,10 @@ def resolve_actor_context(
     # 3) Cognito lookup by email -> sub
     if not user_profile and email:
         try:
-            cu = cognito_idp.admin_get_user(user_pool_id=settings.cognito_user_pool_id, username=email)
+            pool_id = str(settings.cognito_user_pool_id or "").strip()
+            if not pool_id:
+                raise ValueError("missing_cognito_user_pool_id")
+            cu = cognito_idp.admin_get_user(user_pool_id=pool_id, username=email)
             attrs = cu.get("UserAttributes") if isinstance(cu, dict) else None
             for a in (attrs if isinstance(attrs, list) else []):
                 if isinstance(a, dict) and str(a.get("Name") or "").strip() == "sub":

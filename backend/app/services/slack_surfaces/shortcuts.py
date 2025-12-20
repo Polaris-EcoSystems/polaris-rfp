@@ -3,28 +3,38 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..observability.logging import get_logger
-from ..settings import settings
-from ..services.rfp_analyzer import analyze_rfp
-from ..services.rfps_repo import create_rfp_from_analysis
-from ..services.slack_actions_repo import create_action
-from ..services.slack_agent import _blocks_for_proposed_action, run_slack_agent_question
-from ..services.slack_thread_bindings_repo import get_binding as get_thread_binding
-from ..services.slack_web import chat_post_message_result, download_slack_file, get_user_info, slack_user_display_name
-from ..services.user_profiles_repo import get_user_profile_by_slack_user_id
+from ...observability.logging import get_logger
+from ...settings import settings
+from ..rfp_analyzer import analyze_rfp
+from ..rfps_repo import create_rfp_from_analysis
+from ..slack_actions_repo import create_action
+from ..slack_agent import _blocks_for_proposed_action, run_slack_agent_question
+from ..slack_thread_bindings_repo import get_binding as get_thread_binding
+from ..slack_web import (
+    chat_post_message_result,
+    download_slack_file,
+    get_user_info,
+    slack_user_display_name,
+)
+from ..user_profiles_repo import get_user_profile_by_slack_user_id
 from . import modals as modals_surface
 
 log = get_logger("slack_shortcuts")
 
 
+def _as_dict(v: Any) -> dict[str, Any]:
+    return v if isinstance(v, dict) else {}
+
+
 def _message_text_from_payload(payload: dict[str, Any]) -> str:
-    msg = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+    msg = _as_dict(payload.get("message"))
     return str(msg.get("text") or "").strip()
 
 
 def _first_pdf_file(payload: dict[str, Any]) -> dict[str, Any] | None:
-    msg = payload.get("message") if isinstance(payload.get("message"), dict) else {}
-    files = msg.get("files") if isinstance(msg.get("files"), list) else []
+    msg = _as_dict(payload.get("message"))
+    files_raw = msg.get("files")
+    files: list[Any] = files_raw if isinstance(files_raw, list) else []
     for f in files:
         if not isinstance(f, dict):
             continue
@@ -55,13 +65,13 @@ def handle_shortcut(*, payload: dict[str, Any], background_tasks: Any) -> dict[s
     For v1 we keep this minimal and post an in-thread response.
     """
     cb = str(payload.get("callback_id") or payload.get("type") or "").strip()
-    user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
-    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+    user = _as_dict(payload.get("user"))
+    channel = _as_dict(payload.get("channel"))
     user_id = str(user.get("id") or "").strip()
     channel_id = str(channel.get("id") or "").strip()
 
     # Slack sometimes provides message_ts; if present, thread on it.
-    msg = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+    msg = _as_dict(payload.get("message"))
     msg_ts = str(msg.get("ts") or "").strip() or None
     thread_ts = str(msg.get("thread_ts") or "").strip() or None
     th = thread_ts or msg_ts
@@ -154,10 +164,10 @@ def handle_shortcut(*, payload: dict[str, Any], background_tasks: Any) -> dict[s
                 )
             return {"response_type": "ephemeral", "text": f"Created `{rid}` (see thread)."}
         except Exception as e:
-            msg = str(e) or "create_failed"
-            if len(msg) > 180:
-                msg = msg[:180] + "…"
-            return {"response_type": "ephemeral", "text": f"Failed to create RFP: {msg}"}
+            err_msg = str(e) or "create_failed"
+            if len(err_msg) > 180:
+                err_msg = err_msg[:180] + "…"
+            return {"response_type": "ephemeral", "text": f"Failed to create RFP: {err_msg}"}
 
     # Create tasks from message: bind to an RFP (via thread binding or explicit rfp_...) and propose seeding tasks.
     if cb in ("polaris_create_tasks_from_message", "create_tasks_from_message"):

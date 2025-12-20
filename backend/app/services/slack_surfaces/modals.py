@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ..observability.logging import get_logger
-from ..services.slack_actor_context import resolve_actor_context
-from ..services.slack_actions_repo import create_action
-from ..services.slack_agent import _blocks_for_proposed_action
-from ..services.slack_thread_bindings_repo import set_binding
-from ..services.slack_web import chat_post_message_result, slack_api_post
-from ..services.workflow_tasks_repo import list_tasks_for_rfp
+from ...observability.logging import get_logger
+from ..slack_actor_context import resolve_actor_context
+from ..slack_actions_repo import create_action
+from ..slack_agent import _blocks_for_proposed_action
+from ..slack_thread_bindings_repo import set_binding
+from ..slack_web import chat_post_message_result, slack_api_post
+from ..workflow_tasks_repo import list_tasks_for_rfp
 
 log = get_logger("slack_modals")
 
@@ -24,6 +24,10 @@ def _open_modal(*, trigger_id: str, view: dict[str, Any]) -> bool:
         return False
     resp = slack_api_post(method="views.open", json={"trigger_id": tid, "view": view})
     return bool(resp.get("ok"))
+
+
+def _as_dict(v: Any) -> dict[str, Any]:
+    return v if isinstance(v, dict) else {}
 
 
 def open_bind_thread_modal(*, trigger_id: str, channel_id: str, thread_ts: str) -> bool:
@@ -130,12 +134,13 @@ def handle_block_actions(*, payload: dict[str, Any], background_tasks: Any) -> d
 
     v1: handle new modal-launch actions; legacy action ids remain in the router.
     """
-    actions = payload.get("actions") if isinstance(payload.get("actions"), list) else []
+    actions_raw = payload.get("actions")
+    actions: list[Any] = actions_raw if isinstance(actions_raw, list) else []
     act = actions[0] if actions else {}
     action_id = str(act.get("action_id") or "").strip()
     trigger_id = str(payload.get("trigger_id") or "").strip()
-    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
-    message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+    channel = _as_dict(payload.get("channel"))
+    message = _as_dict(payload.get("message"))
     channel_id = str(channel.get("id") or "").strip()
     msg_ts = str(message.get("ts") or "").strip()
     thread_ts = str(message.get("thread_ts") or "").strip() or msg_ts
@@ -154,7 +159,7 @@ def handle_view(*, payload: dict[str, Any], background_tasks: Any) -> dict[str, 
     v1: no modals are wired yet; acknowledge.
     """
     ptype = str(payload.get("type") or "").strip()
-    view = payload.get("view") if isinstance(payload.get("view"), dict) else {}
+    view = _as_dict(payload.get("view"))
     cb = str(view.get("callback_id") or "").strip()
     meta_raw = str(view.get("private_metadata") or "").strip()
     try:
@@ -165,16 +170,16 @@ def handle_view(*, payload: dict[str, Any], background_tasks: Any) -> dict[str, 
     if ptype != "view_submission":
         return {}
 
-    user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+    user = _as_dict(payload.get("user"))
     actor_slack_id = str(user.get("id") or "").strip() or None
     actor_ctx = resolve_actor_context(slack_user_id=actor_slack_id, slack_team_id=None, slack_enterprise_id=None)
 
-    state = (view.get("state") if isinstance(view.get("state"), dict) else {}) or {}
-    values = (state.get("values") if isinstance(state.get("values"), dict) else {}) or {}
+    state = _as_dict(view.get("state"))
+    values = _as_dict(state.get("values"))
 
     def _v(block_id: str, action_id: str) -> dict[str, Any]:
-        b = values.get(block_id) if isinstance(values.get(block_id), dict) else {}
-        return b.get(action_id) if isinstance(b.get(action_id), dict) else {}
+        b = _as_dict(values.get(block_id))
+        return _as_dict(b.get(action_id))
 
     if cb == _BIND_VIEW:
         rfp_id = str(_v("rfp_block", "rfp_id").get("value") or "").strip()

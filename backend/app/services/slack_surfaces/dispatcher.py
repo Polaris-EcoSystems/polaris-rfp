@@ -4,17 +4,17 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from ..observability.logging import get_logger
-from ..settings import settings
+from ...observability.logging import get_logger
+from ...settings import settings
 from . import home as home_surface
 from . import modals as modals_surface
 from . import shortcuts as shortcuts_surface
 from . import workflows as workflows_surface
-from ..services.slack_events_repo import mark_seen as slack_event_mark_seen
-from ..services.slack_rate_limiter import allow as slack_allow
-from ..services.slack_reply_tools import ack_reaction
-from ..services.slack_web import is_slack_configured
-from ..services.slack_operator_agent import run_slack_operator_for_mention
+from ..slack_events_repo import mark_seen as slack_event_mark_seen
+from ..slack_rate_limiter import allow as slack_allow
+from ..slack_reply_tools import ack_reaction
+from ..slack_web import is_slack_configured
+from ..slack_operator_agent import run_slack_operator_for_mention
 
 log = get_logger("slack_dispatcher")
 
@@ -24,6 +24,10 @@ class SlackDispatchResult:
     ok: bool
     # For interactive requests, returning a JSON payload to Slack is common.
     response_json: dict[str, Any] | None = None
+
+
+def _as_dict(v: Any) -> dict[str, Any]:
+    return v if isinstance(v, dict) else {}
 
 
 def handle_event_callback(*, payload: dict[str, Any], background_tasks: Any) -> SlackDispatchResult:
@@ -36,7 +40,7 @@ def handle_event_callback(*, payload: dict[str, Any], background_tasks: Any) -> 
     if ev_id and not slack_event_mark_seen(event_id=ev_id, ttl_seconds=600):
         return SlackDispatchResult(ok=True, response_json={"ok": True})
 
-    ev = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+    ev = _as_dict(payload.get("event"))
     ev_type = str(ev.get("type") or "").strip()
 
     # App Home surface
