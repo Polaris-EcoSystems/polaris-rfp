@@ -32,7 +32,7 @@ export function proxyUrl(path: string): string {
   return `/api/proxy${raw.startsWith('/') ? raw : `/${raw}`}`
 }
 
-function cleanPathToken(token: string): string {
+export function cleanPathToken(token: string): string {
   // Defensive: trim whitespace and strip leading/trailing slashes
   // (avoids accidental `/api/rfp/<id>/` 404s and double-segment bugs).
   const t = String(token ?? '')
@@ -291,7 +291,7 @@ export const rfpApi = {
       delayMs = Math.min(5000, Math.round(delayMs * 1.4))
 
       const statusResp = await api.get(
-        proxyUrl(`/api/rfp/upload/jobs/${jobId}`),
+        proxyUrl(`/api/rfp/upload/jobs/${cleanPathToken(jobId)}`),
       )
       const job = statusResp?.data?.job
       const status = String(job?.status || '')
@@ -301,7 +301,7 @@ export const rfpApi = {
         if (!rfpId) {
           throw new Error('RFP job completed but no rfpId returned')
         }
-        return api.get(proxyUrl(`/api/rfp/${rfpId}`))
+        return api.get(proxyUrl(`/api/rfp/${cleanPathToken(rfpId)}`))
       }
 
       if (status === 'failed') {
@@ -387,6 +387,12 @@ export const proposalApi = {
     companyId?: string
     customContent?: any
   }) => api.post<Proposal>(proxyUrl('/api/proposals/generate'), data),
+  generateSections: (proposalId: string) =>
+    api.post(
+      proxyUrl(
+        `/api/proposals/${cleanPathToken(proposalId)}/generate-sections`,
+      ),
+    ),
   updateContentLibrarySection: (
     proposalId: string,
     sectionName: string,
@@ -394,7 +400,7 @@ export const proposalApi = {
   ) =>
     api.put(
       proxyUrl(
-        `/api/proposals/${encodeURIComponent(
+        `/api/proposals/${cleanPathToken(
           proposalId,
         )}/content-library/${encodeURIComponent(sectionName)}`,
       ),
@@ -411,11 +417,17 @@ export const proposalApi = {
         },
       },
     ),
-  get: (id: string) => api.get<Proposal>(proxyUrl(`/api/proposals/${id}`)),
+  get: (id: string) =>
+    api.get<Proposal>(proxyUrl(`/api/proposals/${cleanPathToken(id)}`)),
   update: (id: string, data: any) =>
-    api.put<Proposal>(proxyUrl(`/api/proposals/${id}`), data),
+    api.put<Proposal>(proxyUrl(`/api/proposals/${cleanPathToken(id)}`), data),
   setCompany: (id: string, companyId: string) =>
-    api.put<Proposal>(proxyUrl(`/api/proposals/${id}/company`), { companyId }),
+    api.put<Proposal>(
+      proxyUrl(`/api/proposals/${cleanPathToken(id)}/company`),
+      {
+        companyId,
+      },
+    ),
   updateReview: (
     id: string,
     data: {
@@ -424,14 +436,19 @@ export const proposalApi = {
       notes?: string
       rubric?: any
     },
-  ) => api.put<Proposal>(proxyUrl(`/api/proposals/${id}/review`), data),
-  delete: (id: string) => api.delete(proxyUrl(`/api/proposals/${id}`)),
+  ) =>
+    api.put<Proposal>(
+      proxyUrl(`/api/proposals/${cleanPathToken(id)}/review`),
+      data,
+    ),
+  delete: (id: string) =>
+    api.delete(proxyUrl(`/api/proposals/${cleanPathToken(id)}`)),
   exportPdf: (id: string) =>
-    api.get(proxyUrl(`/api/proposals/${id}/export/pdf`), {
+    api.get(proxyUrl(`/api/proposals/${cleanPathToken(id)}/export/pdf`), {
       responseType: 'blob',
     }),
   exportDocx: (id: string) =>
-    api.get(proxyUrl(`/api/proposals/${id}/export-docx`), {
+    api.get(proxyUrl(`/api/proposals/${cleanPathToken(id)}/export-docx`), {
       responseType: 'blob',
     }),
 }
@@ -451,35 +468,57 @@ export const canvaApi = {
   getDataset: (brandTemplateId: string) =>
     api.get(
       proxyUrl(
-        `/api/integrations/canva/brand-templates/${brandTemplateId}/dataset`,
+        `/api/integrations/canva/brand-templates/${cleanPathToken(
+          brandTemplateId,
+        )}/dataset`,
       ),
     ),
   listCompanyMappings: () =>
     api.get(proxyUrl(`/api/integrations/canva/company-mappings`)),
   saveCompanyMapping: (companyId: string, data: any) =>
     api.put(
-      proxyUrl(`/api/integrations/canva/company-mappings/${companyId}`),
+      proxyUrl(
+        `/api/integrations/canva/company-mappings/${cleanPathToken(companyId)}`,
+      ),
       data,
     ),
   getCompanyLogoLink: (companyId: string) =>
-    api.get(proxyUrl(`/api/integrations/canva/companies/${companyId}/logo`)),
+    api.get(
+      proxyUrl(
+        `/api/integrations/canva/companies/${cleanPathToken(companyId)}/logo`,
+      ),
+    ),
   uploadCompanyLogoFromUrl: (companyId: string, url: string, name?: string) =>
     api.post(
       proxyUrl(
-        `/api/integrations/canva/companies/${companyId}/logo/upload-url`,
+        `/api/integrations/canva/companies/${cleanPathToken(
+          companyId,
+        )}/logo/upload-url`,
       ),
       { url, name },
     ),
   getTeamHeadshotLink: (memberId: string) =>
-    api.get(proxyUrl(`/api/integrations/canva/team/${memberId}/headshot`)),
+    api.get(
+      proxyUrl(
+        `/api/integrations/canva/team/${cleanPathToken(memberId)}/headshot`,
+      ),
+    ),
   uploadTeamHeadshotFromUrl: (memberId: string, url: string, name?: string) =>
     api.post(
-      proxyUrl(`/api/integrations/canva/team/${memberId}/headshot/upload-url`),
+      proxyUrl(
+        `/api/integrations/canva/team/${cleanPathToken(
+          memberId,
+        )}/headshot/upload-url`,
+      ),
       { url, name },
     ),
   createDesignFromProposal: (proposalId: string, opts?: { force?: boolean }) =>
     api.post(
-      proxyUrl(`/api/integrations/canva/proposals/${proposalId}/create-design`),
+      proxyUrl(
+        `/api/integrations/canva/proposals/${cleanPathToken(
+          proposalId,
+        )}/create-design`,
+      ),
       null,
       {
         params: opts?.force ? { force: 1 } : undefined,
@@ -487,11 +526,19 @@ export const canvaApi = {
     ),
   validateProposal: (proposalId: string) =>
     api.post(
-      proxyUrl(`/api/integrations/canva/proposals/${proposalId}/validate`),
+      proxyUrl(
+        `/api/integrations/canva/proposals/${cleanPathToken(
+          proposalId,
+        )}/validate`,
+      ),
     ),
   exportProposalPdf: (proposalId: string) =>
     api.get(
-      proxyUrl(`/api/integrations/canva/proposals/${proposalId}/export-pdf`),
+      proxyUrl(
+        `/api/integrations/canva/proposals/${cleanPathToken(
+          proposalId,
+        )}/export-pdf`,
+      ),
       {
         responseType: 'blob',
       },
@@ -502,13 +549,17 @@ export const canvaApi = {
 export const templateApi = {
   // Backend routes are defined with a trailing slash; avoid 307 redirects.
   list: () => api.get<{ data: Template[] }>(proxyUrl('/api/templates/')),
-  get: (id: string) => api.get(proxyUrl(`/api/templates/${id}`)),
+  get: (id: string) =>
+    api.get(proxyUrl(`/api/templates/${cleanPathToken(id)}`)),
   create: (data: any) => api.post(proxyUrl('/api/templates/'), data),
   update: (id: string, data: any) =>
-    api.put(proxyUrl(`/api/templates/${id}`), data),
-  delete: (id: string) => api.delete(proxyUrl(`/api/templates/${id}`)),
+    api.put(proxyUrl(`/api/templates/${cleanPathToken(id)}`), data),
+  delete: (id: string) =>
+    api.delete(proxyUrl(`/api/templates/${cleanPathToken(id)}`)),
   preview: (id: string, rfpData?: any) =>
-    api.get(proxyUrl(`/api/templates/${id}/preview`), { params: rfpData }),
+    api.get(proxyUrl(`/api/templates/${cleanPathToken(id)}/preview`), {
+      params: rfpData,
+    }),
 }
 
 // Content API calls
@@ -516,20 +567,28 @@ export const contentApi = {
   getCompany: () => api.get(proxyUrl('/api/content/company')),
   getCompanies: () => api.get(proxyUrl('/api/content/companies')),
   getCompanyById: (companyId: string) =>
-    api.get(proxyUrl(`/api/content/companies/${companyId}`)),
+    api.get(proxyUrl(`/api/content/companies/${cleanPathToken(companyId)}`)),
   regenerateCompanyCapabilities: (companyId: string) =>
     api.post(
-      proxyUrl(`/api/content/companies/${companyId}/capabilities/regenerate`),
+      proxyUrl(
+        `/api/content/companies/${cleanPathToken(
+          companyId,
+        )}/capabilities/regenerate`,
+      ),
     ),
   createCompany: (data: any) =>
     api.post(proxyUrl('/api/content/companies'), data),
   updateCompany: (data: any) => api.put(proxyUrl('/api/content/company'), data),
   updateCompanyById: (companyId: string, data: any) =>
-    api.put(proxyUrl(`/api/content/companies/${companyId}`), data),
+    api.put(
+      proxyUrl(`/api/content/companies/${cleanPathToken(companyId)}`),
+      data,
+    ),
   deleteCompany: (companyId: string) =>
-    api.delete(proxyUrl(`/api/content/companies/${companyId}`)),
+    api.delete(proxyUrl(`/api/content/companies/${cleanPathToken(companyId)}`)),
   getTeam: () => api.get(proxyUrl('/api/content/team')),
-  getTeamMember: (id: string) => api.get(proxyUrl(`/api/content/team/${id}`)),
+  getTeamMember: (id: string) =>
+    api.get(proxyUrl(`/api/content/team/${cleanPathToken(id)}`)),
   presignTeamHeadshotUpload: (data: {
     fileName: string
     contentType: string
@@ -538,9 +597,9 @@ export const contentApi = {
   createTeamMember: (data: any) =>
     api.post(proxyUrl('/api/content/team'), data),
   updateTeamMember: (memberId: string, data: any) =>
-    api.put(proxyUrl(`/api/content/team/${memberId}`), data),
+    api.put(proxyUrl(`/api/content/team/${cleanPathToken(memberId)}`), data),
   deleteTeamMember: (memberId: string) =>
-    api.delete(proxyUrl(`/api/content/team/${memberId}`)),
+    api.delete(proxyUrl(`/api/content/team/${cleanPathToken(memberId)}`)),
   getProjects: (params?: {
     companyId?: string
     projectType?: string
@@ -548,13 +607,13 @@ export const contentApi = {
     count?: number
   }) => api.get(proxyUrl('/api/content/projects'), { params }),
   getProjectById: (id: string) =>
-    api.get(proxyUrl(`/api/content/projects/${id}`)),
+    api.get(proxyUrl(`/api/content/projects/${cleanPathToken(id)}`)),
   createProject: (data: any) =>
     api.post(proxyUrl('/api/content/projects'), data),
   updateProject: (id: string, data: any) =>
-    api.put(proxyUrl(`/api/content/projects/${id}`), data),
+    api.put(proxyUrl(`/api/content/projects/${cleanPathToken(id)}`), data),
   deleteProject: (id: string) =>
-    api.delete(proxyUrl(`/api/content/projects/${id}`)),
+    api.delete(proxyUrl(`/api/content/projects/${cleanPathToken(id)}`)),
   getReferences: (params?: {
     projectType?: string
     companyId?: string
@@ -568,13 +627,13 @@ export const contentApi = {
       },
     }),
   getReferenceById: (id: string) =>
-    api.get(proxyUrl(`/api/content/references/${id}`)),
+    api.get(proxyUrl(`/api/content/references/${cleanPathToken(id)}`)),
   createReference: (data: any) =>
     api.post(proxyUrl('/api/content/references'), data),
   updateReference: (id: string, data: any) =>
-    api.put(proxyUrl(`/api/content/references/${id}`), data),
+    api.put(proxyUrl(`/api/content/references/${cleanPathToken(id)}`), data),
   deleteReference: (id: string) =>
-    api.delete(proxyUrl(`/api/content/references/${id}`)),
+    api.delete(proxyUrl(`/api/content/references/${cleanPathToken(id)}`)),
 }
 
 // AI API calls
@@ -610,9 +669,10 @@ export const finderApi = {
     maxPeople?: number
     targetTitles?: string[]
   }) => api.post(proxyUrl('/api/finder/runs'), data),
-  getRun: (runId: string) => api.get(proxyUrl(`/api/finder/runs/${runId}`)),
+  getRun: (runId: string) =>
+    api.get(proxyUrl(`/api/finder/runs/${cleanPathToken(runId)}`)),
   listProfiles: (runId: string, limit: number = 200) =>
-    api.get(proxyUrl(`/api/finder/runs/${runId}/profiles`), {
+    api.get(proxyUrl(`/api/finder/runs/${cleanPathToken(runId)}/profiles`), {
       params: { limit },
     }),
   saveTopToRfp: (
@@ -623,7 +683,11 @@ export const finderApi = {
       mode?: 'merge' | 'overwrite'
       selected?: string[]
     },
-  ) => api.post(proxyUrl(`/api/finder/runs/${runId}/save-to-rfp`), data),
+  ) =>
+    api.post(
+      proxyUrl(`/api/finder/runs/${cleanPathToken(runId)}/save-to-rfp`),
+      data,
+    ),
 }
 
 export const profileApi = {
@@ -664,18 +728,20 @@ export const proposalApiPdf = {
         },
       },
     ),
-  get: (id: string) => api.get<Proposal>(proxyUrl(`/api/proposals/${id}`)),
+  get: (id: string) =>
+    api.get<Proposal>(proxyUrl(`/api/proposals/${cleanPathToken(id)}`)),
   update: (id: string, data: any) =>
-    api.put<Proposal>(proxyUrl(`/api/proposals/${id}`), data),
-  delete: (id: string) => api.delete(proxyUrl(`/api/proposals/${id}`)),
+    api.put<Proposal>(proxyUrl(`/api/proposals/${cleanPathToken(id)}`), data),
+  delete: (id: string) =>
+    api.delete(proxyUrl(`/api/proposals/${cleanPathToken(id)}`)),
 
   // ✅ FIXED ENDPOINT
   exportPdf: (id: string) =>
-    api.get(proxyUrl(`/api/proposals/${id}/export-pdf`), {
+    api.get(proxyUrl(`/api/proposals/${cleanPathToken(id)}/export-pdf`), {
       responseType: 'blob',
     }),
   exportDocx: (id: string) =>
-    api.get(proxyUrl(`/api/proposals/${id}/export-docx`), {
+    api.get(proxyUrl(`/api/proposals/${cleanPathToken(id)}/export-docx`), {
       responseType: 'blob',
     }),
 }

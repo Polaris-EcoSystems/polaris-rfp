@@ -589,8 +589,8 @@ export default function RFPDetailPage() {
     }
   }
 
-  // --- Single-page layout: collapsible sections + sticky TOC ---
-  type SectionId =
+  // --- Single-page layout: collapsible sections + TOC (includes non-collapsible anchors) ---
+  type CollapsibleSectionId =
     | 'suitability'
     | 'overview'
     | 'requirements'
@@ -601,30 +601,47 @@ export default function RFPDetailPage() {
     | 'proposals'
     | 'raw'
 
-  const sectionDefs: { id: SectionId; label: string; defaultOpen: boolean }[] =
-    useMemo(
-      () => [
-        { id: 'suitability', label: 'Suitability', defaultOpen: true },
-        { id: 'overview', label: 'Overview', defaultOpen: true },
-        { id: 'requirements', label: 'Key requirements', defaultOpen: true },
-        {
-          id: 'deliverables',
-          label: 'Deliverables & criteria',
-          defaultOpen: false,
-        },
-        { id: 'attachments', label: 'Attachments', defaultOpen: false },
-        { id: 'buyers', label: 'Buyers', defaultOpen: false },
-        { id: 'generate', label: 'Generate proposal', defaultOpen: false },
-        { id: 'proposals', label: 'Proposals', defaultOpen: false },
-        { id: 'raw', label: 'Raw / extracted text', defaultOpen: false },
-      ],
-      [],
-    )
+  type TocSectionId = 'bid-review' | CollapsibleSectionId
 
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>(
-    () => Object.fromEntries(sectionDefs.map((s) => [s.id, s.defaultOpen])),
+  const collapsibleSectionDefs: {
+    id: CollapsibleSectionId
+    label: string
+    defaultOpen: boolean
+  }[] = useMemo(
+    () => [
+      { id: 'suitability', label: 'Suitability', defaultOpen: true },
+      { id: 'overview', label: 'Overview', defaultOpen: true },
+      { id: 'requirements', label: 'Key requirements', defaultOpen: true },
+      {
+        id: 'deliverables',
+        label: 'Deliverables & criteria',
+        defaultOpen: false,
+      },
+      { id: 'attachments', label: 'Attachments', defaultOpen: false },
+      { id: 'buyers', label: 'Buyers', defaultOpen: false },
+      { id: 'generate', label: 'Generate proposal', defaultOpen: false },
+      { id: 'proposals', label: 'Proposals', defaultOpen: false },
+      { id: 'raw', label: 'Raw / extracted text', defaultOpen: false },
+    ],
+    [],
   )
-  const [activeSection, setActiveSection] = useState<SectionId>('overview')
+
+  const tocSectionDefs: { id: TocSectionId; label: string }[] = useMemo(() => {
+    return [
+      { id: 'bid-review', label: 'Bid / No-bid review' },
+      ...collapsibleSectionDefs.map((s) => ({ id: s.id, label: s.label })),
+    ]
+  }, [collapsibleSectionDefs])
+
+  const [openSections, setOpenSections] = useState<
+    Record<CollapsibleSectionId, boolean>
+  >(
+    () =>
+      Object.fromEntries(
+        collapsibleSectionDefs.map((s) => [s.id, s.defaultOpen]),
+      ) as Record<CollapsibleSectionId, boolean>,
+  )
+  const [activeSection, setActiveSection] = useState<TocSectionId>('overview')
 
   const [templatesLoading, setTemplatesLoading] = useState(false)
   const [companiesLoading, setCompaniesLoading] = useState(false)
@@ -689,7 +706,7 @@ export default function RFPDetailPage() {
     }
   }
 
-  const setSectionOpen = (sid: SectionId, nextOpen: boolean) => {
+  const setSectionOpen = (sid: CollapsibleSectionId, nextOpen: boolean) => {
     setOpenSections((prev) => ({ ...prev, [sid]: nextOpen }))
     if (!nextOpen) return
     // Progressive loads
@@ -704,7 +721,9 @@ export default function RFPDetailPage() {
 
   const setAllSectionsOpen = (open: boolean) => {
     setOpenSections(
-      Object.fromEntries(sectionDefs.map((s) => [s.id, Boolean(open)])),
+      Object.fromEntries(
+        collapsibleSectionDefs.map((s) => [s.id, Boolean(open)]),
+      ) as Record<CollapsibleSectionId, boolean>,
     )
     if (open) {
       void ensureTemplatesLoaded()
@@ -726,8 +745,11 @@ export default function RFPDetailPage() {
       if (!raw) return
       const parsed = JSON.parse(raw)
       if (!parsed || typeof parsed !== 'object') return
-      const next: Record<string, boolean> = {}
-      sectionDefs.forEach((s) => {
+      const next: Record<CollapsibleSectionId, boolean> = {} as Record<
+        CollapsibleSectionId,
+        boolean
+      >
+      collapsibleSectionDefs.forEach((s) => {
         const v = (parsed as any)[s.id]
         next[s.id] = typeof v === 'boolean' ? v : s.defaultOpen
       })
@@ -735,7 +757,7 @@ export default function RFPDetailPage() {
     } catch (_e) {
       // ignore
     }
-  }, [openSectionsStorageKey, sectionDefs])
+  }, [openSectionsStorageKey, collapsibleSectionDefs])
 
   useEffect(() => {
     // Persist section open/close state per-RFP.
@@ -753,7 +775,7 @@ export default function RFPDetailPage() {
   useEffect(() => {
     // Track which section is currently in view for the sticky TOC highlight.
     const els: HTMLElement[] = []
-    sectionDefs.forEach((s) => {
+    tocSectionDefs.forEach((s) => {
       const el = document.getElementById(s.id)
       if (el) els.push(el)
     })
@@ -768,7 +790,7 @@ export default function RFPDetailPage() {
               (a.boundingClientRect.top || 0) - (b.boundingClientRect.top || 0),
           )
         const top = visible[0]
-        if (top?.target?.id) setActiveSection(top.target.id as SectionId)
+        if (top?.target?.id) setActiveSection(top.target.id as TocSectionId)
       },
       {
         root: null,
@@ -780,7 +802,7 @@ export default function RFPDetailPage() {
 
     els.forEach((el) => observer.observe(el))
     return () => observer.disconnect()
-  }, [sectionDefs, rfp?._id])
+  }, [tocSectionDefs, rfp?._id])
 
   useEffect(() => {
     // For checklist accuracy, preload proposals when this is a bid.
@@ -793,8 +815,8 @@ export default function RFPDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, rfp?._id])
 
-  const scrollToSection = (sid: SectionId) => {
-    setSectionOpen(sid, true)
+  const scrollToSection = (sid: TocSectionId) => {
+    if (sid !== 'bid-review') setSectionOpen(sid, true)
     const el = document.getElementById(sid)
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
@@ -849,14 +871,14 @@ export default function RFPDetailPage() {
     children,
     rightMeta,
   }: {
-    sid: SectionId
+    sid: CollapsibleSectionId
     title: string
     children: ReactNode
     rightMeta?: ReactNode
   }) => {
     const isOpen = Boolean(openSections[sid])
     return (
-      <section id={sid} className="scroll-mt-24">
+      <section id={sid} className="scroll-mt-32 lg:scroll-mt-24">
         <details
           open={isOpen}
           onToggle={(e) =>
@@ -1175,8 +1197,8 @@ export default function RFPDetailPage() {
   }
 
   return (
-    <div>
-      <div className="mb-4">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <PipelineBreadcrumbs
           items={[
             { label: 'Pipeline', href: '/pipeline' },
@@ -1184,1364 +1206,1424 @@ export default function RFPDetailPage() {
             { label: rfp.title || 'RFP' },
           ]}
         />
+        <div className="flex items-center gap-2">
+          {nextStep ? (
+            <button
+              type="button"
+              onClick={nextStep.onClick}
+              className="lg:hidden inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg text-white bg-primary-600 hover:bg-primary-700"
+            >
+              {nextStep.label}
+            </button>
+          ) : null}
+          <Link
+            href={`/linkedin-finder?rfpId=${encodeURIComponent(rfp._id)}`}
+            className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg text-white bg-slate-900 hover:bg-slate-800"
+          >
+            <UserGroupIcon className="h-5 w-5 mr-2" />
+            Run Buyer Profiles
+          </Link>
+        </div>
       </div>
       {/* Disqualified Banner */}
       {rfp.isDisqualified && (
-        <div className="bg-red-50 border-l-4 border-red-400 p-4">
-          <div className="flex">
-            <div className="flex-shrink-0">
-              <svg
-                className="h-5 w-5 text-red-400"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 20 20"
-                fill="currentColor"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
-                  clipRule="evenodd"
-                />
-              </svg>
-            </div>
-            <div className="ml-3">
-              <p className="text-sm text-red-700">
-                <span className="font-medium">Disqualified:</span> One or more
-                critical deadlines for this RFP have passed.
-              </p>
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 h-2.5 w-2.5 rounded-full bg-red-500" />
+            <div className="text-sm text-red-800">
+              <span className="font-semibold">Disqualified:</span> One or more
+              critical deadlines for this RFP have passed.
             </div>
           </div>
         </div>
       )}
 
-      {/* Header */}
-      <div className="bg-white shadow">
-        <div className="px-4 sm:px-6 lg:max-w-6xl lg:mx-auto lg:px-8">
-          <div className="py-6 md:flex md:items-center md:justify-between lg:border-t lg:border-gray-200">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center">
-                <DocumentTextIcon className="h-8 w-8 text-gray-400 mr-3" />
-                <div>
+      {/* Hero */}
+      <div className="rounded-2xl border border-gray-200 bg-white/80 backdrop-blur shadow-sm">
+        <div className="p-5 sm:p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 rounded-xl bg-primary-50 p-2 ring-1 ring-primary-100">
+                  <DocumentTextIcon className="h-6 w-6 text-primary-700" />
+                </div>
+                <div className="min-w-0">
                   <h1
-                    className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate"
+                    className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900"
                     title={rfp.title}
                   >
-                    {trimTitle(rfp.title, 80)}
+                    {rfp.title || 'RFP'}
                   </h1>
-                  <div className="mt-1 flex items-center text-sm text-gray-500">
-                    <BuildingOfficeIcon className="h-4 w-4 mr-1" />
-                    {rfp.clientName}
-                    <span className="mx-2">•</span>
-                    <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full">
-                      {rfp.projectType.replace('_', ' ')}
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-gray-600">
+                    <span className="inline-flex items-center gap-1.5">
+                      <BuildingOfficeIcon className="h-4 w-4 text-gray-400" />
+                      <span className="font-medium text-gray-900">
+                        {rfp.clientName || 'Unknown client'}
+                      </span>
+                    </span>
+                    <span className="text-gray-300">•</span>
+                    <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-100">
+                      {String(rfp.projectType || '').replace(/_/g, ' ') ||
+                        'Unknown type'}
+                    </span>
+                    <span className="text-gray-300">•</span>
+                    <span className="inline-flex items-center gap-1.5">
+                      <span className="text-gray-500">ID</span>
+                      <span className="font-mono text-xs text-gray-900">
+                        {rfp._id}
+                      </span>
                     </span>
                   </div>
                 </div>
               </div>
+
+              <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl border border-gray-200 bg-white p-4">
+                  <div className="flex items-center gap-2">
+                    <CurrencyDollarIcon className="h-5 w-5 text-emerald-600" />
+                    <div>
+                      <div className="text-xs font-semibold text-gray-500">
+                        Budget range
+                      </div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        {rfp.budgetRange || 'Not specified'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-gray-200 bg-white p-4">
+                  <div className="flex items-center gap-2">
+                    <CalendarDaysIcon className="h-5 w-5 text-rose-600" />
+                    <div>
+                      <div className="text-xs font-semibold text-gray-500">
+                        Submission deadline
+                      </div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        {rfp.submissionDeadline
+                          ? new Date(rfp.submissionDeadline).toLocaleDateString(
+                              'en-US',
+                            )
+                          : 'Not specified'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-gray-200 bg-white p-4">
+                  <div className="flex items-center gap-2">
+                    <ClockIcon className="h-5 w-5 text-amber-600" />
+                    <div>
+                      <div className="text-xs font-semibold text-gray-500">
+                        Timeline
+                      </div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        {rfp.timeline || 'TBD'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-gray-200 bg-white p-4">
+                  <div className="flex items-center gap-2">
+                    <DocumentTextIcon className="h-5 w-5 text-primary-600" />
+                    <div>
+                      <div className="text-xs font-semibold text-gray-500">
+                        Fit score
+                      </div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        {typeof (rfp as any)?.fitScore === 'number'
+                          ? String((rfp as any).fitScore)
+                          : '—'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="mt-4 flex md:mt-0 md:ml-4">
-              <Link
-                href={`/linkedin-finder?rfpId=${encodeURIComponent(rfp._id)}`}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+
+            <div className="flex flex-col sm:flex-row lg:flex-col gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => scrollToSection('bid-review')}
+                className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50"
               >
-                <UserGroupIcon className="h-5 w-5 mr-2" />
-                Run Buyer Profiles
-              </Link>
+                Make bid decision
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollToSection('requirements')}
+                className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50"
+              >
+                Review requirements
+              </button>
             </div>
           </div>
         </div>
       </div>
 
+      {/* Mobile jump bar (offset for global header) */}
+      <div className="lg:hidden sticky top-16 z-30 -mx-4 sm:-mx-6 bg-white/90 backdrop-blur border-y border-gray-200 px-4 sm:px-6 py-3">
+        <div className="flex items-center gap-2">
+          <select
+            value={activeSection}
+            onChange={(e) => scrollToSection(e.target.value as TocSectionId)}
+            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 bg-white text-sm"
+            aria-label="Jump to section"
+          >
+            {tocSectionDefs.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setAllSectionsOpen(true)}
+            className="inline-flex items-center justify-center px-3 py-2 text-sm font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
+          >
+            Open
+          </button>
+          <button
+            type="button"
+            onClick={() => setAllSectionsOpen(false)}
+            className="inline-flex items-center justify-center px-3 py-2 text-sm font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
       {/* Content */}
-      <div className="mt-8">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="lg:grid lg:grid-cols-12 lg:gap-8">
-            {/* Sticky TOC */}
-            <aside className="hidden lg:block lg:col-span-3">
-              <div className="sticky top-6">
-                <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-                  <div className="px-4 py-4 border-b border-gray-100">
-                    <div className="text-sm font-semibold text-gray-900">
-                      On this page
-                    </div>
-                    <div className="mt-1 text-xs text-gray-500">
-                      Review suitability, then take action
-                    </div>
-                  </div>
-                  <div className="px-3 py-3 border-b border-gray-100 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setAllSectionsOpen(true)}
-                      className="flex-1 inline-flex items-center justify-center px-3 py-2 text-xs font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                    >
-                      Open all
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setAllSectionsOpen(false)}
-                      className="flex-1 inline-flex items-center justify-center px-3 py-2 text-xs font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                    >
-                      Collapse all
-                    </button>
-                  </div>
-                  <nav className="px-2 py-2">
-                    {sectionDefs.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        onClick={() => scrollToSection(s.id)}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                          activeSection === s.id
-                            ? 'bg-primary-50 text-primary-700 font-semibold'
-                            : 'text-gray-700 hover:bg-gray-50'
-                        }`}
-                      >
-                        {s.label}
-                      </button>
-                    ))}
-                  </nav>
+      <div className="lg:grid lg:grid-cols-12 lg:gap-8 items-start">
+        {/* Sticky TOC */}
+        <aside className="hidden lg:block lg:col-span-3 lg:order-1">
+          <div className="sticky top-24 space-y-3">
+            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+              <div className="px-4 py-4 border-b border-gray-100">
+                <div className="text-sm font-semibold text-gray-900">
+                  On this page
                 </div>
-                {supportingError ? (
-                  <div className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
-                    {supportingError}
+                <div className="mt-1 text-xs text-gray-500">
+                  Review suitability, then take action
+                </div>
+              </div>
+              <div className="px-3 py-3 border-b border-gray-100 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAllSectionsOpen(true)}
+                  className="flex-1 inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
+                >
+                  Open all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAllSectionsOpen(false)}
+                  className="flex-1 inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
+                >
+                  Collapse all
+                </button>
+              </div>
+              <nav className="px-2 py-2 max-h-[calc(100vh-16rem)] overflow-auto custom-scrollbar">
+                {tocSectionDefs.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => scrollToSection(s.id)}
+                    className={`w-full text-left px-3 py-2 rounded-xl text-sm transition-colors ${
+                      activeSection === s.id
+                        ? 'bg-primary-50 text-primary-700 font-semibold'
+                        : 'text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </nav>
+            </div>
+            {supportingError ? (
+              <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl p-3">
+                {supportingError}
+              </div>
+            ) : null}
+          </div>
+        </aside>
+
+        {/* Right rail: Next steps */}
+        <aside className="lg:col-span-3 lg:order-3 order-1 space-y-4">
+          <div className="lg:sticky lg:top-24 space-y-4">
+            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold text-gray-900">
+                    Next steps
                   </div>
+                  <div className="mt-1 text-xs text-gray-600">
+                    {checklistDone}/{checklist.length} checklist items complete
+                  </div>
+                </div>
+                {nextStep ? (
+                  <button
+                    type="button"
+                    onClick={nextStep.onClick}
+                    className="inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg text-white bg-primary-600 hover:bg-primary-700"
+                  >
+                    {nextStep.label}
+                  </button>
                 ) : null}
               </div>
-            </aside>
+              <div className="px-5 py-4">
+                {checklist.length === 0 ? (
+                  <div className="text-sm text-gray-500">No checklist.</div>
+                ) : (
+                  <ul className="space-y-2">
+                    {checklist.map((it) => (
+                      <li
+                        key={it.id}
+                        className="flex items-start justify-between gap-3 rounded-xl border border-gray-200 bg-white p-3"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-gray-900">
+                            {it.label}
+                          </div>
+                          {it.hint ? (
+                            <div className="mt-0.5 text-xs text-gray-600 line-clamp-2">
+                              {it.hint}
+                            </div>
+                          ) : null}
+                        </div>
+                        <span
+                          className={`shrink-0 px-2 py-1 rounded-full text-xs font-semibold ${
+                            it.done
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-gray-100 text-gray-700'
+                          }`}
+                        >
+                          {it.done ? 'Done' : 'Pending'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>
+        </aside>
 
-            <main className="lg:col-span-9 space-y-4">
-              {/* Next-step checklist */}
-              <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
-                <div className="px-5 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">
-                      Next step
-                    </div>
-                    <div className="mt-1 text-xs text-gray-600">
-                      {checklistDone}/{checklist.length} checklist items
-                      complete
-                    </div>
+        {/* Main column */}
+        <main className="lg:col-span-6 lg:order-2 order-2 space-y-6">
+          {/* Bid / no-bid panel */}
+          <div
+            id="bid-review"
+            className="rounded-2xl border border-gray-200 bg-white shadow-sm scroll-mt-32 lg:scroll-mt-24"
+          >
+            <div className="px-5 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <div className="text-sm font-semibold text-gray-900">
+                  Bid / No-bid review
+                </div>
+                <span
+                  className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${decisionPill(
+                    bidDecision,
+                  )}`}
+                >
+                  {decisionLabel(bidDecision)}
+                </span>
+                {(rfp as any)?.review?.updatedAt ? (
+                  <span className="text-xs text-gray-500">
+                    Updated {String((rfp as any).review.updatedAt).slice(0, 10)}
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <select
+                  value={bidDecision}
+                  onChange={(e) =>
+                    setBidDecision(e.target.value as BidDecision)
+                  }
+                  className="border border-gray-300 rounded-md px-3 py-2 bg-white text-sm"
+                  aria-label="Bid decision"
+                >
+                  <option value="">Unreviewed</option>
+                  <option value="bid">Bid</option>
+                  <option value="maybe">Maybe</option>
+                  <option value="no_bid">No-bid</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={saveBidReview}
+                  disabled={!bidDirty || bidSaving}
+                  className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                >
+                  {bidSaving ? 'Saving…' : bidDirty ? 'Save' : 'Saved'}
+                </button>
+              </div>
+            </div>
+
+            <div className="px-5 py-4">
+              {bidBlockers.length > 0 ? (
+                <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                  <div className="text-sm font-semibold text-amber-900">
+                    Potential blockers
                   </div>
-                  {nextStep ? (
-                    <button
-                      type="button"
-                      onClick={nextStep.onClick}
-                      className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
-                    >
-                      {nextStep.label}
-                    </button>
+                  <ul className="mt-2 text-sm text-amber-800 list-disc pl-5 space-y-1">
+                    {bidBlockers.map((b, idx) => (
+                      <li key={idx}>{b}</li>
+                    ))}
+                  </ul>
+                  {bidBlockersList.length === 0 ? (
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        onClick={initBlockersFromDetected}
+                        className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-amber-300 text-amber-900 bg-white hover:bg-amber-50"
+                      >
+                        Initialize checklist from these
+                      </button>
+                    </div>
                   ) : null}
                 </div>
-                <div className="px-5 py-4">
-                  {checklist.length === 0 ? (
-                    <div className="text-sm text-gray-500">No checklist.</div>
+              ) : (
+                <div className="mb-4 text-sm text-gray-600">
+                  No obvious blockers detected from deadlines/budget.
+                </div>
+              )}
+
+              <div className="mb-4">
+                <div className="text-sm font-semibold text-gray-900">
+                  Blockers checklist
+                </div>
+                <div className="mt-2 space-y-2">
+                  {bidBlockersList.length === 0 ? (
+                    <div className="text-sm text-gray-500">
+                      No blockers tracked yet.
+                    </div>
                   ) : (
-                    <ul className="space-y-2">
-                      {checklist.map((it) => (
-                        <li
-                          key={it.id}
-                          className="flex items-start justify-between gap-3 rounded-lg border border-gray-200 bg-white p-3"
+                    bidBlockersList.map((b) => (
+                      <div
+                        key={b.id}
+                        className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white p-3"
+                      >
+                        <select
+                          value={b.status}
+                          onChange={(e) => {
+                            const v = e.target.value as
+                              | 'open'
+                              | 'resolved'
+                              | 'waived'
+                            setBidBlockersList((prev) =>
+                              prev.map((x) =>
+                                x.id === b.id ? { ...x, status: v } : x,
+                              ),
+                            )
+                          }}
+                          className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white"
+                          aria-label="Blocker status"
                         >
-                          <div>
-                            <div className="text-sm font-semibold text-gray-900">
-                              {it.label}
-                            </div>
-                            {it.hint ? (
-                              <div className="mt-0.5 text-xs text-gray-600">
-                                {it.hint}
-                              </div>
-                            ) : null}
-                          </div>
-                          <span
-                            className={`px-2 py-1 rounded-full text-xs font-semibold ${
-                              it.done
-                                ? 'bg-green-100 text-green-800'
-                                : 'bg-gray-100 text-gray-700'
-                            }`}
-                          >
-                            {it.done ? 'Done' : 'Pending'}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              </div>
-
-              {/* Mobile TOC */}
-              <div className="lg:hidden sticky top-0 z-10 -mx-4 sm:-mx-6 bg-white/90 backdrop-blur border-b border-gray-200 px-4 sm:px-6 py-3">
-                <div className="flex items-center gap-2">
-                  <select
-                    value={activeSection}
-                    onChange={(e) =>
-                      scrollToSection(e.target.value as SectionId)
-                    }
-                    className="flex-1 border border-gray-300 rounded-md px-3 py-2 bg-white text-sm"
-                    aria-label="Jump to section"
-                  >
-                    {sectionDefs.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => setAllSectionsOpen(true)}
-                    className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                  >
-                    Open
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAllSectionsOpen(false)}
-                    className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-
-              {/* Bid / no-bid panel */}
-              <div
-                id="bid-review"
-                className="rounded-xl border border-gray-200 bg-white shadow-sm"
-              >
-                <div className="px-5 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <div className="text-sm font-semibold text-gray-900">
-                      Bid / No-bid review
-                    </div>
-                    <span
-                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${decisionPill(
-                        bidDecision,
-                      )}`}
-                    >
-                      {decisionLabel(bidDecision)}
-                    </span>
-                    {(rfp as any)?.review?.updatedAt ? (
-                      <span className="text-xs text-gray-500">
-                        Updated{' '}
-                        {String((rfp as any).review.updatedAt).slice(0, 10)}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={bidDecision}
-                      onChange={(e) =>
-                        setBidDecision(e.target.value as BidDecision)
-                      }
-                      className="border border-gray-300 rounded-md px-3 py-2 bg-white text-sm"
-                      aria-label="Bid decision"
-                    >
-                      <option value="">Unreviewed</option>
-                      <option value="bid">Bid</option>
-                      <option value="maybe">Maybe</option>
-                      <option value="no_bid">No-bid</option>
-                    </select>
-                    <button
-                      type="button"
-                      onClick={saveBidReview}
-                      disabled={!bidDirty || bidSaving}
-                      className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                    >
-                      {bidSaving ? 'Saving…' : bidDirty ? 'Save' : 'Saved'}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="px-5 py-4">
-                  {bidBlockers.length > 0 ? (
-                    <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
-                      <div className="text-sm font-semibold text-amber-900">
-                        Potential blockers
-                      </div>
-                      <ul className="mt-2 text-sm text-amber-800 list-disc pl-5 space-y-1">
-                        {bidBlockers.map((b, idx) => (
-                          <li key={idx}>{b}</li>
-                        ))}
-                      </ul>
-                      {bidBlockersList.length === 0 ? (
-                        <div className="mt-3">
-                          <button
-                            type="button"
-                            onClick={initBlockersFromDetected}
-                            className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-amber-300 text-amber-900 bg-white hover:bg-amber-50"
-                          >
-                            Initialize checklist from these
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <div className="mb-4 text-sm text-gray-600">
-                      No obvious blockers detected from deadlines/budget.
-                    </div>
-                  )}
-
-                  <div className="mb-4">
-                    <div className="text-sm font-semibold text-gray-900">
-                      Blockers checklist
-                    </div>
-                    <div className="mt-2 space-y-2">
-                      {bidBlockersList.length === 0 ? (
-                        <div className="text-sm text-gray-500">
-                          No blockers tracked yet.
-                        </div>
-                      ) : (
-                        bidBlockersList.map((b) => (
-                          <div
-                            key={b.id}
-                            className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white p-3"
-                          >
-                            <select
-                              value={b.status}
-                              onChange={(e) => {
-                                const v = e.target.value as
-                                  | 'open'
-                                  | 'resolved'
-                                  | 'waived'
-                                setBidBlockersList((prev) =>
-                                  prev.map((x) =>
-                                    x.id === b.id ? { ...x, status: v } : x,
-                                  ),
-                                )
-                              }}
-                              className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white"
-                              aria-label="Blocker status"
-                            >
-                              <option value="open">Open</option>
-                              <option value="resolved">Resolved</option>
-                              <option value="waived">Waived</option>
-                            </select>
-                            <input
-                              value={b.text}
-                              onChange={(e) => {
-                                const v = e.target.value
-                                setBidBlockersList((prev) =>
-                                  prev.map((x) =>
-                                    x.id === b.id ? { ...x, text: v } : x,
-                                  ),
-                                )
-                              }}
-                              className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm"
-                              placeholder="Blocker description"
-                            />
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setBidBlockersList((prev) =>
-                                  prev.filter((x) => x.id !== b.id),
-                                )
-                              }
-                              className="inline-flex items-center justify-center px-2 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                              title="Remove blocker"
-                            >
-                              <XMarkIcon className="h-4 w-4" />
-                            </button>
-                          </div>
-                        ))
-                      )}
-
-                      <div className="flex items-center gap-2">
+                          <option value="open">Open</option>
+                          <option value="resolved">Resolved</option>
+                          <option value="waived">Waived</option>
+                        </select>
                         <input
-                          value={newBlockerText}
-                          onChange={(e) => setNewBlockerText(e.target.value)}
+                          value={b.text}
+                          onChange={(e) => {
+                            const v = e.target.value
+                            setBidBlockersList((prev) =>
+                              prev.map((x) =>
+                                x.id === b.id ? { ...x, text: v } : x,
+                              ),
+                            )
+                          }}
                           className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm"
-                          placeholder="Add a blocker…"
+                          placeholder="Blocker description"
                         />
                         <button
                           type="button"
-                          onClick={addBlocker}
-                          className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                          onClick={() =>
+                            setBidBlockersList((prev) =>
+                              prev.filter((x) => x.id !== b.id),
+                            )
+                          }
+                          className="inline-flex items-center justify-center px-2 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                          title="Remove blocker"
                         >
-                          Add
+                          <XMarkIcon className="h-4 w-4" />
                         </button>
                       </div>
-                    </div>
-                  </div>
+                    ))
+                  )}
 
-                  <div className="text-sm font-semibold text-gray-900">
-                    Reasons (quick tags)
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {[
-                      'Strong fit',
-                      'Strategic client',
-                      'Budget too low',
-                      'Timeline too tight',
-                      'Outside scope',
-                      'Missing info',
-                      'Competitive / price-sensitive',
-                    ].map((r) => {
-                      const on = bidReasons.includes(r)
-                      return (
-                        <button
-                          key={r}
-                          type="button"
-                          onClick={() => toggleBidReason(r)}
-                          className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
-                            on
-                              ? 'bg-primary-50 border-primary-200 text-primary-800'
-                              : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-                          }`}
-                        >
-                          {r}
-                        </button>
-                      )
-                    })}
-                  </div>
-
-                  <div className="mt-4">
-                    <label className="block text-sm font-semibold text-gray-900">
-                      Notes
-                    </label>
-                    <textarea
-                      value={bidNotes}
-                      onChange={(e) => setBidNotes(e.target.value)}
-                      rows={4}
-                      className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                      placeholder="What matters for suitability? Key risks? Who needs to be involved? What would make this a 'yes'?"
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={newBlockerText}
+                      onChange={(e) => setNewBlockerText(e.target.value)}
+                      className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="Add a blocker…"
                     />
+                    <button
+                      type="button"
+                      onClick={addBlocker}
+                      className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                    >
+                      Add
+                    </button>
                   </div>
                 </div>
               </div>
 
-              <Section
-                sid="suitability"
-                title="Suitability"
-                rightMeta={
-                  typeof (rfp as any)?.fitScore === 'number'
-                    ? `Fit ${(rfp as any).fitScore}`
-                    : undefined
-                }
-              >
-                {Array.isArray(rfp.dateWarnings) &&
-                  rfp.dateWarnings.length > 0 && (
-                    <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
-                      <div className="text-sm font-semibold text-amber-900">
-                        Timing / sanity warnings
-                      </div>
-                      <ul className="mt-2 text-sm text-amber-800 list-disc pl-5 space-y-1">
-                        {rfp.dateWarnings.slice(0, 10).map((w, idx) => (
+              <div className="text-sm font-semibold text-gray-900">
+                Reasons (quick tags)
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {[
+                  'Strong fit',
+                  'Strategic client',
+                  'Budget too low',
+                  'Timeline too tight',
+                  'Outside scope',
+                  'Missing info',
+                  'Competitive / price-sensitive',
+                ].map((r) => {
+                  const on = bidReasons.includes(r)
+                  return (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => toggleBidReason(r)}
+                      className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+                        on
+                          ? 'bg-primary-50 border-primary-200 text-primary-800'
+                          : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      {r}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="mt-4">
+                <label className="block text-sm font-semibold text-gray-900">
+                  Notes
+                </label>
+                <textarea
+                  value={bidNotes}
+                  onChange={(e) => setBidNotes(e.target.value)}
+                  rows={4}
+                  className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="What matters for suitability? Key risks? Who needs to be involved? What would make this a 'yes'?"
+                />
+              </div>
+            </div>
+          </div>
+
+          <Section
+            sid="suitability"
+            title="Suitability"
+            rightMeta={
+              typeof (rfp as any)?.fitScore === 'number'
+                ? `Fit ${(rfp as any).fitScore}`
+                : undefined
+            }
+          >
+            {Array.isArray(rfp.dateWarnings) && rfp.dateWarnings.length > 0 && (
+              <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                <div className="text-sm font-semibold text-amber-900">
+                  Timing / sanity warnings
+                </div>
+                <ul className="mt-2 text-sm text-amber-800 list-disc pl-5 space-y-1">
+                  {rfp.dateWarnings.slice(0, 10).map((w, idx) => (
+                    <li key={idx}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {typeof (rfp as any)?.fitScore === 'number' && (
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold text-slate-900">
+                    Buyer Profiles fit score
+                  </div>
+                  <div className="text-sm font-semibold text-slate-900">
+                    {(rfp as any).fitScore}
+                  </div>
+                </div>
+                {Array.isArray((rfp as any)?.fitReasons) &&
+                  (rfp as any).fitReasons.length > 0 && (
+                    <ul className="mt-2 text-sm text-slate-700 list-disc pl-5 space-y-1">
+                      {(rfp as any).fitReasons
+                        .slice(0, 12)
+                        .map((w: any, idx: any) => (
                           <li key={idx}>{w}</li>
                         ))}
-                      </ul>
-                    </div>
-                  )}
-
-                {typeof (rfp as any)?.fitScore === 'number' && (
-                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold text-slate-900">
-                        Buyer Profiles fit score
-                      </div>
-                      <div className="text-sm font-semibold text-slate-900">
-                        {(rfp as any).fitScore}
-                      </div>
-                    </div>
-                    {Array.isArray((rfp as any)?.fitReasons) &&
-                      (rfp as any).fitReasons.length > 0 && (
-                        <ul className="mt-2 text-sm text-slate-700 list-disc pl-5 space-y-1">
-                          {(rfp as any).fitReasons
-                            .slice(0, 12)
-                            .map((w: any, idx: any) => (
-                              <li key={idx}>{w}</li>
-                            ))}
-                        </ul>
-                      )}
-                  </div>
-                )}
-
-                {(rfp as any)?.rawText ? (
-                  <div className="mt-4 text-xs text-gray-500">
-                    Extracted text length:{' '}
-                    <span className="font-semibold">
-                      {String((rfp as any).rawText || '').length}
-                    </span>
-                    {typeof (rfp as any)?._analysis?.usedAi === 'boolean' ? (
-                      <>
-                        {' '}
-                        • AI:{' '}
-                        <span className="font-semibold">
-                          {(rfp as any)?._analysis?.usedAi ? 'on' : 'off'}
-                        </span>
-                      </>
-                    ) : null}
-                    {(rfp as any)?._analysis?.model ? (
-                      <>
-                        {' '}
-                        • Model:{' '}
-                        <span className="font-semibold">
-                          {(rfp as any)?._analysis?.model}
-                        </span>
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
-              </Section>
-
-              <Section sid="overview" title="Overview">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                    <div className="p-4">
-                      <div className="flex items-center">
-                        <CurrencyDollarIcon className="h-5 w-5 text-green-500" />
-                        <div className="ml-3">
-                          <div className="text-xs text-gray-500">
-                            Budget Range
-                          </div>
-                          <div className="text-sm font-semibold text-gray-900">
-                            {rfp.budgetRange || 'Not specified'}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                    <div className="p-4">
-                      <div className="flex items-center">
-                        <CalendarDaysIcon className="h-5 w-5 text-red-500" />
-                        <div className="ml-3">
-                          <div className="text-xs text-gray-500">
-                            Submission deadline
-                          </div>
-                          <div className="text-sm font-semibold text-gray-900">
-                            {rfp.submissionDeadline
-                              ? new Date(
-                                  rfp.submissionDeadline,
-                                ).toLocaleDateString('en-US')
-                              : 'Not specified'}
-                          </div>
-                          {rfp.submissionDeadline &&
-                            isDatePassed(rfp.submissionDeadline) && (
-                              <div className="text-xs font-medium text-red-600 mt-1">
-                                Deadline passed
-                              </div>
-                            )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                    <div className="p-4">
-                      <div className="flex items-center">
-                        <ClockIcon className="h-5 w-5 text-yellow-500" />
-                        <div className="ml-3">
-                          <div className="text-xs text-gray-500">Timeline</div>
-                          <div className="text-sm font-semibold text-gray-900">
-                            {rfp.timeline || 'To be determined'}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                    <div className="p-4">
-                      <div className="flex items-center">
-                        <DocumentTextIcon className="h-5 w-5 text-primary-500" />
-                        <div className="ml-3">
-                          <div className="text-xs text-gray-500">
-                            Questions deadline
-                          </div>
-                          <div className="text-sm font-semibold text-gray-900">
-                            {rfp.questionsDeadline
-                              ? new Date(
-                                  rfp.questionsDeadline,
-                                ).toLocaleDateString('en-US')
-                              : 'Not specified'}
-                          </div>
-                          {rfp.questionsDeadline &&
-                            isDatePassed(rfp.questionsDeadline) && (
-                              <div className="text-xs font-medium text-red-600 mt-1">
-                                Deadline passed
-                              </div>
-                            )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </Section>
-
-              <Section
-                sid="requirements"
-                title="Key requirements"
-                rightMeta={
-                  Array.isArray(rfp.keyRequirements)
-                    ? `${rfp.keyRequirements.length} items`
-                    : undefined
-                }
-              >
-                {rfp.keyRequirements && rfp.keyRequirements.length > 0 ? (
-                  <div>
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
-                      <div className="text-sm text-gray-600">
-                        Assess each requirement for suitability, then copy a
-                        compliance matrix for proposal work.
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={copyComplianceMatrix}
-                          className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                        >
-                          Copy compliance matrix
-                        </button>
-                        <button
-                          type="button"
-                          onClick={downloadComplianceCsv}
-                          className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                        >
-                          Download CSV
-                        </button>
-                        <button
-                          type="button"
-                          onClick={saveRequirements}
-                          disabled={reqSaving}
-                          className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                        >
-                          {reqSaving ? 'Saving…' : 'Save'}
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="mb-4 rounded-lg border border-gray-200 bg-white p-4">
-                      <div className="text-sm font-semibold text-gray-900">
-                        Auto-seed mapped proposal sections
-                      </div>
-                      <div className="mt-2 text-sm text-gray-600">
-                        Picks 1–2 likely proposal sections per requirement using
-                        a template’s section titles (only fills empty mappings).
-                      </div>
-                      <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
-                        <select
-                          value={seedTemplateId}
-                          onChange={(e) => setSeedTemplateId(e.target.value)}
-                          className="flex-1 border border-gray-300 rounded-md px-3 py-2 bg-white text-sm"
-                        >
-                          <option value="">
-                            {templates?.length
-                              ? 'Choose template (optional)'
-                              : 'Templates not loaded yet'}
-                          </option>
-                          {(templates || []).map((t) => (
-                            <option key={t.id} value={t.id}>
-                              {t.name} ({t.projectType})
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={autoseedMappedSections}
-                          disabled={seedingReqs}
-                          className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                        >
-                          {seedingReqs ? 'Seeding…' : 'Auto-seed'}
-                        </button>
-                        {!templates?.length ? (
-                          <button
-                            type="button"
-                            onClick={() => void ensureTemplatesLoaded()}
-                            className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                          >
-                            Load templates
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    <div className="space-y-3">
-                      {rfp.keyRequirements.slice(0, 40).map((req, idx) => {
-                        const text = String(req || '').trim()
-                        const a = reqAssessments[text] || {
-                          text,
-                          status: 'unknown' as ReqStatus,
-                          notes: '',
-                          mappedSections: [],
-                        }
-                        return (
-                          <div
-                            key={`${idx}-${text}`}
-                            className="rounded-lg border border-gray-200 bg-white p-4"
-                          >
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="flex items-start gap-3">
-                                <div className="mt-2 h-2 w-2 rounded-full bg-primary-600" />
-                                <div className="text-sm font-semibold text-gray-900">
-                                  {text}
-                                </div>
-                              </div>
-                              <select
-                                value={a.status}
-                                onChange={(e) =>
-                                  setReq(text, {
-                                    status: e.target.value as ReqStatus,
-                                  })
-                                }
-                                className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white"
-                                aria-label="Requirement assessment"
-                              >
-                                <option value="unknown">Unknown</option>
-                                <option value="ok">OK</option>
-                                <option value="risk">Risk</option>
-                                <option value="gap">Gap</option>
-                              </select>
-                            </div>
-
-                            <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
-                              <div>
-                                <label className="block text-xs font-semibold text-gray-700">
-                                  Notes
-                                </label>
-                                <textarea
-                                  value={a.notes}
-                                  onChange={(e) =>
-                                    setReq(text, { notes: e.target.value })
-                                  }
-                                  rows={3}
-                                  className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                                  placeholder="Why OK/risk/gap? What’s needed?"
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-xs font-semibold text-gray-700">
-                                  Proposal sections (comma-separated)
-                                </label>
-                                <input
-                                  value={(a.mappedSections || []).join(', ')}
-                                  onChange={(e) =>
-                                    setReq(text, {
-                                      mappedSections: String(
-                                        e.target.value || '',
-                                      )
-                                        .split(',')
-                                        .map((x) => x.trim())
-                                        .filter(Boolean)
-                                        .slice(0, 20),
-                                    })
-                                  }
-                                  className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                                  placeholder="e.g. Approach, Experience, Timeline"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-sm text-gray-500">
-                    No specific requirements identified.
-                  </div>
-                )}
-              </Section>
-
-              <Section sid="deliverables" title="Deliverables & criteria">
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">
-                      Expected deliverables
-                    </div>
-                    <div className="mt-2">
-                      {rfp.deliverables && rfp.deliverables.length > 0 ? (
-                        <ul className="space-y-2">
-                          {rfp.deliverables
-                            .slice(0, 12)
-                            .map((deliverable, idx) => (
-                              <li key={idx} className="flex items-start gap-3">
-                                <div className="mt-2 h-2 w-2 rounded-full bg-green-600" />
-                                <div className="text-sm text-gray-800">
-                                  {deliverable}
-                                </div>
-                              </li>
-                            ))}
-                        </ul>
-                      ) : (
-                        <div className="text-sm text-gray-500">
-                          No specific deliverables identified.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">
-                      Evaluation criteria
-                    </div>
-                    <div className="mt-2">
-                      {(rfp as any).evaluationCriteria &&
-                      (rfp as any).evaluationCriteria.length > 0 ? (
-                        <ul className="space-y-2">
-                          {(rfp as any).evaluationCriteria
-                            .slice(0, 12)
-                            .map((criteria: any, idx: number) => (
-                              <li key={idx} className="flex items-start gap-3">
-                                <div className="mt-2 h-2 w-2 rounded-full bg-yellow-600" />
-                                <div className="text-sm text-gray-800">
-                                  {typeof criteria === 'string'
-                                    ? criteria
-                                    : criteria?.criteria ||
-                                      'Evaluation criterion'}
-                                </div>
-                              </li>
-                            ))}
-                        </ul>
-                      ) : (
-                        <div className="text-sm text-gray-500">
-                          No evaluation criteria specified.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-2">
-                    <div className="text-sm font-semibold text-gray-900">
-                      Critical information
-                    </div>
-                    <div className="mt-2">
-                      {rfp.criticalInformation &&
-                      rfp.criticalInformation.length > 0 ? (
-                        <ul className="space-y-2">
-                          {rfp.criticalInformation
-                            .slice(0, 12)
-                            .map((info, idx) => (
-                              <li key={idx} className="flex items-start gap-3">
-                                <div className="mt-2 h-2 w-2 rounded-full bg-red-600" />
-                                <div className="text-sm text-gray-800">
-                                  {info}
-                                </div>
-                              </li>
-                            ))}
-                        </ul>
-                      ) : (
-                        <div className="text-sm text-gray-500">
-                          No critical information identified.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-2">
-                    <div className="text-sm font-semibold text-gray-900">
-                      Clarification questions
-                    </div>
-                    <div className="mt-2">
-                      {rfp.clarificationQuestions &&
-                      rfp.clarificationQuestions.length > 0 ? (
-                        <div className="space-y-2">
-                          {rfp.clarificationQuestions
-                            .slice(0, 25)
-                            .map((question, index) => (
-                              <div
-                                key={index}
-                                className="flex items-start py-3 px-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
-                              >
-                                <span className="flex-shrink-0 inline-flex items-center justify-center h-6 w-6 rounded-full bg-primary-100 text-primary-600 text-xs font-medium mr-3 mt-0.5">
-                                  {index + 1}
-                                </span>
-                                <p className="text-sm text-gray-700 leading-relaxed flex-1">
-                                  {question}
-                                </p>
-                              </div>
-                            ))}
-                        </div>
-                      ) : (
-                        <div className="text-sm text-gray-500">
-                          No clarification questions identified.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </Section>
-
-              <Section
-                sid="attachments"
-                title="Attachments"
-                rightMeta={
-                  Array.isArray((rfp as any)?.attachments)
-                    ? `${(rfp as any).attachments.length} files`
-                    : undefined
-                }
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-sm text-gray-600">
-                    Upload and manage files related to this RFP.
-                  </div>
-                  <button
-                    onClick={() => setShowAttachmentModal(true)}
-                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700"
-                  >
-                    <PaperClipIcon className="h-5 w-5 mr-2" />
-                    Add attachments
-                  </button>
-                </div>
-
-                <div className="mt-4">
-                  {rfp?.attachments?.length ? (
-                    <ul role="list" className="divide-y divide-gray-200">
-                      {rfp.attachments.map((file) => (
-                        <li
-                          key={file.fileName}
-                          className="py-4 flex items-center justify-between"
-                        >
-                          <div className="flex items-center space-x-3">
-                            <PaperClipIcon className="h-5 w-5 text-gray-400" />
-                            <div>
-                              <p className="text-sm font-medium text-gray-900">
-                                {file.originalName}
-                              </p>
-                              <p className="text-xs text-gray-500">
-                                {(file.fileSize / 1024).toFixed(1)} KB •{' '}
-                                {file.fileType.toUpperCase()}
-                              </p>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() =>
-                              handleDeleteAttachment(
-                                file._id,
-                                file.originalName,
-                              )
-                            }
-                            className="inline-flex items-center p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-md transition-colors"
-                            title="Delete attachment"
-                          >
-                            <XMarkIcon className="h-5 w-5" />
-                          </button>
-                        </li>
-                      ))}
                     </ul>
-                  ) : (
-                    <p className="text-sm text-gray-500">
-                      No attachments uploaded yet.
-                    </p>
                   )}
+              </div>
+            )}
+
+            {(rfp as any)?.rawText ? (
+              <div className="mt-4 text-xs text-gray-500">
+                Extracted text length:{' '}
+                <span className="font-semibold">
+                  {String((rfp as any).rawText || '').length}
+                </span>
+                {typeof (rfp as any)?._analysis?.usedAi === 'boolean' ? (
+                  <>
+                    {' '}
+                    • AI:{' '}
+                    <span className="font-semibold">
+                      {(rfp as any)?._analysis?.usedAi ? 'on' : 'off'}
+                    </span>
+                  </>
+                ) : null}
+                {(rfp as any)?._analysis?.model ? (
+                  <>
+                    {' '}
+                    • Model:{' '}
+                    <span className="font-semibold">
+                      {(rfp as any)?._analysis?.model}
+                    </span>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+          </Section>
+
+          <Section sid="overview" title="Overview">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                <div className="p-4">
+                  <div className="flex items-center">
+                    <CurrencyDollarIcon className="h-5 w-5 text-green-500" />
+                    <div className="ml-3">
+                      <div className="text-xs text-gray-500">Budget Range</div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        {rfp.budgetRange || 'Not specified'}
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </Section>
+              </div>
 
-              <Section
-                sid="buyers"
-                title="Buyers"
-                rightMeta={
-                  Array.isArray((rfp as any)?.buyerProfiles)
-                    ? `${(rfp as any).buyerProfiles.length} saved`
-                    : undefined
-                }
-              >
-                {Array.isArray((rfp as any)?.buyerProfiles) &&
-                (rfp as any).buyerProfiles.length > 0 ? (
-                  <div>
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <div className="text-sm font-semibold text-gray-900">
-                          Saved buyer profiles
-                        </div>
-                        <div className="mt-1 text-xs text-gray-600">
-                          Selected:{' '}
-                          <span className="font-semibold">
-                            {buyerSelectedList.length}
-                          </span>
-                        </div>
+              <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                <div className="p-4">
+                  <div className="flex items-center">
+                    <CalendarDaysIcon className="h-5 w-5 text-red-500" />
+                    <div className="ml-3">
+                      <div className="text-xs text-gray-500">
+                        Submission deadline
                       </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={copySavedBuyers}
-                          className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                        >
-                          Copy
-                        </button>
-                        <button
-                          type="button"
-                          onClick={removeSelectedBuyers}
-                          disabled={
-                            buyerRemoving || buyerSelectedList.length === 0
-                          }
-                          className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                        >
-                          {buyerRemoving ? 'Working…' : 'Remove selected'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={clearAllBuyers}
-                          disabled={buyerRemoving}
-                          className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-red-300 text-red-700 bg-white hover:bg-red-50 disabled:opacity-50"
-                        >
-                          Clear all
-                        </button>
-                        <Link
-                          href={`/linkedin-finder?rfpId=${encodeURIComponent(
-                            rfp._id,
-                          )}`}
-                          className="text-xs text-primary-600 hover:text-primary-800"
-                        >
-                          Update via Buyer Profiles →
-                        </Link>
+                      <div className="text-sm font-semibold text-gray-900">
+                        {rfp.submissionDeadline
+                          ? new Date(rfp.submissionDeadline).toLocaleDateString(
+                              'en-US',
+                            )
+                          : 'Not specified'}
                       </div>
-                    </div>
-                    <div className="mt-3 overflow-x-auto">
-                      <table className="min-w-full text-sm">
-                        <thead>
-                          <tr className="text-left text-xs uppercase tracking-wider text-gray-500">
-                            <th className="py-2 pr-4">
-                              <input
-                                ref={buyerHeaderCheckboxRef}
-                                type="checkbox"
-                                onChange={() => {
-                                  const total = visibleSavedTokens.length
-                                  if (total === 0) return
-                                  if (selectedVisibleSavedCount === total) {
-                                    setBuyerSelected((prev) => {
-                                      const next = { ...prev }
-                                      visibleSavedTokens.forEach((tok) => {
-                                        delete next[tok]
-                                      })
-                                      return next
-                                    })
-                                  } else {
-                                    const next: Record<string, boolean> = {}
-                                    visibleSavedTokens.forEach((tok) => {
-                                      next[tok] = true
-                                    })
-                                    setBuyerSelected((prev) => ({
-                                      ...prev,
-                                      ...next,
-                                    }))
-                                  }
-                                }}
-                              />
-                            </th>
-                            <th className="py-2 pr-4">Score</th>
-                            <th className="py-2 pr-4">Name</th>
-                            <th className="py-2 pr-4">Title</th>
-                            <th className="py-2 pr-4">Profile</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-200">
-                          {(rfp as any).buyerProfiles
-                            .slice(0, 25)
-                            .map((p: any) => (
-                              <tr
-                                key={p?.profileId || p?.profileUrl}
-                                className="align-top"
-                              >
-                                <td className="py-3 pr-4">
-                                  <input
-                                    type="checkbox"
-                                    checked={Boolean(
-                                      buyerSelected[buyerToken(p)] || false,
-                                    )}
-                                    onChange={() => {
-                                      const tok = buyerToken(p)
-                                      if (!tok) return
-                                      setBuyerSelected((prev) => ({
-                                        ...prev,
-                                        [tok]: !prev[tok],
-                                      }))
-                                    }}
-                                  />
-                                </td>
-                                <td className="py-3 pr-4 font-semibold text-gray-900">
-                                  {p?.buyerScore ?? 0}
-                                </td>
-                                <td className="py-3 pr-4 text-gray-900">
-                                  <div>{p?.name || '—'}</div>
-                                  {p?.ai?.personaSummary && (
-                                    <div className="mt-1 text-xs text-gray-700 max-w-xl">
-                                      {p.ai.personaSummary}
-                                    </div>
-                                  )}
-                                </td>
-                                <td className="py-3 pr-4 text-gray-900">
-                                  {p?.title || '—'}
-                                </td>
-                                <td className="py-3 pr-4">
-                                  {p?.profileUrl ? (
-                                    <a
-                                      href={p.profileUrl}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="text-primary-600 hover:text-primary-800"
-                                    >
-                                      Open →
-                                    </a>
-                                  ) : (
-                                    '—'
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                        </tbody>
-                      </table>
+                      {rfp.submissionDeadline &&
+                        isDatePassed(rfp.submissionDeadline) && (
+                          <div className="text-xs font-medium text-red-600 mt-1">
+                            Deadline passed
+                          </div>
+                        )}
                     </div>
                   </div>
-                ) : (
-                  <div className="text-sm text-gray-500">
-                    No saved buyer profiles yet.
-                  </div>
-                )}
-              </Section>
+                </div>
+              </div>
 
-              <Section sid="generate" title="Generate proposal">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  <div className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors">
-                    <div className="flex items-center mb-3">
-                      <div className="w-10 h-10 bg-gradient-to-br from-purple-100 to-pink-100 rounded-lg flex items-center justify-center mr-3">
-                        <PlusIcon className="h-5 w-5 text-purple-600" />
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-gray-900">
-                          AI Template
-                        </h4>
-                        <p className="text-sm text-gray-500">
-                          Generate a first-pass proposal
-                        </p>
+              <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                <div className="p-4">
+                  <div className="flex items-center">
+                    <ClockIcon className="h-5 w-5 text-yellow-500" />
+                    <div className="ml-3">
+                      <div className="text-xs text-gray-500">Timeline</div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        {rfp.timeline || 'To be determined'}
                       </div>
                     </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                <div className="p-4">
+                  <div className="flex items-center">
+                    <DocumentTextIcon className="h-5 w-5 text-primary-500" />
+                    <div className="ml-3">
+                      <div className="text-xs text-gray-500">
+                        Questions deadline
+                      </div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        {rfp.questionsDeadline
+                          ? new Date(rfp.questionsDeadline).toLocaleDateString(
+                              'en-US',
+                            )
+                          : 'Not specified'}
+                      </div>
+                      {rfp.questionsDeadline &&
+                        isDatePassed(rfp.questionsDeadline) && (
+                          <div className="text-xs font-medium text-red-600 mt-1">
+                            Deadline passed
+                          </div>
+                        )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Section>
+
+          <Section
+            sid="requirements"
+            title="Key requirements"
+            rightMeta={
+              Array.isArray(rfp.keyRequirements)
+                ? `${rfp.keyRequirements.length} items`
+                : undefined
+            }
+          >
+            {rfp.keyRequirements && rfp.keyRequirements.length > 0 ? (
+              <div>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+                  <div className="text-sm text-gray-600">
+                    Assess each requirement for suitability, then copy a
+                    compliance matrix for proposal work.
+                  </div>
+                  <div className="flex items-center gap-2">
                     <button
-                      onClick={() => setShowAIPreviewModal(true)}
-                      className="w-full inline-flex items-center justify-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                      type="button"
+                      onClick={copyComplianceMatrix}
+                      className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
                     >
-                      Preview
+                      Copy compliance matrix
+                    </button>
+                    <button
+                      type="button"
+                      onClick={downloadComplianceCsv}
+                      className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                    >
+                      Download CSV
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveRequirements}
+                      disabled={reqSaving}
+                      className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                    >
+                      {reqSaving ? 'Saving…' : 'Save'}
                     </button>
                   </div>
                 </div>
 
-                <div className="mt-6">
+                <div className="mb-4 rounded-lg border border-gray-200 bg-white p-4">
                   <div className="text-sm font-semibold text-gray-900">
-                    Templates
+                    Auto-seed mapped proposal sections
                   </div>
-                  <div className="mt-2">
-                    {companies.length > 0 && (
-                      <div className="mb-4">
-                        <label className="block text-sm font-medium text-gray-900 mb-2">
-                          Proposal Company / Branding
-                        </label>
-                        <select
-                          value={selectedCompanyId || ''}
-                          onChange={(e) =>
-                            setSelectedCompanyId(e.target.value || null)
-                          }
-                          className="w-full sm:w-96 border border-gray-300 rounded-md px-3 py-2 bg-gray-100 text-gray-900"
-                        >
-                          {companies.map((c) => (
-                            <option key={c.companyId} value={c.companyId}>
-                              {c.name}
-                            </option>
-                          ))}
-                        </select>
-                        <p className="mt-1 text-xs text-gray-500">
-                          Controls Title/Cover Letter/Experience content and
-                          exports.
-                        </p>
-                      </div>
-                    )}
+                  <div className="mt-2 text-sm text-gray-600">
+                    Picks 1–2 likely proposal sections per requirement using a
+                    template’s section titles (only fills empty mappings).
+                  </div>
+                  <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
+                    <select
+                      value={seedTemplateId}
+                      onChange={(e) => setSeedTemplateId(e.target.value)}
+                      className="flex-1 border border-gray-300 rounded-md px-3 py-2 bg-white text-sm"
+                    >
+                      <option value="">
+                        {templates?.length
+                          ? 'Choose template (optional)'
+                          : 'Templates not loaded yet'}
+                      </option>
+                      {(templates || []).map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name} ({t.projectType})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={autoseedMappedSections}
+                      disabled={seedingReqs}
+                      className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                    >
+                      {seedingReqs ? 'Seeding…' : 'Auto-seed'}
+                    </button>
+                    {!templates?.length ? (
+                      <button
+                        type="button"
+                        onClick={() => void ensureTemplatesLoaded()}
+                        className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                      >
+                        Load templates
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
 
-                    {templatesLoading || companiesLoading ? (
-                      <p className="text-sm text-gray-500">
-                        Loading templates/companies…
-                      </p>
-                    ) : templates.length > 0 ? (
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        {templates.map((template) => (
-                          <div
-                            key={template.id}
-                            className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors"
+                <div className="space-y-3">
+                  {rfp.keyRequirements.slice(0, 40).map((req, idx) => {
+                    const text = String(req || '').trim()
+                    const a = reqAssessments[text] || {
+                      text,
+                      status: 'unknown' as ReqStatus,
+                      notes: '',
+                      mappedSections: [],
+                    }
+                    return (
+                      <div
+                        key={`${idx}-${text}`}
+                        className="rounded-lg border border-gray-200 bg-white p-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3">
+                            <div className="mt-2 h-2 w-2 rounded-full bg-primary-600" />
+                            <div className="text-sm font-semibold text-gray-900">
+                              {text}
+                            </div>
+                          </div>
+                          <select
+                            value={a.status}
+                            onChange={(e) =>
+                              setReq(text, {
+                                status: e.target.value as ReqStatus,
+                              })
+                            }
+                            className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white"
+                            aria-label="Requirement assessment"
                           >
-                            <h4 className="font-medium text-gray-900">
-                              {template.name}
-                            </h4>
-                            <p className="text-sm text-gray-500 mt-1">
-                              {template.sectionCount} sections
+                            <option value="unknown">Unknown</option>
+                            <option value="ok">OK</option>
+                            <option value="risk">Risk</option>
+                            <option value="gap">Gap</option>
+                          </select>
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700">
+                              Notes
+                            </label>
+                            <textarea
+                              value={a.notes}
+                              onChange={(e) =>
+                                setReq(text, { notes: e.target.value })
+                              }
+                              rows={3}
+                              className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                              placeholder="Why OK/risk/gap? What’s needed?"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700">
+                              Proposal sections (comma-separated)
+                            </label>
+                            <input
+                              value={(a.mappedSections || []).join(', ')}
+                              onChange={(e) =>
+                                setReq(text, {
+                                  mappedSections: String(e.target.value || '')
+                                    .split(',')
+                                    .map((x) => x.trim())
+                                    .filter(Boolean)
+                                    .slice(0, 20),
+                                })
+                              }
+                              className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                              placeholder="e.g. Approach, Experience, Timeline"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500">
+                No specific requirements identified.
+              </div>
+            )}
+          </Section>
+
+          <Section sid="deliverables" title="Deliverables & criteria">
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div>
+                <div className="text-sm font-semibold text-gray-900">
+                  Expected deliverables
+                </div>
+                <div className="mt-2">
+                  {rfp.deliverables && rfp.deliverables.length > 0 ? (
+                    <ul className="space-y-2">
+                      {rfp.deliverables.slice(0, 12).map((deliverable, idx) => (
+                        <li key={idx} className="flex items-start gap-3">
+                          <div className="mt-2 h-2 w-2 rounded-full bg-green-600" />
+                          <div className="text-sm text-gray-800">
+                            {deliverable}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="text-sm text-gray-500">
+                      No specific deliverables identified.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-sm font-semibold text-gray-900">
+                  Evaluation criteria
+                </div>
+                <div className="mt-2">
+                  {(rfp as any).evaluationCriteria &&
+                  (rfp as any).evaluationCriteria.length > 0 ? (
+                    <ul className="space-y-2">
+                      {(rfp as any).evaluationCriteria
+                        .slice(0, 12)
+                        .map((criteria: any, idx: number) => (
+                          <li key={idx} className="flex items-start gap-3">
+                            <div className="mt-2 h-2 w-2 rounded-full bg-yellow-600" />
+                            <div className="text-sm text-gray-800">
+                              {typeof criteria === 'string'
+                                ? criteria
+                                : criteria?.criteria || 'Evaluation criterion'}
+                            </div>
+                          </li>
+                        ))}
+                    </ul>
+                  ) : (
+                    <div className="text-sm text-gray-500">
+                      No evaluation criteria specified.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="lg:col-span-2">
+                <div className="text-sm font-semibold text-gray-900">
+                  Critical information
+                </div>
+                <div className="mt-2">
+                  {rfp.criticalInformation &&
+                  rfp.criticalInformation.length > 0 ? (
+                    <ul className="space-y-2">
+                      {rfp.criticalInformation.slice(0, 12).map((info, idx) => (
+                        <li key={idx} className="flex items-start gap-3">
+                          <div className="mt-2 h-2 w-2 rounded-full bg-red-600" />
+                          <div className="text-sm text-gray-800">{info}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="text-sm text-gray-500">
+                      No critical information identified.
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="lg:col-span-2">
+                <div className="text-sm font-semibold text-gray-900">
+                  Clarification questions
+                </div>
+                <div className="mt-2">
+                  {rfp.clarificationQuestions &&
+                  rfp.clarificationQuestions.length > 0 ? (
+                    <div className="space-y-2">
+                      {rfp.clarificationQuestions
+                        .slice(0, 25)
+                        .map((question, index) => (
+                          <div
+                            key={index}
+                            className="flex items-start py-3 px-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                          >
+                            <span className="flex-shrink-0 inline-flex items-center justify-center h-6 w-6 rounded-full bg-primary-100 text-primary-600 text-xs font-medium mr-3 mt-0.5">
+                              {index + 1}
+                            </span>
+                            <p className="text-sm text-gray-700 leading-relaxed flex-1">
+                              {question}
                             </p>
-                            <p className="text-xs text-gray-400 mt-2">
-                              {template.projectType.replace('_', ' ')}
-                            </p>
-                            <button
-                              onClick={() => generateProposal(template.id)}
-                              disabled={generatingTemplate !== null}
-                              className="mt-3 w-full inline-flex items-center justify-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              {generatingTemplate === template.id ? (
-                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                              ) : (
-                                <>
-                                  <PlusIcon className="h-4 w-4 mr-1" />
-                                  Generate
-                                </>
-                              )}
-                            </button>
                           </div>
                         ))}
-                      </div>
-                    ) : (
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-sm text-gray-500">
-                          No templates loaded yet.
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500">
+                      No clarification questions identified.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </Section>
+
+          <Section
+            sid="attachments"
+            title="Attachments"
+            rightMeta={
+              Array.isArray((rfp as any)?.attachments)
+                ? `${(rfp as any).attachments.length} files`
+                : undefined
+            }
+          >
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-sm text-gray-600">
+                Upload and manage files related to this RFP.
+              </div>
+              <button
+                onClick={() => setShowAttachmentModal(true)}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700"
+              >
+                <PaperClipIcon className="h-5 w-5 mr-2" />
+                Add attachments
+              </button>
+            </div>
+
+            <div className="mt-4">
+              {rfp?.attachments?.length ? (
+                <ul role="list" className="divide-y divide-gray-200">
+                  {rfp.attachments.map((file) => (
+                    <li
+                      key={file.fileName}
+                      className="py-4 flex items-center justify-between"
+                    >
+                      <div className="flex items-center space-x-3">
+                        <PaperClipIcon className="h-5 w-5 text-gray-400" />
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">
+                            {file.originalName}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {(file.fileSize / 1024).toFixed(1)} KB •{' '}
+                            {file.fileType.toUpperCase()}
+                          </p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void ensureTemplatesLoaded()
-                            void ensureCompaniesLoaded()
-                          }}
-                          className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                        >
-                          Load templates
-                        </button>
                       </div>
-                    )}
+                      <button
+                        onClick={() =>
+                          handleDeleteAttachment(file._id, file.originalName)
+                        }
+                        className="inline-flex items-center p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-md transition-colors"
+                        title="Delete attachment"
+                      >
+                        <XMarkIcon className="h-5 w-5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm text-gray-500">
+                  No attachments uploaded yet.
+                </p>
+              )}
+            </div>
+          </Section>
+
+          <Section
+            sid="buyers"
+            title="Buyers"
+            rightMeta={
+              Array.isArray((rfp as any)?.buyerProfiles)
+                ? `${(rfp as any).buyerProfiles.length} saved`
+                : undefined
+            }
+          >
+            {Array.isArray((rfp as any)?.buyerProfiles) &&
+            (rfp as any).buyerProfiles.length > 0 ? (
+              <div>
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">
+                      Saved buyer profiles
+                    </div>
+                    <div className="mt-1 text-xs text-gray-600">
+                      Selected:{' '}
+                      <span className="font-semibold">
+                        {buyerSelectedList.length}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={copySavedBuyers}
+                      className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                    >
+                      Copy
+                    </button>
+                    <button
+                      type="button"
+                      onClick={removeSelectedBuyers}
+                      disabled={buyerRemoving || buyerSelectedList.length === 0}
+                      className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                    >
+                      {buyerRemoving ? 'Working…' : 'Remove selected'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearAllBuyers}
+                      disabled={buyerRemoving}
+                      className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-red-300 text-red-700 bg-white hover:bg-red-50 disabled:opacity-50"
+                    >
+                      Clear all
+                    </button>
+                    <Link
+                      href={`/linkedin-finder?rfpId=${encodeURIComponent(
+                        rfp._id,
+                      )}`}
+                      className="text-xs text-primary-600 hover:text-primary-800"
+                    >
+                      Update via Buyer Profiles →
+                    </Link>
                   </div>
                 </div>
-              </Section>
-
-              <Section sid="proposals" title="Proposals">
-                {proposalsLoading ? (
-                  <p className="text-sm text-gray-500">Loading proposals…</p>
-                ) : rfpProposals.length === 0 ? (
-                  <p className="text-sm text-gray-500">
-                    No proposals yet for this RFP.
-                  </p>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Proposal
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Score
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Status
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Updated
-                          </th>
-                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Decision
-                          </th>
+                <div className="mt-3 overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs uppercase tracking-wider text-gray-500">
+                        <th className="py-2 pr-4">
+                          <input
+                            ref={buyerHeaderCheckboxRef}
+                            type="checkbox"
+                            onChange={() => {
+                              const total = visibleSavedTokens.length
+                              if (total === 0) return
+                              if (selectedVisibleSavedCount === total) {
+                                setBuyerSelected((prev) => {
+                                  const next = { ...prev }
+                                  visibleSavedTokens.forEach((tok) => {
+                                    delete next[tok]
+                                  })
+                                  return next
+                                })
+                              } else {
+                                const next: Record<string, boolean> = {}
+                                visibleSavedTokens.forEach((tok) => {
+                                  next[tok] = true
+                                })
+                                setBuyerSelected((prev) => ({
+                                  ...prev,
+                                  ...next,
+                                }))
+                              }
+                            }}
+                          />
+                        </th>
+                        <th className="py-2 pr-4">Score</th>
+                        <th className="py-2 pr-4">Name</th>
+                        <th className="py-2 pr-4">Title</th>
+                        <th className="py-2 pr-4">Profile</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {(rfp as any).buyerProfiles.slice(0, 25).map((p: any) => (
+                        <tr
+                          key={p?.profileId || p?.profileUrl}
+                          className="align-top"
+                        >
+                          <td className="py-3 pr-4">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(
+                                buyerSelected[buyerToken(p)] || false,
+                              )}
+                              onChange={() => {
+                                const tok = buyerToken(p)
+                                if (!tok) return
+                                setBuyerSelected((prev) => ({
+                                  ...prev,
+                                  [tok]: !prev[tok],
+                                }))
+                              }}
+                            />
+                          </td>
+                          <td className="py-3 pr-4 font-semibold text-gray-900">
+                            {p?.buyerScore ?? 0}
+                          </td>
+                          <td className="py-3 pr-4 text-gray-900">
+                            <div>{p?.name || '—'}</div>
+                            {p?.ai?.personaSummary && (
+                              <div className="mt-1 text-xs text-gray-700 max-w-xl">
+                                {p.ai.personaSummary}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 pr-4 text-gray-900">
+                            {p?.title || '—'}
+                          </td>
+                          <td className="py-3 pr-4">
+                            {p?.profileUrl ? (
+                              <a
+                                href={p.profileUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-primary-600 hover:text-primary-800"
+                              >
+                                Open →
+                              </a>
+                            ) : (
+                              '—'
+                            )}
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {[...rfpProposals]
-                          .sort((a, b) => {
-                            const as = a?.review?.score
-                            const bs = b?.review?.score
-                            const an = typeof as === 'number' ? as : -1
-                            const bn = typeof bs === 'number' ? bs : -1
-                            if (bn !== an) return bn - an
-                            return (
-                              new Date(b.updatedAt).getTime() -
-                              new Date(a.updatedAt).getTime()
-                            )
-                          })
-                          .map((p) => (
-                            <tr key={p._id} className="hover:bg-gray-50">
-                              <td className="px-4 py-3 text-sm text-gray-900">
-                                <Link
-                                  href={`/proposals/${p._id}`}
-                                  className="text-primary-600 hover:text-primary-800 font-medium"
-                                >
-                                  {p.title}
-                                </Link>
-                              </td>
-                              <td className="px-4 py-3 text-sm text-gray-900">
-                                {typeof p?.review?.score === 'number'
-                                  ? p.review.score
-                                  : '—'}
-                              </td>
-                              <td className="px-4 py-3 text-sm text-gray-900">
-                                {p.status}
-                              </td>
-                              <td className="px-4 py-3 text-sm text-gray-600">
-                                {p.updatedAt
-                                  ? new Date(p.updatedAt).toLocaleDateString(
-                                      'en-US',
-                                    )
-                                  : '—'}
-                              </td>
-                              <td className="px-4 py-3 text-sm text-gray-900">
-                                <div className="flex items-center space-x-2">
-                                  <button
-                                    onClick={() =>
-                                      setProposalDecision(
-                                        p._id,
-                                        p?.review?.decision === 'shortlist'
-                                          ? ''
-                                          : 'shortlist',
-                                      )
-                                    }
-                                    disabled={updatingDecisionId === p._id}
-                                    className={`px-2 py-1 text-xs font-medium rounded ${
-                                      p?.review?.decision === 'shortlist'
-                                        ? 'bg-green-100 text-green-800'
-                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                    } disabled:opacity-50`}
-                                    title="Toggle shortlist"
-                                  >
-                                    Shortlist
-                                  </button>
-                                  <button
-                                    onClick={() =>
-                                      setProposalDecision(
-                                        p._id,
-                                        p?.review?.decision === 'reject'
-                                          ? ''
-                                          : 'reject',
-                                      )
-                                    }
-                                    disabled={updatingDecisionId === p._id}
-                                    className={`px-2 py-1 text-xs font-medium rounded ${
-                                      p?.review?.decision === 'reject'
-                                        ? 'bg-red-100 text-red-800'
-                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                    } disabled:opacity-50`}
-                                    title="Toggle reject"
-                                  >
-                                    Reject
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-500">
+                No saved buyer profiles yet.
+              </div>
+            )}
+          </Section>
+
+          <Section sid="generate" title="Generate proposal">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors">
+                <div className="flex items-center mb-3">
+                  <div className="w-10 h-10 bg-gradient-to-br from-purple-100 to-pink-100 rounded-lg flex items-center justify-center mr-3">
+                    <PlusIcon className="h-5 w-5 text-purple-600" />
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-gray-900">AI Template</h4>
+                    <p className="text-sm text-gray-500">
+                      Generate a first-pass proposal
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowAIPreviewModal(true)}
+                  className="w-full inline-flex items-center justify-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                >
+                  Preview
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <div className="text-sm font-semibold text-gray-900">
+                Templates
+              </div>
+              <div className="mt-2">
+                {companies.length > 0 && (
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-900 mb-2">
+                      Proposal Company / Branding
+                    </label>
+                    <select
+                      value={selectedCompanyId || ''}
+                      onChange={(e) =>
+                        setSelectedCompanyId(e.target.value || null)
+                      }
+                      className="w-full sm:w-96 border border-gray-300 rounded-md px-3 py-2 bg-gray-100 text-gray-900"
+                    >
+                      {companies.map((c) => (
+                        <option key={c.companyId} value={c.companyId}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Controls Title/Cover Letter/Experience content and
+                      exports.
+                    </p>
                   </div>
                 )}
-              </Section>
 
-              <Section sid="raw" title="Raw / extracted text">
-                <div className="text-xs text-gray-600">
-                  This is what the system extracted from the PDF / AI workflow.
-                </div>
-                <div className="mt-3">
-                  <pre className="whitespace-pre-wrap text-xs bg-gray-50 border border-gray-200 rounded-lg p-3 max-h-[420px] overflow-auto">
-                    {String((rfp as any)?.rawText || '').slice(0, 200000) ||
-                      '(No raw text available)'}
-                  </pre>
-                </div>
-                {(rfp as any)?._analysis ? (
-                  <div className="mt-3 text-xs text-gray-500">
-                    <div className="font-semibold text-gray-700">
-                      Analysis meta
-                    </div>
-                    <pre className="mt-1 whitespace-pre-wrap bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-auto">
-                      {JSON.stringify((rfp as any)._analysis, null, 2)}
-                    </pre>
+                {templatesLoading || companiesLoading ? (
+                  <p className="text-sm text-gray-500">
+                    Loading templates/companies…
+                  </p>
+                ) : templates.length > 0 ? (
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {templates.map((template) => (
+                      <div
+                        key={template.id}
+                        className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors"
+                      >
+                        <h4 className="font-medium text-gray-900">
+                          {template.name}
+                        </h4>
+                        <p className="text-sm text-gray-500 mt-1">
+                          {template.sectionCount} sections
+                        </p>
+                        <p className="text-xs text-gray-400 mt-2">
+                          {template.projectType.replace('_', ' ')}
+                        </p>
+                        <button
+                          onClick={() => generateProposal(template.id)}
+                          disabled={generatingTemplate !== null}
+                          className="mt-3 w-full inline-flex items-center justify-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {generatingTemplate === template.id ? (
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                          ) : (
+                            <>
+                              <PlusIcon className="h-4 w-4 mr-1" />
+                              Generate
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                ) : null}
-              </Section>
-            </main>
-          </div>
-        </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm text-gray-500">
+                      No templates loaded yet.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void ensureTemplatesLoaded()
+                        void ensureCompaniesLoaded()
+                      }}
+                      className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                    >
+                      Load templates
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </Section>
+
+          <Section sid="proposals" title="Proposals">
+            {proposalsLoading ? (
+              <p className="text-sm text-gray-500">Loading proposals…</p>
+            ) : rfpProposals.length === 0 ? (
+              <p className="text-sm text-gray-500">
+                No proposals yet for this RFP.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Proposal
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Score
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Status
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Updated
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Decision
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {[...rfpProposals]
+                      .sort((a, b) => {
+                        const as = a?.review?.score
+                        const bs = b?.review?.score
+                        const an = typeof as === 'number' ? as : -1
+                        const bn = typeof bs === 'number' ? bs : -1
+                        if (bn !== an) return bn - an
+                        return (
+                          new Date(b.updatedAt).getTime() -
+                          new Date(a.updatedAt).getTime()
+                        )
+                      })
+                      .map((p) => (
+                        <tr key={p._id} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            <Link
+                              href={`/proposals/${p._id}`}
+                              className="text-primary-600 hover:text-primary-800 font-medium"
+                            >
+                              {p.title}
+                            </Link>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            {typeof p?.review?.score === 'number'
+                              ? p.review.score
+                              : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            {p.status}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-600">
+                            {p.updatedAt
+                              ? new Date(p.updatedAt).toLocaleDateString(
+                                  'en-US',
+                                )
+                              : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            <div className="flex items-center space-x-2">
+                              <button
+                                onClick={() =>
+                                  setProposalDecision(
+                                    p._id,
+                                    p?.review?.decision === 'shortlist'
+                                      ? ''
+                                      : 'shortlist',
+                                  )
+                                }
+                                disabled={updatingDecisionId === p._id}
+                                className={`px-2 py-1 text-xs font-medium rounded ${
+                                  p?.review?.decision === 'shortlist'
+                                    ? 'bg-green-100 text-green-800'
+                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                } disabled:opacity-50`}
+                                title="Toggle shortlist"
+                              >
+                                Shortlist
+                              </button>
+                              <button
+                                onClick={() =>
+                                  setProposalDecision(
+                                    p._id,
+                                    p?.review?.decision === 'reject'
+                                      ? ''
+                                      : 'reject',
+                                  )
+                                }
+                                disabled={updatingDecisionId === p._id}
+                                className={`px-2 py-1 text-xs font-medium rounded ${
+                                  p?.review?.decision === 'reject'
+                                    ? 'bg-red-100 text-red-800'
+                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                } disabled:opacity-50`}
+                                title="Toggle reject"
+                              >
+                                Reject
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Section>
+
+          <Section sid="raw" title="Raw / extracted text">
+            <div className="text-xs text-gray-600">
+              This is what the system extracted from the PDF / AI workflow.
+            </div>
+            <div className="mt-3">
+              <pre className="whitespace-pre-wrap text-xs bg-gray-50 border border-gray-200 rounded-lg p-3 max-h-[420px] overflow-auto">
+                {String((rfp as any)?.rawText || '').slice(0, 200000) ||
+                  '(No raw text available)'}
+              </pre>
+            </div>
+            {(rfp as any)?._analysis ? (
+              <div className="mt-3 text-xs text-gray-500">
+                <div className="font-semibold text-gray-700">Analysis meta</div>
+                <pre className="mt-1 whitespace-pre-wrap bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-auto">
+                  {JSON.stringify((rfp as any)._analysis, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+          </Section>
+        </main>
       </div>
 
       {/* AI Preview Modal */}
@@ -2576,5 +2658,3 @@ export default function RFPDetailPage() {
     </div>
   )
 }
-
-

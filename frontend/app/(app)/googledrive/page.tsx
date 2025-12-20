@@ -6,7 +6,7 @@ import Card, { CardBody, CardHeader } from '@/components/ui/Card'
 import { LoadingScreen } from '@/components/ui/LoadingSpinner'
 import PipelineContextBanner from '@/components/ui/PipelineContextBanner'
 import StepsPanel from '@/components/ui/StepsPanel'
-import api, { proxyUrl } from '@/lib/api'
+import api, { cleanPathToken, proxyUrl } from '@/lib/api'
 import {
   ArrowDownTrayIcon,
   CheckCircleIcon,
@@ -135,7 +135,7 @@ export default function GoogleDrivePage() {
     if (!confirm('Are you sure you want to delete this file?')) return
 
     try {
-      await api.delete(proxyUrl(`/googledrive/files/${fileId}`))
+      await api.delete(proxyUrl(`/googledrive/files/${cleanPathToken(fileId)}`))
       await loadFiles()
     } catch (error) {
       console.error('Failed to delete file:', error)
@@ -146,7 +146,11 @@ export default function GoogleDrivePage() {
   const downloadFile = async (fileId: string, fileName: string) => {
     try {
       const response = await api.get(
-        proxyUrl(`/googledrive/download/${fileId}?fileName=${fileName}`),
+        proxyUrl(
+          `/googledrive/download/${cleanPathToken(
+            fileId,
+          )}?fileName=${encodeURIComponent(String(fileName || ''))}`,
+        ),
         {
           responseType: 'blob',
         },
@@ -168,10 +172,13 @@ export default function GoogleDrivePage() {
 
   const shareFile = async (fileId: string) => {
     try {
-      await api.post(proxyUrl(`/googledrive/files/${fileId}/share`), {
-        email: shareEmail || undefined,
-        role: 'reader',
-      })
+      await api.post(
+        proxyUrl(`/googledrive/files/${cleanPathToken(fileId)}/share`),
+        {
+          email: shareEmail || undefined,
+          role: 'reader',
+        },
+      )
 
       setShareEmail('')
       setSharingFileId(null)
@@ -725,5 +732,3 @@ export default function GoogleDrivePage() {
     </div>
   )
 }
-
-

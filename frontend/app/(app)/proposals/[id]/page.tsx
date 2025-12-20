@@ -9,6 +9,7 @@ import api, {
   Proposal,
   aiApi,
   canvaApi,
+  cleanPathToken,
   contentApi,
   extractList,
   proposalApi,
@@ -425,7 +426,9 @@ export default function ProposalDetailPage() {
       )}_Proposal.json`
 
       const response = await api.post(
-        proxyUrl(`/googledrive/upload-proposal/${proposal._id}`),
+        proxyUrl(
+          `/googledrive/upload-proposal/${cleanPathToken(proposal._id)}`,
+        ),
         {
           fileName,
         },
@@ -585,9 +588,7 @@ export default function ProposalDetailPage() {
 
     setGenerating(true)
     try {
-      const response = await api.post(
-        proxyUrl(`/api/proposals/${proposal._id}/generate-sections`),
-      )
+      const response = await proposalApi.generateSections(proposal._id)
       setProposal(response.data.proposal)
       openInfo('AI sections', 'AI sections generated successfully!', 'success')
     } catch (error) {
@@ -669,10 +670,9 @@ export default function ProposalDetailPage() {
 
     setIsContentLibraryLoading(true)
     try {
-      const response = await api.put(
-        proxyUrl(
-          `/api/proposals/${proposal._id}/content-library/${contentLibrarySection}`,
-        ),
+      const response = await proposalApi.updateContentLibrarySection(
+        proposal._id,
+        contentLibrarySection,
         {
           selectedIds,
           type: contentLibraryType,
@@ -1733,5 +1733,3 @@ export default function ProposalDetailPage() {
     </div>
   )
 }
-
-
