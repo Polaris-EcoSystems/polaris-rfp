@@ -31,7 +31,13 @@ from ..services.s3_assets import (
     to_s3_uri,
 )
 from ..services.rfp_upload_jobs_repo import create_job, get_job, get_job_item, update_job
-from ..services.rfp_pdf_dedup_repo import dedup_key, ensure_record, get_by_sha256, normalize_sha256
+from ..services.rfp_pdf_dedup_repo import (
+    dedup_key,
+    ensure_record,
+    get_by_sha256,
+    normalize_sha256,
+    reset_stale_mapping,
+)
 from ..services.slack_notifier import (
     notify_rfp_upload_job_completed,
     notify_rfp_upload_job_failed,
@@ -167,14 +173,33 @@ def presign_upload(body: dict = Body(...)):
 
     existing = get_by_sha256(sha) or {}
     existing_rfp_id = str(existing.get("rfpId") or "").strip()
-    if existing_rfp_id:
-        return {
-            "ok": True,
-            "duplicate": True,
-            "rfpId": existing_rfp_id,
-        }
+    existing_status = str(existing.get("status") or "").strip().lower()
+    if existing_rfp_id and existing_status == "completed":
+        # Guard against stale de-dupe mappings: only treat as a duplicate if the
+        # referenced RFP record still exists.
+        try:
+            if get_rfp_by_id(existing_rfp_id):
+                return {
+                    "ok": True,
+                    "duplicate": True,
+                    "rfpId": existing_rfp_id,
+                }
+        except Exception:
+            # If lookup errors, fall through and allow a fresh upload path.
+            pass
 
     key = make_rfp_upload_key_for_hash(sha256=sha)
+    # If a de-dupe record exists but points to a missing RFP, clear it so the
+    # transactional completion path can succeed.
+    if existing_rfp_id and existing_status == "completed":
+        try:
+            reset_stale_mapping(
+                sha256=sha,
+                s3_key=key,
+                reason=f"stale dedup mapping: rfpId {existing_rfp_id} not found",
+            )
+        except Exception:
+            pass
     # Ensure a de-dupe record exists (best-effort reservation).
     try:
         ensure_record(sha256=sha, s3_key=key)
@@ -317,25 +342,47 @@ def _process_rfp_upload_job(job_id: str) -> None:
         # If we've already processed this exact PDF before, short-circuit.
         existing = get_by_sha256(sha) or {}
         existing_rfp_id = str(existing.get("rfpId") or "").strip()
-        if existing_rfp_id:
-            update_job(
-                job_id=job_id,
-                updates_obj={
-                    "status": "completed",
-                    "rfpId": existing_rfp_id,
-                    "sourceS3Uri": to_s3_uri(bucket=get_assets_bucket_name(), key=key),
-                    "finishedAt": now_iso(),
-                    "updatedAt": now_iso(),
-                },
-            )
-            log.info("rfp_upload_job_deduped", jobId=job_id, rfpId=existing_rfp_id, sha256=sha)
-            notify_rfp_upload_job_completed(
-                job_id=job_id,
-                rfp_id=existing_rfp_id,
-                file_name=file_name,
-                channel=str(settings.slack_rfp_machine_channel or "").strip() or None,
-            )
-            return
+        existing_status = str(existing.get("status") or "").strip().lower()
+        if existing_rfp_id and existing_status == "completed":
+            # Only treat as deduped if the referenced RFP still exists. If the mapping
+            # is stale, clear it and continue with processing.
+            try:
+                if get_rfp_by_id(existing_rfp_id):
+                    update_job(
+                        job_id=job_id,
+                        updates_obj={
+                            "status": "completed",
+                            "rfpId": existing_rfp_id,
+                            "sourceS3Uri": to_s3_uri(bucket=get_assets_bucket_name(), key=key),
+                            "finishedAt": now_iso(),
+                            "updatedAt": now_iso(),
+                        },
+                    )
+                    log.info(
+                        "rfp_upload_job_deduped",
+                        jobId=job_id,
+                        rfpId=existing_rfp_id,
+                        sha256=sha,
+                    )
+                    notify_rfp_upload_job_completed(
+                        job_id=job_id,
+                        rfp_id=existing_rfp_id,
+                        file_name=file_name,
+                        channel=str(settings.slack_rfp_machine_channel or "").strip() or None,
+                    )
+                    return
+                else:
+                    try:
+                        reset_stale_mapping(
+                            sha256=sha,
+                            s3_key=key,
+                            reason=f"stale dedup mapping: rfpId {existing_rfp_id} not found",
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                # If anything goes wrong with validation, keep going and attempt a fresh create.
+                pass
 
         data = get_object_bytes(key=key, max_bytes=60 * 1024 * 1024)
         if not data:

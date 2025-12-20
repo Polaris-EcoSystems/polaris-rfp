@@ -102,3 +102,38 @@ def mark_completed(*, sha256: str, rfp_id: str, s3_key: str) -> dict[str, Any] |
         return_values="ALL_NEW",
     )
 
+
+def reset_stale_mapping(*, sha256: str, s3_key: str, reason: str) -> dict[str, Any] | None:
+    """
+    Clear an invalid/stale `rfpId` mapping on a de-dupe record.
+
+    This is used when a record claims a completed `rfpId`, but that RFP no longer exists
+    (e.g., it was deleted or a prior write was partial). We REMOVE `rfpId` so future
+    uploads can complete the transactional write (which requires `attribute_not_exists(rfpId)`).
+    """
+    sha = normalize_sha256(sha256)
+    key = str(s3_key or "").strip()
+    msg = str(reason or "").strip()
+    if len(msg) > 1200:
+        msg = msg[:1200]
+
+    # Ensure the record exists so the update has a target.
+    try:
+        ensure_record(sha256=sha, s3_key=key)
+    except Exception:
+        pass
+
+    return get_main_table().update_item(
+        key=dedup_key(sha),
+        # DynamoDB supports combined SET/REMOVE expressions.
+        update_expression="SET #s = :s, #e = :e, s3Key = :k, updatedAt = :u REMOVE rfpId",
+        expression_attribute_names={"#s": "status", "#e": "error"},
+        expression_attribute_values={
+            ":s": "reserved",
+            ":e": msg or "stale_dedup_mapping",
+            ":k": key,
+            ":u": now_iso(),
+        },
+        return_values="ALL_NEW",
+    )
+
