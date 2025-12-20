@@ -98,7 +98,7 @@ Parameters:
     Default: 15
   JobRunnerRateMinutes:
     Type: Number
-    Default: 2
+    Default: 15
 
 Conditions:
   UseJwtSecretArn: !Not [!Equals [!Ref JwtSecretArn, '']]
@@ -575,7 +575,8 @@ Resources:
     Properties:
       Name: !Sub 'northstar-job-runner-${Environment}'
       FlexibleTimeWindow:
-        Mode: 'OFF'
+        Mode: FLEXIBLE
+        MaximumWindowInMinutes: 15
       ScheduleExpression: !Sub 'rate(${JobRunnerRateMinutes} minutes)'
       Target:
         Arn: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${EcsClusterName}'

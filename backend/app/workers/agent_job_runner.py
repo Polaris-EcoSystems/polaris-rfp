@@ -18,6 +18,8 @@ from ..services.agent_self_improve import run_perch_time_once
 from ..services.slack_reply_tools import post_summary
 from ..services.self_modify_pipeline import get_pr_checks, open_pr_for_change_proposal, verify_ecs_rollout
 from ..services.slack_web import chat_post_message_result
+from ..services.slack_agent import run_slack_agent_question
+from ..settings import settings
 
 
 log = get_logger("agent_job_runner")
@@ -32,6 +34,51 @@ def _job_scope_rfp_id(job: dict[str, Any]) -> str | None:
     scope: dict[str, Any] = raw_scope if isinstance(raw_scope, dict) else {}
     rid = str(scope.get("rfpId") or "").strip()
     return rid or None
+
+
+def _report_to_slack(summary: dict[str, Any]) -> None:
+    """
+    Report job runner execution summary to Slack channel.
+    Uses NORTHSTAR_DAILY_REPORT_CHANNEL or SLACK_RFP_MACHINE_CHANNEL as fallback.
+    """
+    channel = (
+        str(settings.northstar_daily_report_channel or "").strip()
+        or str(settings.slack_rfp_machine_channel or "").strip()
+        or None
+    )
+    if not channel or not bool(settings.slack_enabled):
+        log.info("agent_job_runner_skip_slack_report", reason="no_channel_or_slack_disabled", channel=channel)
+        return
+
+    started = summary.get("startedAt", "unknown")
+    finished = summary.get("finishedAt", "unknown")
+    due = int(summary.get("due", 0) or 0)
+    ran = int(summary.get("ran", 0) or 0)
+    completed = int(summary.get("completed", 0) or 0)
+    failed = int(summary.get("failed", 0) or 0)
+
+    text_lines = [
+        "*NorthStar Job Runner Summary*",
+        f"- Started: {started}",
+        f"- Finished: {finished}",
+        f"- Due jobs found: {due}",
+        f"- Jobs attempted: {ran}",
+        f"- Completed: {completed}",
+        f"- Failed: {failed}",
+    ]
+    if ran == 0:
+        text_lines.append("_No jobs processed this run._")
+
+    text = "\n".join(text_lines)
+
+    try:
+        result = chat_post_message_result(text=text, channel=channel, unfurl_links=False)
+        if result.get("ok"):
+            log.info("agent_job_runner_slack_report_sent", channel=channel)
+        else:
+            log.warning("agent_job_runner_slack_report_failed", channel=channel, error=result.get("error"))
+    except Exception as e:
+        log.warning("agent_job_runner_slack_report_exception", channel=channel, error=str(e))
 
 
 def run_once(*, limit: int = 25) -> dict[str, Any]:
@@ -211,6 +258,45 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                 completed += 1
                 continue
 
+            if job_type == "ai_agent_ask":
+                # AI agent question/answer workload (sandboxed execution)
+                question = str(payload.get("question") or "").strip()
+                user_id = str(payload.get("userId") or payload.get("slackUserId") or "").strip() or None
+                user_display_name = str(payload.get("userDisplayName") or "").strip() or None
+                user_email = str(payload.get("userEmail") or "").strip() or None
+                user_profile = payload.get("userProfile") if isinstance(payload.get("userProfile"), dict) else None
+                channel_id = str(payload.get("channelId") or "").strip() or None
+                thread_ts = str(payload.get("threadTs") or "").strip() or None
+                max_steps = max(1, min(20, int(payload.get("maxSteps") or 6)))
+
+                if not question:
+                    raise RuntimeError("missing_question_in_payload")
+
+                ans = run_slack_agent_question(
+                    question=question,
+                    user_id=user_id,
+                    user_display_name=user_display_name,
+                    user_email=user_email,
+                    user_profile=user_profile,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    max_steps=max_steps,
+                )
+                complete_job(job_id=jid, result={"ok": True, "text": ans.text, "blocks": ans.blocks, "meta": ans.meta})
+                completed += 1
+                continue
+
+            if job_type == "ai_agent_analyze":
+                # AI agent analysis workload (for future expansion)
+                # For now, this is a placeholder - can be extended based on specific analysis needs
+                analysis_type = str(payload.get("analysisType") or "").strip()
+                if not analysis_type:
+                    raise RuntimeError("missing_analysisType_in_payload")
+                # TODO: Implement specific analysis types as needed
+                complete_job(job_id=jid, result={"ok": True, "analysisType": analysis_type, "status": "not_implemented"})
+                completed += 1
+                continue
+
             raise RuntimeError(f"unknown_job_type:{job_type or 'unknown'}")
         except Exception as e:
             failed += 1
@@ -244,6 +330,14 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
         log.info("agent_job_runner_done", **out)
     except Exception:
         pass
+
+    # Report summary to Slack before task exits
+    try:
+        _report_to_slack(out)
+    except Exception as e:
+        # Never fail the task on Slack reporting errors
+        log.warning("agent_job_runner_slack_report_error", error=str(e) or "unknown")
+
     return out
 
 
