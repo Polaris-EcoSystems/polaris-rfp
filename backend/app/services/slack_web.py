@@ -221,3 +221,65 @@ def post_message(
         )
         return False
 
+
+def post_message_result(
+    *,
+    text: str,
+    channel: str | None = None,
+    blocks: list[dict[str, Any]] | None = None,
+    unfurl_links: bool = False,
+) -> dict[str, Any]:
+    """
+    Like post_message(), but returns a structured result for diagnostics.
+
+    Result:
+      { ok: bool, error?: str, status_code?: int, channel?: str }
+    """
+    token = get_bot_token() or ""
+    ch = (
+        (str(channel or "").strip() or None)
+        or (str(settings.slack_default_channel or "").strip() or None)
+        or get_secret_str("SLACK_DEFAULT_CHANNEL")
+    )
+    if not bool(settings.slack_enabled) or not token or not ch:
+        return {"ok": False, "error": "slack_not_configured", "channel": ch}
+
+    payload: dict[str, Any] = {
+        "channel": ch,
+        "text": str(text or "").strip() or "(no text)",
+        "unfurl_links": bool(unfurl_links),
+        "unfurl_media": bool(unfurl_links),
+    }
+    if blocks:
+        payload["blocks"] = blocks
+
+    def _send(p: dict[str, Any]) -> tuple[bool, str | None, int]:
+        resp = httpx.post(
+            "https://slack.com/api/chat.postMessage",
+            headers={"Authorization": f"Bearer {token}"},
+            json=p,
+            timeout=10.0,
+        )
+        data = resp.json() if resp.content else {}
+        ok = bool(data.get("ok"))
+        err = str(data.get("error") or "").strip() or None
+        return ok, err, int(resp.status_code)
+
+    try:
+        ok, err, status = _send(payload)
+        if ok:
+            return {"ok": True, "status_code": status, "channel": ch}
+
+        if err in ("channel_not_found", "not_in_channel") and isinstance(ch, str):
+            if not ch.startswith(("#", "C", "G")):
+                payload2 = dict(payload)
+                payload2["channel"] = "#" + ch
+                ok2, err2, status2 = _send(payload2)
+                if ok2:
+                    return {"ok": True, "status_code": status2, "channel": payload2["channel"]}
+                err = err2 or err
+                status = status2 or status
+
+        return {"ok": False, "error": err or "slack_rejected", "status_code": status, "channel": ch}
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "request_failed", "channel": ch}

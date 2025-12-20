@@ -504,11 +504,8 @@ Resources:
               Value: !Ref CanvaTokenEncKey
             - Name: SLACK_ENABLED
               Value: !If [UseSlackSecretArn, 'true', 'false']
-            - !If
-              - UseSlackSecretArn
-              - Name: SLACK_RFP_MACHINE_CHANNEL
-                Value: !Ref SlackRfpMachineChannel
-              - !Ref AWS::NoValue
+            - Name: SLACK_RFP_MACHINE_CHANNEL
+              Value: !Ref SlackRfpMachineChannel
             - !If
               - UseSlackSecretArn
               - Name: SLACK_SECRET_ARN

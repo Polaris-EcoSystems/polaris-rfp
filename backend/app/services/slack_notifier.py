@@ -5,7 +5,8 @@ from typing import Any
 from ..settings import settings
 from .rfps_repo import get_rfp_by_id
 from .slack_secrets import get_secret_str
-from .slack_web import post_message
+from .slack_web import post_message_result
+from ..observability.logging import get_logger
 
 
 def _rfp_url(rfp_id: str) -> str:
@@ -23,6 +24,31 @@ def _present(value: Any) -> str:
     if s.lower() in {"not available", "n/a", "na", "none", "null"}:
         return ""
     return s
+
+
+def _slack_markdown_table(rows: list[tuple[str, str]]) -> str:
+    """
+    Render a simple two-column "table" using Slack mrkdwn in a code block.
+    Slack does not reliably render GitHub-style tables, but code blocks preserve
+    alignment and are readable in-channel.
+    """
+    clean = [(str(k).strip(), str(v).strip()) for (k, v) in rows if str(v).strip()]
+    if not clean:
+        return ""
+
+    h1, h2 = "Field", "Value"
+    w1 = max(len(h1), *(len(k) for (k, _v) in clean))
+    # Keep the value column bounded so the message stays compact.
+    def _clip(s: str, n: int = 120) -> str:
+        s = str(s or "").strip()
+        return s if len(s) <= n else (s[: n - 1] + "…")
+
+    lines: list[str] = []
+    lines.append(f"{h1:<{w1}} | {h2}")
+    lines.append(f"{'-' * w1}-+-{'-' * max(5, len(h2))}")
+    for k, v in clean:
+        lines.append(f"{k:<{w1}} | {_clip(v)}")
+    return "```\n" + "\n".join(lines) + "\n```"
 
 def _format_rfp_upload_summary(*, rfp_id: str, file_name: str, job_id: str) -> str:
     rid = str(rfp_id or "").strip()
@@ -50,7 +76,9 @@ def _format_rfp_upload_summary(*, rfp_id: str, file_name: str, job_id: str) -> s
     link = f"<{_rfp_url(rid)}|{title}>" if rid else "RFP"
 
     lines: list[str] = []
-    header = f"New RFP uploaded: {link} `{rid}`" if rid else f"New RFP uploaded: {link}"
+    header = (
+        f"New RFP uploaded: {link} `{rid}`" if rid else f"New RFP uploaded: {link}"
+    )
     lines.append(header)
 
     details: list[tuple[str, str]] = [
@@ -63,13 +91,13 @@ def _format_rfp_upload_summary(*, rfp_id: str, file_name: str, job_id: str) -> s
         ("Registration", registration),
         ("Project deadline", project_deadline),
         ("Location", location),
+        ("File", name),
+        ("Job", jid),
     ]
-    for label, val in details:
-        if val:
-            lines.append(f"• *{label}:* {val}")
 
-    lines.append(f"• *File:* `{name}`")
-    lines.append(f"• *Job:* `{jid}`")
+    table = _slack_markdown_table(details)
+    if table:
+        lines.append(table)
     return "\n".join(lines)
 
 
@@ -88,11 +116,28 @@ def notify_rfp_upload_job_completed(
         or str(get_secret_str("SLACK_RFP_MACHINE_CHANNEL") or "").strip()
         or None
     )
-    post_message(
+    log = get_logger("slack_notifier")
+    res = post_message_result(
         text=_format_rfp_upload_summary(rfp_id=rid, file_name=name, job_id=job_id),
         channel=ch,
         unfurl_links=False,
     )
+    if not bool(res.get("ok")):
+        log.warning(
+            "slack_rfp_machine_notify_failed",
+            job_id=str(job_id or "") or None,
+            rfp_id=rid or None,
+            channel=str(res.get("channel") or ch or "") or None,
+            error=str(res.get("error") or "") or None,
+            status_code=int(res.get("status_code") or 0) or None,
+        )
+    else:
+        log.info(
+            "slack_rfp_machine_notify_ok",
+            job_id=str(job_id or "") or None,
+            rfp_id=rid or None,
+            channel=str(res.get("channel") or ch or "") or None,
+        )
 
 
 def notify_rfp_upload_job_failed(
@@ -110,10 +155,20 @@ def notify_rfp_upload_job_failed(
         or str(get_secret_str("SLACK_RFP_MACHINE_CHANNEL") or "").strip()
         or None
     )
-    post_message(
+    log = get_logger("slack_notifier")
+    res = post_message_result(
         text=f"RFP upload failed (job `{job_id}`, file `{name}`): {err}",
         channel=ch,
     )
+    if not bool(res.get("ok")):
+        log.warning(
+            "slack_rfp_machine_notify_failed",
+            job_id=str(job_id or "") or None,
+            rfp_id=None,
+            channel=str(res.get("channel") or ch or "") or None,
+            error=str(res.get("error") or "") or None,
+            status_code=int(res.get("status_code") or 0) or None,
+        )
 
 
 def notify_finder_run_done(

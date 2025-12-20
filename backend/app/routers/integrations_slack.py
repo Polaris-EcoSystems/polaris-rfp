@@ -23,6 +23,7 @@ from ..services.slack_web import (
     is_slack_configured,
     list_recent_channel_pdfs,
     post_message,
+    post_message_result,
 )
 
 
@@ -454,6 +455,7 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
                     "- `/polaris search <keywords>` (search title/client/type)",
                     "- `/polaris upload [n]` (upload latest PDFs from this channel; default 1)",
                     "- `/polaris channel` (show this channel's ID; use for private rfp-machine config)",
+                    "- `/polaris slacktest` (post a diagnostic message to rfp-machine)",
                     "- `/polaris due [days]` (submission deadlines due soon; default 7)",
                     "- `/polaris pipeline [stage]` (group RFPs by workflow stage)",
                     "- `/polaris proposals [n]` (list latest proposals)",
@@ -483,6 +485,38 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
                     "For private `rfp-machine`, set `SLACK_RFP_MACHINE_CHANNEL` to this ID (starts with `G`).",
                     "Also ensure the bot user is invited to the private channel.",
                 ]
+            ),
+        }
+
+    if sub in ("slacktest", "slack-test", "testslack"):
+        # Diagnostic: try posting to configured rfp-machine channel and report Slack error.
+        target = (
+            str(settings.slack_rfp_machine_channel or "").strip()
+            or (get_secret_str("SLACK_RFP_MACHINE_CHANNEL") or "")
+        ).strip()
+        if not target:
+            return {
+                "response_type": "ephemeral",
+                "text": "Missing `SLACK_RFP_MACHINE_CHANNEL` configuration.",
+            }
+        res = post_message_result(
+            text="Polaris Slack test: rfp-machine notifications are configured.",
+            channel=target,
+            unfurl_links=False,
+        )
+        if res.get("ok"):
+            return {
+                "response_type": "ephemeral",
+                "text": f"✅ Posted test message to `{target}`.",
+            }
+        return {
+            "response_type": "ephemeral",
+            "text": (
+                "Failed to post test message.\n"
+                f"- channel: `{target}`\n"
+                f"- error: `{res.get('error')}`\n"
+                f"- status: `{res.get('status_code')}`\n"
+                "Common fixes: invite bot to the private channel; use the channel ID (C…/G…); ensure SLACK_ENABLED=true + token present."
             ),
         }
 
