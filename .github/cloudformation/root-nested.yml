@@ -75,11 +75,6 @@ Parameters:
     NoEcho: true
     Default: ''
 
-  # Data store (DynamoDB)
-  DdbTableName:
-    Type: String
-    Default: ''
-
   JwtSecret:
     Type: String
     NoEcho: true

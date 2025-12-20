@@ -87,7 +87,7 @@ def _extract_text_content(file_path: str, mime_type: str) -> str | None:
 
     if mt == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
         try:
-            text = docx2txt.process(file_path)  # type: ignore[no-untyped-call]
+            text = docx2txt.process(file_path)
             text = (text or "").strip()
             return text or None
         except Exception:

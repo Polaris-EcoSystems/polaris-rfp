@@ -232,8 +232,9 @@ def _section_content_from_title(
 def _template_section_titles(template_id: str, rfp: dict[str, Any]) -> list[str]:
     tid = str(template_id or "").strip()
     if tid == "ai-template":
-        titles = rfp.get("sectionTitles") if isinstance(rfp.get("sectionTitles"), list) else []
-        titles = [str(x).strip() for x in titles if str(x).strip()]
+        raw_titles = rfp.get("sectionTitles")
+        titles_in: list[Any] = raw_titles if isinstance(raw_titles, list) else []
+        titles = [str(x).strip() for x in titles_in if str(x).strip()]
         if titles:
             return titles[:80]
         return [
@@ -916,7 +917,7 @@ def update_review(id: str, body: dict):
     next_score = None
     if score not in (None, ""):
         try:
-            n = float(score)
+            n = float(score) if isinstance(score, (int, float)) else float(str(score))
             next_score = max(0, min(100, n))
         except Exception:
             next_score = None

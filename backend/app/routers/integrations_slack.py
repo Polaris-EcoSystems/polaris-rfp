@@ -733,30 +733,30 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
                 days = 7
         days = max(1, min(30, days))
         items = _recent_rfps(max_results=200)
-        hits: list[dict] = []
+        due_hits: list[dict] = []
         for r in items:
             du = _days_until_submission(r)
             if du is None:
                 continue
             if 0 <= du <= days:
-                hits.append(r)
+                due_hits.append(r)
 
-        hits.sort(
+        due_hits.sort(
             key=lambda r: (
                 _days_until_submission(r) if _days_until_submission(r) is not None else 9999,
                 str(r.get("createdAt") or ""),
             )
         )
-        if not hits:
+        if not due_hits:
             return {
                 "response_type": rt,
                 "text": f"No RFPs due in the next {days} days.",
             }
         lines = [f"*RFPs due in the next {days} days*"] + [
-            _format_rfp_line(r) for r in hits[:12]
+            _format_rfp_line(r) for r in due_hits[:12]
         ]
-        if len(hits) > 12:
-            lines.append(f"_Showing 12 of {len(hits)}._")
+        if len(due_hits) > 12:
+            lines.append(f"_Showing 12 of {len(due_hits)}._")
         return {"response_type": rt, "text": "\n".join(lines)}
 
     if sub == "pipeline":
@@ -818,20 +818,20 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
         for k in list(grouped.keys()):
             grouped[k].sort(key=_sort_key)
 
-        lines: list[str] = []
-        lines.append("*Pipeline*")
-        lines.append(f"<{_pipeline_url()}|Open Pipeline>")
+        pipeline_lines: list[str] = []
+        pipeline_lines.append("*Pipeline*")
+        pipeline_lines.append(f"<{_pipeline_url()}|Open Pipeline>")
         if want:
-            lines.append(f"_Filter:_ `{want}`")
+            pipeline_lines.append(f"_Filter:_ `{want}`")
         for k in order:
             if not grouped.get(k):
                 continue
-            lines.append(f"\n*{k}* ({len(grouped[k])})")
+            pipeline_lines.append(f"\n*{k}* ({len(grouped[k])})")
             for r in grouped[k][:6]:
-                lines.append(_format_rfp_line(r))
+                pipeline_lines.append(_format_rfp_line(r))
             if len(grouped[k]) > 6:
-                lines.append(f"_…and {len(grouped[k]) - 6} more_")
-        return {"response_type": rt, "text": "\n".join(lines)}
+                pipeline_lines.append(f"_…and {len(grouped[k]) - 6} more_")
+        return {"response_type": rt, "text": "\n".join(pipeline_lines)}
 
     if sub in ("proposals", "proposal-list"):
         n = 8
@@ -893,19 +893,19 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
         # Prefer blocks for a richer Slack UX.
         text0, blocks = _build_rfp_summary_blocks(rfp=r, proposals_count=prop_count)
         # Append warnings + requirements into plain text (keeps blocks clean).
-        lines: list[str] = []
+        summary_lines: list[str] = []
         if warnings:
-            lines.append(f"*Date warnings:* {len(warnings)} (e.g. {str(warnings[0])})")
+            summary_lines.append(f"*Date warnings:* {len(warnings)} (e.g. {str(warnings[0])})")
         if reqs:
             top = [str(x).strip() for x in reqs[:5] if str(x).strip()]
             if top:
-                lines.append("*Top requirements:*")
-                lines.extend([f"- {t}" for t in top])
+                summary_lines.append("*Top requirements:*")
+                summary_lines.extend([f"- {t}" for t in top])
         if len(hits) > 1:
-            lines.append("*Other matches:*")
+            summary_lines.append("*Other matches:*")
             for alt in hits[1:4]:
-                lines.append(_format_rfp_line(alt))
-        text = (text0 + ("\n" + "\n".join(lines) if lines else "")).strip()
+                summary_lines.append(_format_rfp_line(alt))
+        text = (text0 + ("\n" + "\n".join(summary_lines) if summary_lines else "")).strip()
         return {"response_type": rt, "text": text, "blocks": blocks}
 
     if sub == "rfp":

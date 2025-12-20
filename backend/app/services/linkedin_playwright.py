@@ -29,7 +29,7 @@ def _ensure_logged_in(page) -> None:
 
 def validate_linkedin_session(
     *,
-    storage_state: dict[str, Any],
+    storage_state: Any,
     headless: bool = True,
     timeout_ms: int = 30_000,
 ) -> None:
@@ -138,7 +138,7 @@ def _extract_people_cards(page, max_people: int) -> list[dict[str, Any]]:
 
 def discover_people_for_company(
     *,
-    storage_state: dict[str, Any],
+    storage_state: Any,
     company_name: str | None,
     company_linkedin_url: str | None,
     max_people: int = 50,

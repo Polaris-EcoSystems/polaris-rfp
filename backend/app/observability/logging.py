@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from typing import Any
 
+structlog: Any
 try:
-    import structlog  # type: ignore
+    import structlog as _structlog
+    structlog = _structlog
 except Exception:  # pragma: no cover
-    structlog = None  # type: ignore
+    structlog = None
 
 from .context import get_request_id
 

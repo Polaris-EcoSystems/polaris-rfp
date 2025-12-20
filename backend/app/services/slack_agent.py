@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from ..ai.client import AiNotConfigured, AiUpstreamError, _client  # type: ignore
+from ..ai.client import AiNotConfigured, AiUpstreamError, _client
 from ..ai.context import clip_text, normalize_ws
 from ..observability.logging import get_logger
 from ..settings import settings
@@ -62,7 +62,8 @@ def _responses_text(resp: Any) -> str:
 def _resp_to_dict(resp: Any) -> dict[str, Any]:
     if hasattr(resp, "model_dump"):
         try:
-            return resp.model_dump()  # type: ignore[no-any-return]
+            out = resp.model_dump()
+            return out if isinstance(out, dict) else {}
         except Exception:
             return {}
     if isinstance(resp, dict):

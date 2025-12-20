@@ -215,7 +215,7 @@ def save_top_buyers_to_rfp(
         def matches(p: dict[str, Any]) -> bool:
             pid = str(p.get("profileId") or "").strip().lower()
             url = str(p.get("profileUrl") or "").strip().lower()
-            return (pid and pid in selected_set) or (url and url in selected_set)
+            return bool((pid and pid in selected_set) or (url and url in selected_set))
 
         chosen = [p for p in items if isinstance(p, dict) and matches(p)]
     else:

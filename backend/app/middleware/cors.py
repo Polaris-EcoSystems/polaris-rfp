@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-from typing import Iterable
-
-from fastapi.middleware.cors import CORSMiddleware
-
-
 def build_allowed_origins(*, frontend_base_url: str, frontend_url: str | None, frontend_urls: str | None) -> list[str]:
     allowed: set[str] = {
         "http://localhost:3000",
@@ -40,15 +35,3 @@ def build_allowed_origin_regex() -> str:
     - Port is permitted for dev/staging custom setups.
     """
     return r"^https?://([a-z0-9-]+\.)*(amplifyapp\.com|polariseco\.com)(:\d+)?$"
-
-
-def make_cors_middleware(*, allowed_origins: Iterable[str]) -> CORSMiddleware:
-    return CORSMiddleware(
-        allow_origins=list(allowed_origins),
-        allow_origin_regex=build_allowed_origin_regex(),
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
-        expose_headers=["ETag"],
-        max_age=3000,
-    )

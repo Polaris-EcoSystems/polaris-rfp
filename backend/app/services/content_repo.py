@@ -55,11 +55,12 @@ def list_companies(limit: int = 200) -> list[dict[str, Any]]:
         limit=max(1, min(200, int(limit or 200))),
         next_token=None,
     )
-    return [
-        _normalize(it, id_field="companyId")
-        for it in (pg.items or [])
-        if _normalize(it, id_field="companyId")
-    ]
+    out: list[dict[str, Any]] = []
+    for it in pg.items or []:
+        norm = _normalize(it, id_field="companyId")
+        if norm:
+            out.append(norm)
+    return out
 
 
 def upsert_company(company: dict[str, Any]) -> dict[str, Any]:
@@ -146,11 +147,12 @@ def list_past_projects(limit: int = 200) -> list[dict[str, Any]]:
         limit=max(1, min(500, int(limit or 200))),
         next_token=None,
     )
-    return [
-        _normalize(it, id_field="projectId")
-        for it in (pg.items or [])
-        if _normalize(it, id_field="projectId")
-    ]
+    out: list[dict[str, Any]] = []
+    for it in pg.items or []:
+        norm = _normalize(it, id_field="projectId")
+        if norm:
+            out.append(norm)
+    return out
 
 
 def get_past_project_by_id(project_id: str) -> dict[str, Any] | None:
@@ -190,11 +192,12 @@ def list_project_references(limit: int = 200) -> list[dict[str, Any]]:
         limit=max(1, min(500, int(limit or 200))),
         next_token=None,
     )
-    return [
-        _normalize(it, id_field="referenceId")
-        for it in (pg.items or [])
-        if _normalize(it, id_field="referenceId")
-    ]
+    out: list[dict[str, Any]] = []
+    for it in pg.items or []:
+        norm = _normalize(it, id_field="referenceId")
+        if norm:
+            out.append(norm)
+    return out
 
 
 def get_project_references_by_ids(reference_ids: list[str]) -> list[dict[str, Any]]:

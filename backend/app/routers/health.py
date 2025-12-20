@@ -8,8 +8,8 @@ router = APIRouter()
 
 def _openai_capabilities() -> dict[str, object]:
     try:
-        import openai  # type: ignore
-        from openai import OpenAI  # type: ignore
+        import openai
+        from openai import OpenAI
 
         try:
             client = OpenAI(api_key="__redacted__", max_retries=0, timeout=5)

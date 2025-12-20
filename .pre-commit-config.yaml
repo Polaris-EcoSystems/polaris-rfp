@@ -9,31 +9,22 @@ repos:
     hooks:
       - id: ruff
         name: backend ruff (F,E9)
-        args: [--select, F, E9]
+        args: [--select, 'F,E9']
         files: ^backend/
         stages: [pre-commit, pre-push]
 
-  # ----------------------------
-  # Pre-push: match CI non-deploy checks
-  # ----------------------------
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.1
-    hooks:
-      - id: mypy
-        name: backend mypy
-        pass_filenames: false
-        args: [--config-file=backend/mypy.ini, backend/app]
-        additional_dependencies:
-          # Match CI: backend requirements + typecheck deps
-          - -rbackend/requirements.txt
-          - -rbackend/requirements-dev.txt
-        stages: [pre-push]
-
   - repo: local
     hooks:
+      - id: backend-mypy
+        name: backend mypy (uses backend/.venv)
+        entry: bash -lc "cd backend && . .venv/bin/activate && mypy app"
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
       - id: backend-pytest
         name: backend pytest
-        entry: bash -lc "cd backend && pytest -q"
+        entry: bash -lc "cd backend && . .venv/bin/activate && pytest -q"
         language: system
         pass_filenames: false
         stages: [pre-push]

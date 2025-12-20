@@ -324,7 +324,9 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
     try:
         # If AI isn't configured, call_json will throw AiNotConfigured.
 
-        def _call(purpose: str, model_cls: type, prompt: str, max_tokens: int):
+        def _call(purpose: str, model_cls: type, prompt: str, max_tokens: int) -> tuple[Any, Any]:
+            parsed: Any
+            meta: Any
             parsed, meta = call_json(
                 purpose=purpose,
                 response_model=model_cls,

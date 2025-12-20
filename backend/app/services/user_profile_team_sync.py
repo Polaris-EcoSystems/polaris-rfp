@@ -73,9 +73,12 @@ def upsert_linked_team_member_from_user_profile(
     # User-managed fields from profile
     full_name = str(prof.get("fullName") or "").strip()[:200] or None
     job_title = _pick_first_job_title(prof.get("jobTitles"))
-    certs = prof.get("certifications") if isinstance(prof.get("certifications"), list) else []
+    certs_raw = prof.get("certifications")
+    certs: list[Any] = certs_raw if isinstance(certs_raw, list) else []
     certifications = [str(x or "").strip()[:200] for x in certs if str(x or "").strip()][:50]
-    resume_assets = prof.get("resumeAssets") if isinstance(prof.get("resumeAssets"), list) else []
+
+    resume_raw = prof.get("resumeAssets")
+    resume_assets: list[Any] = resume_raw if isinstance(resume_raw, list) else []
 
     user_managed_fields = (
         dict(existing.get("userManagedFields") or {}) if isinstance(existing, dict) else {}

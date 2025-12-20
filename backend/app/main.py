@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
 
 from .middleware.access_log import AccessLogMiddleware
 from .middleware.auth import AuthMiddleware
@@ -84,9 +85,9 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestContextMiddleware)
 
     # Error handlers
-    app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
-    app.add_exception_handler(RequestValidationError, _validation_error_handler)
-    app.add_exception_handler(DdbError, _ddb_error_handler)
+    app.add_exception_handler(StarletteHTTPException, _http_exception_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(RequestValidationError, _validation_error_handler)  # type: ignore[arg-type]
+    app.add_exception_handler(DdbError, _ddb_error_handler)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, _unhandled_exception_handler)
 
     # Routes
@@ -112,7 +113,7 @@ def create_app() -> FastAPI:
     return app
 
 
-def _ddb_error_handler(request, exc: DdbError):
+def _ddb_error_handler(request: Request, exc: DdbError) -> Response:
     # Map storage-layer errors to stable HTTP semantics.
     status_code = 500
     title = "Storage Error"
@@ -130,7 +131,7 @@ def _ddb_error_handler(request, exc: DdbError):
         status_code = 503
         title = "Service Unavailable"
 
-    extensions: dict | None = None
+    extensions: dict[str, object] | None = None
     try:
         extensions = {
             "operation": exc.operation,
@@ -153,7 +154,7 @@ def _ddb_error_handler(request, exc: DdbError):
     )
 
 
-def _http_exception_handler(request, exc: StarletteHTTPException):
+def _http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
     status_code = int(getattr(exc, "status_code", 500) or 500)
     detail = getattr(exc, "detail", None)
 
@@ -186,8 +187,7 @@ def _http_exception_handler(request, exc: StarletteHTTPException):
     )
 
 
-def _validation_error_handler(_request, exc: RequestValidationError):
-    request = _request
+def _validation_error_handler(request: Request, exc: RequestValidationError) -> Response:
     errors: list[dict[str, object]] = []
     for e in exc.errors():
         loc = e.get("loc") or ()
@@ -209,7 +209,7 @@ def _validation_error_handler(_request, exc: RequestValidationError):
     )
 
 
-def _unhandled_exception_handler(request, exc: Exception):
+def _unhandled_exception_handler(request: Request, exc: Exception) -> Response:
     # Log the full traceback to CloudWatch. We keep the HTTP response generic
     # in production (see problem_response), but operators need stack traces.
     try:

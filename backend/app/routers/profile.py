@@ -35,6 +35,9 @@ def _current_cognito_username(request: Request) -> str:
 
 def _get_profile_payload(request: Request) -> dict[str, Any]:
     _require_cognito_configured()
+    pool_id = str(settings.cognito_user_pool_id or "").strip()
+    if not pool_id:
+        raise HTTPException(status_code=500, detail="Cognito is not configured")
 
     verified_user = getattr(request.state, "user", None)
     if not verified_user:
@@ -43,9 +46,7 @@ def _get_profile_payload(request: Request) -> dict[str, Any]:
     username = _current_cognito_username(request)
 
     try:
-        user_resp = cognito_idp.admin_get_user(
-            user_pool_id=settings.cognito_user_pool_id, username=username
-        )
+        user_resp = cognito_idp.admin_get_user(user_pool_id=pool_id, username=username)
     except Exception:
         # Don't leak AWS internals; treat as not found / misconfigured
         raise HTTPException(status_code=404, detail="User not found")
@@ -63,7 +64,7 @@ def _get_profile_payload(request: Request) -> dict[str, Any]:
     schema: list[dict[str, Any]] = []
     schema_map: dict[str, dict[str, Any]] = {}
     try:
-        pool = cognito_idp.describe_user_pool(user_pool_id=settings.cognito_user_pool_id)
+        pool = cognito_idp.describe_user_pool(user_pool_id=pool_id)
         for s in (pool.get("UserPool") or {}).get("SchemaAttributes") or []:
             name = str(s.get("Name") or "").strip()
             if not name:
@@ -141,6 +142,9 @@ class UpdateAttributesRequest(BaseModel):
 @router.put("/attributes")
 def update_attributes(body: UpdateAttributesRequest, request: Request):
     _require_cognito_configured()
+    pool_id = str(settings.cognito_user_pool_id or "").strip()
+    if not pool_id:
+        raise HTTPException(status_code=500, detail="Cognito is not configured")
     username = _current_cognito_username(request)
 
     to_update: dict[str, str] = {}
@@ -158,13 +162,13 @@ def update_attributes(body: UpdateAttributesRequest, request: Request):
     try:
         if to_update:
             cognito_idp.admin_update_user_attributes(
-                user_pool_id=settings.cognito_user_pool_id,
+                user_pool_id=pool_id,
                 username=username,
                 attributes=to_update,
             )
         if to_delete:
             cognito_idp.admin_delete_user_attributes(
-                user_pool_id=settings.cognito_user_pool_id,
+                user_pool_id=pool_id,
                 username=username,
                 attribute_names=to_delete,
             )
@@ -178,6 +182,9 @@ def update_attributes(body: UpdateAttributesRequest, request: Request):
 @router.delete("/attributes/{name}")
 def delete_attribute(name: str, request: Request):
     _require_cognito_configured()
+    pool_id = str(settings.cognito_user_pool_id or "").strip()
+    if not pool_id:
+        raise HTTPException(status_code=500, detail="Cognito is not configured")
     username = _current_cognito_username(request)
 
     attr = str(name or "").strip()
@@ -186,7 +193,7 @@ def delete_attribute(name: str, request: Request):
 
     try:
         cognito_idp.admin_delete_user_attributes(
-            user_pool_id=settings.cognito_user_pool_id,
+            user_pool_id=pool_id,
             username=username,
             attribute_names=[attr],
         )

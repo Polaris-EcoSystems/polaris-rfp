@@ -142,6 +142,7 @@ def verify_bearer_token(token: str) -> VerifiedUser:
 
     # Access tokens often omit email/name fields; enrich from Cognito AdminGetUser (cached).
     if token_use == "access":
+        pool_id = str(settings.cognito_user_pool_id or "").strip()
         # Determine Cognito username for lookup (prefer explicit claim).
         cognito_username = (
             str(claims.get("cognito:username") or "").strip()
@@ -149,12 +150,12 @@ def verify_bearer_token(token: str) -> VerifiedUser:
             or str(claims.get("preferred_username") or "").strip()
             or (str(email).strip() if email else "")
         )
-        if cognito_username:
+        if cognito_username and pool_id:
             cached = _USER_ATTR_CACHE.get(cognito_username)
             if cached is None:
                 try:
                     resp = cognito_idp.admin_get_user(
-                        user_pool_id=settings.cognito_user_pool_id,
+                        user_pool_id=pool_id,
                         username=cognito_username,
                     )
                     attrs_list = resp.get("UserAttributes") or []

@@ -19,7 +19,8 @@ def _summary_from_template(t: dict) -> dict:
     tid = str(t.get("id") or t.get("_id") or t.get("templateId") or "").strip()
     name = str(t.get("name") or "").strip()
     project_type = str(t.get("projectType") or t.get("templateType") or "").strip() or "general"
-    sections = t.get("sections") if isinstance(t.get("sections"), list) else []
+    raw_sections = t.get("sections")
+    sections: list[object] = raw_sections if isinstance(raw_sections, list) else []
     return {
         "id": tid,
         "name": name,

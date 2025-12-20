@@ -148,16 +148,16 @@ def build_dataset_values(
 
         # Heuristic fallback if not mapped
         if not value_obj:
-            src = guess_source_for_key(str(key))
-            if src:
-                if src.startswith("proposal."):
-                    val = _get({"proposal": proposal}, src)
-                elif src.startswith("rfp."):
-                    val = _get({"rfp": rfp}, src)
-                elif src.startswith("company."):
-                    val = _get({"company": company or {}}, src)
+            guessed_src = guess_source_for_key(str(key))
+            if guessed_src:
+                if guessed_src.startswith("proposal."):
+                    val = _get({"proposal": proposal}, guessed_src)
+                elif guessed_src.startswith("rfp."):
+                    val = _get({"rfp": rfp}, guessed_src)
+                elif guessed_src.startswith("company."):
+                    val = _get({"company": company or {}}, guessed_src)
                 else:
-                    val = _get({"proposal": proposal, "rfp": rfp, "company": company or {}}, src)
+                    val = _get({"proposal": proposal, "rfp": rfp, "company": company or {}}, guessed_src)
                 v = _to_text(val).strip()
                 if field_type == "text" and v:
                     value_obj = {"type": "text", "text": v}

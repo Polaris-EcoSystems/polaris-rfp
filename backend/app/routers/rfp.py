@@ -792,9 +792,11 @@ def ai_refresh_stream(id: str):
             ("lists", "rfp_analysis_lists", RfpListsAI, _prompt_lists(), 1400),
         ]
 
-        def _call(purpose: str, model_cls: type, prompt: str, max_tokens: int):
+        def _call(purpose: str, model_cls: type, prompt: str, max_tokens: int) -> tuple[Any, Any]:
             from ..ai.client import call_json
 
+            parsed: Any
+            meta: Any
             parsed, meta = call_json(
                 purpose=purpose,
                 response_model=model_cls,

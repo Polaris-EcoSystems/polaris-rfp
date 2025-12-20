@@ -59,7 +59,8 @@ def format_title_section(company: dict[str, Any] | None, rfp: dict[str, Any] | N
 
     submitted_by = str(company.get("name") or "Not specified")
 
-    primary = company.get("primaryContact") if isinstance(company.get("primaryContact"), dict) else {}
+    primary_raw = company.get("primaryContact")
+    primary: dict[str, Any] = primary_raw if isinstance(primary_raw, dict) else {}
 
     contact_name = primary.get("name") or (
         f"{submitted_by.split(' ')[0]} Representative" if submitted_by != "Not specified" else "Not specified"
@@ -164,7 +165,8 @@ def format_experience_section(company: dict[str, Any] | None, rfp: dict[str, Any
 
     formatted = base
 
-    stats = company.get("statistics") if isinstance(company.get("statistics"), dict) else {}
+    stats_raw = company.get("statistics")
+    stats: dict[str, Any] = stats_raw if isinstance(stats_raw, dict) else {}
     years = stats.get("yearsInBusiness")
     projects = stats.get("projectsCompleted")
     clients = stats.get("clientsSatisfied")

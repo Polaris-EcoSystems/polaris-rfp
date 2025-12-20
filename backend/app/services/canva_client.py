@@ -222,7 +222,9 @@ def list_brand_templates(user_id: str, query: str = "") -> dict[str, Any]:
 
 
 def get_brand_template_dataset(user_id: str, brand_template_id: str) -> dict[str, Any]:
-    safe = httpx.utils.quote(str(brand_template_id), safe="")
+    import urllib.parse
+
+    safe = urllib.parse.quote(str(brand_template_id), safe="")
     return canva_request(user_id, "GET", f"/v1/brand-templates/{safe}/dataset")
 
 
