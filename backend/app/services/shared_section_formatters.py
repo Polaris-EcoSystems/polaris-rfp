@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from ..ai.client import AiError, call_text
+from ..ai.client import AiError
+from ..ai.verified_calls import call_text_verified
+from ..ai.verification import forbid_regex
 from ..settings import settings
 
 
@@ -149,12 +151,13 @@ def format_experience_section(company: dict[str, Any] | None, rfp: dict[str, Any
                 "Return only the clean, simply formatted content without markdown headings or excessive structure."
             )
 
-            formatted, _meta = call_text(
+            formatted, _meta = call_text_verified(
                 purpose="proposal_sections",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=2000,
                 temperature=0.3,
                 retries=2,
+                validate_extra=forbid_regex(pattern=r"(^|\n)\s*#{1,6}\s+", what="output"),
             )
             if formatted:
                 return formatted

@@ -11,10 +11,12 @@ from pydantic import BaseModel
 
 from ..observability.logging import get_logger
 from ..settings import settings
+from .tuning import Validator, tuning_for
 
 log = get_logger("ai")
 
 T = TypeVar("T", bound=BaseModel)
+ParsedValidator = Callable[[BaseModel], str | None]
 
 
 class AiError(RuntimeError):
@@ -195,6 +197,49 @@ def _clip(s: str, max_len: int) -> str:
     if len(s) <= max_len:
         return s
     return s[:max_len]
+
+
+def _is_parse_failure(e: Exception | None) -> bool:
+    return bool(e) and e.__class__.__name__ == "AiParseError"
+
+
+def _retry_feedback_message(*, kind: str, purpose: str, prev_err: Exception, last_output: str | None) -> dict[str, str]:
+    """
+    Build a clipped feedback instruction to improve retries.
+    """
+    err = _clip(str(prev_err) or "error", 500)
+    prev = _clip(str(last_output or ""), 1200)
+    k = str(kind or "").strip().lower()
+    p = str(purpose or "").strip()
+    if k == "json":
+        txt = (
+            "Your previous attempt did not produce valid JSON for the required schema.\n"
+            f"Error: {err}\n"
+            "Return ONLY a single JSON object that matches the schema exactly. No markdown, no extra keys."
+        )
+    else:
+        extra_prev = f"\nPrevious output (truncated):\n{prev}" if prev else ""
+        txt = (
+            "Your previous attempt failed verification.\n"
+            f"Error: {err}\n"
+            "Fix the output to satisfy the requirement. Return ONLY the corrected final output."
+            + extra_prev
+        )
+    return {"role": "user", "content": f"[RETRY_FEEDBACK purpose={p} kind={k}]\n{txt}".strip()}
+
+
+def _run_validator(validate: Validator | list[Validator] | None, text: str) -> str | None:
+    if validate is None:
+        return None
+    fns: list[Validator] = validate if isinstance(validate, list) else [validate]
+    for fn in fns:
+        try:
+            msg = fn(text)
+        except Exception as e:
+            return f"validator_exception: {e}"
+        if msg:
+            return str(msg)
+    return None
 
 
 def _normalize_messages(messages: list[dict[str, str]], max_chars: int) -> list[dict[str, str]]:
@@ -402,6 +447,7 @@ def call_text(
     messages: list[dict[str, str]],
     max_tokens: int = 1200,
     temperature: float = 0.4,
+    validate: Validator | list[Validator] | None = None,
     retries: int = 2,
     timeout_s: int = 60,
     max_prompt_chars: int = 220_000,
@@ -416,22 +462,35 @@ def call_text(
 
     last_err: Exception | None = None
     for model in _models_to_try(purpose):
+        prev_err: Exception | None = None
+        prev_output: str | None = None
         for attempt in range(1, max(1, int(retries) + 1) + 1):
+            attempt_messages = list(messages)
+            if attempt >= 2 and _is_parse_failure(prev_err) and prev_err is not None:
+                attempt_messages.append(
+                    _retry_feedback_message(kind="text", purpose=purpose, prev_err=prev_err, last_output=prev_output)
+                )
+            # Give retries more room when validation fails (bounded by cap).
+            mt = max_tokens
+            if attempt >= 2 and _is_parse_failure(prev_err):
+                mt = int(min(int(settings.openai_max_output_tokens_cap or mt), int(mt * 1.5)))
             try:
                 # Prefer Responses API for GPT-5 family (supports reasoning/verbosity).
                 if _is_gpt5_family(model) and _supports_responses_api(client):
-                    eff = str(settings.openai_reasoning_effort_text or settings.openai_reasoning_effort or "none")
-                    vb = str(settings.openai_text_verbosity or "medium")
+                    t = tuning_for(purpose=purpose, kind="text", attempt=attempt, prev_err=prev_err)
                     out, meta = _responses_create_text(
                         client=client,
                         model=model,
                         purpose=purpose,
-                        messages=messages,
-                        max_tokens=max_tokens,
+                        messages=attempt_messages,
+                        max_tokens=mt,
                         temperature=temperature,
-                        reasoning_effort=eff,
-                        verbosity=vb,
+                        reasoning_effort=t.reasoning_effort,
+                        verbosity=t.verbosity,
                     )
+                    msg = _run_validator(validate, out)
+                    if msg:
+                        raise AiParseError(f"validation_failed: {msg}")
                     # Preserve retry semantics: stamp attempt count.
                     _circuit_record_success()
                     try:
@@ -451,16 +510,16 @@ def call_text(
                 try:
                     completion = client.chat.completions.create(
                         model=model,
-                        messages=messages,
-                        max_completion_tokens=max_tokens,
+                        messages=attempt_messages,
+                        max_completion_tokens=mt,
                         temperature=temperature,
                     )
                 except Exception as e:
                     if _should_retry_with_legacy_max_tokens(e):
                         completion = client.chat.completions.create(
                             model=model,
-                            messages=messages,
-                            max_tokens=max_tokens,
+                            messages=attempt_messages,
+                            max_tokens=mt,
                             temperature=temperature,
                         )
                     else:
@@ -468,6 +527,9 @@ def call_text(
                 out = (completion.choices[0].message.content or "").strip()
                 if not out:
                     raise AiParseError("empty_model_response")
+                msg = _run_validator(validate, out)
+                if msg:
+                    raise AiParseError(f"validation_failed: {msg}")
                 _circuit_record_success()
                 try:
                     log.info(
@@ -484,6 +546,8 @@ def call_text(
                 )
             except Exception as e:
                 last_err = e
+                prev_err = e
+                prev_output = locals().get("out") if isinstance(locals().get("out"), str) else prev_output
                 _circuit_record_failure(e)
                 if _is_model_access_error(e, model=model):
                     log.warning(
@@ -524,6 +588,7 @@ def call_json(
     temperature: float = 0.2,
     retries: int = 3,
     allow_json_extract: bool = True,
+    validate_parsed: Callable[[T], str | None] | None = None,
     fallback: Callable[[], T] | None = None,
     timeout_s: int = 60,
     max_prompt_chars: int = 220_000,
@@ -569,23 +634,37 @@ def call_json(
     ]
 
     for model in _models_to_try(purpose):
+        prev_err: Exception | None = None
+        prev_output: str | None = None
         for attempt in range(1, max(1, int(retries)) + 1):
+            attempt_messages = list(messages)
+            if attempt >= 2 and _is_parse_failure(prev_err) and prev_err is not None:
+                attempt_messages.append(
+                    _retry_feedback_message(kind="json", purpose=purpose, prev_err=prev_err, last_output=None)
+                )
             # Prefer Responses API for GPT-5 family.
             if _is_gpt5_family(model) and _supports_responses_api(client):
                 try:
-                    eff = str(settings.openai_reasoning_effort_json or settings.openai_reasoning_effort or "low")
-                    vb = str(settings.openai_text_verbosity_json or settings.openai_text_verbosity or "low")
+                    t = tuning_for(purpose=purpose, kind="json", attempt=attempt, prev_err=prev_err)
+                    # If we failed to parse/validate previously, allow a bit more room.
+                    mt = max_tokens
+                    if isinstance(prev_err, AiParseError) and attempt >= 2:
+                        mt = int(min(int(settings.openai_max_output_tokens_cap or mt), int(mt * 1.5)))
                     parsed, meta = _responses_create_json(
                         client=client,
                         model=model,
                         purpose=purpose,
-                        messages=messages,
-                        max_tokens=max_tokens,
+                        messages=attempt_messages,
+                        max_tokens=mt,
                         temperature=temperature,
-                        reasoning_effort=eff,
-                        verbosity=vb,
+                        reasoning_effort=t.reasoning_effort,
+                        verbosity=t.verbosity,
                         response_model=response_model,
                     )
+                    if validate_parsed is not None:
+                        msg = validate_parsed(parsed)
+                        if msg:
+                            raise AiParseError(f"validation_failed: {msg}")
                     _circuit_record_success()
                     try:
                         log.info(
@@ -603,7 +682,9 @@ def call_json(
                     # If Responses structured outputs aren't supported for the chosen model,
                     # fall through to the Chat Completions path (which we know works for many models).
                     last_err = e
+                    prev_err = e
                     last_preview = None
+                    prev_output = None
                     log.warning(
                         "ai_json_responses_failed",
                         purpose=purpose,
@@ -622,9 +703,12 @@ def call_json(
                     else None
                 )
                 try:
+                    mt = max_tokens
+                    if isinstance(prev_err, AiParseError) and attempt >= 2:
+                        mt = int(min(int(settings.openai_max_output_tokens_cap or mt), int(mt * 1.5)))
                     kwargs_base: dict[str, Any] = {
                         "model": model,
-                        "messages": messages,
+                        "messages": attempt_messages,
                         "temperature": temp,
                     }
                     if response_format is not None:
@@ -632,12 +716,12 @@ def call_json(
 
                     try:
                         completion = client.chat.completions.create(
-                            **(kwargs_base | {"max_completion_tokens": max_tokens})
+                            **(kwargs_base | {"max_completion_tokens": mt})
                         )
                     except Exception as e:
                         if _should_retry_with_legacy_max_tokens(e):
                             completion = client.chat.completions.create(
-                                **(kwargs_base | {"max_tokens": max_tokens})
+                                **(kwargs_base | {"max_tokens": mt})
                             )
                         else:
                             raise
@@ -662,6 +746,11 @@ def call_json(
                     except Exception as e:
                         raise AiParseError(f"schema_validation_error: {e}")
 
+                    if validate_parsed is not None:
+                        msg = validate_parsed(parsed)
+                        if msg:
+                            raise AiParseError(f"validation_failed: {msg}")
+
                     _circuit_record_success()
                     try:
                         log.info(
@@ -681,8 +770,10 @@ def call_json(
                     )
                 except Exception as e:
                     last_err = e
+                    prev_err = e
                     _circuit_record_failure(e)
                     last_preview = (locals().get("content") or "")[:240]
+                    prev_output = str(locals().get("content") or "") if isinstance(locals().get("content"), str) else prev_output
                     if _is_model_access_error(e, model=model):
                         log.warning(
                             "ai_model_unavailable",

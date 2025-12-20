@@ -8,8 +8,9 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ..ai.client import AiError, call_text
+from ..ai.client import AiError
 from ..ai.user_context import load_user_profile_from_request, user_context_block
+from ..ai.verified_calls import call_text_verified
 from ..settings import settings
 from ..services import content_repo, templates_repo
 from ..services.ai_jobs_repo import create_job as create_ai_job
@@ -105,7 +106,7 @@ def _generate_text_section(
     )
 
     try:
-        out, _meta = call_text(
+        out, _meta = call_text_verified(
             purpose="proposal_sections",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1200,

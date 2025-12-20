@@ -9,9 +9,10 @@ from typing import Any
 import httpx
 from pypdf import PdfReader
 
-from ..ai.client import AiError, AiNotConfigured, call_json
+from ..ai.client import AiError, AiNotConfigured
 from ..ai.context import clip_text
 from ..ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI, RfpAnalysisAI
+from ..ai.verified_calls import call_json_verified
 from ..observability.logging import get_logger
 from ..settings import settings
 
@@ -327,7 +328,7 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
         def _call(purpose: str, model_cls: type, prompt: str, max_tokens: int) -> tuple[Any, Any]:
             parsed: Any
             meta: Any
-            parsed, meta = call_json(
+            parsed, meta = call_json_verified(
                 purpose=purpose,
                 response_model=model_cls,
                 messages=[{"role": "user", "content": prompt}],
@@ -374,7 +375,7 @@ def analyze_rfp(source: Any, source_name: str) -> dict[str, Any]:
 
         # If *everything* failed, fall back to the legacy single-call strategy before heuristics.
         if not any(k in parts for k in ("title", "clientName", "keyRequirements")):
-            parsed_full, meta_full = call_json(
+            parsed_full, meta_full = call_json_verified(
                 purpose="rfp_analysis",
                 response_model=RfpAnalysisAI,
                 messages=[{"role": "user", "content": _prompt_legacy_full()}],

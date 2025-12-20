@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
-from ..ai.client import AiNotConfigured, AiUpstreamError, call_text
+from ..ai.client import AiNotConfigured, AiUpstreamError
+from ..ai.verified_calls import call_text_verified
 from ..ai.user_context import load_user_profile_from_request, user_context_block
 from ..ai.schemas import (
     AiEditTextRequest,
@@ -64,7 +65,7 @@ def edit_text(body: dict, request: Request):
     )
 
     try:
-        edited_text, _meta = call_text(
+        edited_text, _meta = call_text_verified(
             purpose="text_edit",
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -151,7 +152,7 @@ def generate_content(body: dict, request: Request):
     )
 
     try:
-        generated, _meta = call_text(
+        generated, _meta = call_text_verified(
             purpose="generate_content",
             messages=[
                 {"role": "system", "content": system_prompt},

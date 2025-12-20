@@ -8,13 +8,11 @@ from typing import Any, Callable
 
 from ..ai.client import AiNotConfigured, AiUpstreamError, _client
 from ..ai.context import clip_text, normalize_ws
+from ..ai.tuning import tuning_for
 from ..observability.logging import get_logger
 from ..settings import settings
-from . import content_repo
-from .proposals_repo import get_proposal_by_id, list_proposals
-from .rfps_repo import get_rfp_by_id, list_rfps
+from .agent_tools.read_registry import READ_TOOLS as READ_TOOLS_REGISTRY
 from .slack_actions_repo import create_action
-from .workflow_tasks_repo import list_tasks_for_rfp
 
 log = get_logger("slack_agent")
 
@@ -128,6 +126,56 @@ def _safe_json(obj: Any, *, max_chars: int = 25_000) -> str:
     return clip_text(s, max_chars=max_chars)
 
 
+def _slim_value(v: Any, *, depth: int = 0, max_depth: int = 3) -> Any:
+    """
+    Best-effort payload slimming for tool outputs.
+    Prevents huge DynamoDB/S3 blobs from flooding the model context.
+    """
+    if depth >= max_depth:
+        if isinstance(v, str):
+            return clip_text(v, max_chars=600)
+        if isinstance(v, (int, float, bool)) or v is None:
+            return v
+        return str(type(v).__name__)
+    if isinstance(v, str):
+        return clip_text(v, max_chars=1800)
+    if isinstance(v, bytes):
+        return f"<bytes:{len(v)}>"
+    if isinstance(v, (int, float, bool)) or v is None:
+        return v
+    if isinstance(v, list):
+        out: list[Any] = []
+        for it in v[:30]:
+            out.append(_slim_value(it, depth=depth + 1, max_depth=max_depth))
+        if len(v) > 30:
+            out.append(f"<truncated:{len(v) - 30}>")
+        return out
+    if isinstance(v, dict):
+        out2: dict[str, Any] = {}
+        # Keep stable order-ish: sort keys for determinism.
+        keys = list(v.keys())
+        try:
+            keys = sorted(keys, key=lambda x: str(x))
+        except Exception:
+            pass
+        for k in keys[:60]:
+            kk = str(k)
+            # Avoid dumping obviously huge fields verbatim.
+            if kk in ("rawText", "text", "content", "body", "html"):
+                out2[kk] = clip_text(str(v.get(k) or ""), max_chars=1200)
+                continue
+            out2[kk] = _slim_value(v.get(k), depth=depth + 1, max_depth=max_depth)
+        if len(keys) > 60:
+            out2["_truncatedKeys"] = len(keys) - 60
+        return out2
+    return clip_text(str(v), max_chars=600)
+
+
+def _slim_item(item: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    return _slim_value(item, depth=0, max_depth=3)
+
 def _supports_responses_api(client: Any) -> bool:
     try:
         r = getattr(client, "responses", None)
@@ -174,297 +222,10 @@ def _chat_tool_calls(completion: Any) -> list[dict[str, Any]]:
     return []
 
 
-def _list_rfps_tool(args: dict[str, Any]) -> dict[str, Any]:
-    limit = int(args.get("limit") or 10)
-    limit = max(1, min(25, limit))
-    resp = list_rfps(page=1, limit=limit, next_token=None)
-    data = resp.get("data") if isinstance(resp, dict) else None
-    rows = data if isinstance(data, list) else []
-    out: list[dict[str, Any]] = []
-    for r in rows[:limit]:
-        if not isinstance(r, dict):
-            continue
-        rid = str(r.get("_id") or r.get("rfpId") or "").strip()
-        out.append(
-            {
-                "rfpId": rid,
-                "title": str(r.get("title") or "RFP").strip(),
-                "clientName": str(r.get("clientName") or "").strip(),
-                "projectType": str(r.get("projectType") or "").strip(),
-                "submissionDeadline": str(r.get("submissionDeadline") or "").strip(),
-                "fitScore": r.get("fitScore"),
-                "url": _rfp_url(rid) if rid else None,
-            }
-        )
-    return {"ok": True, "data": out}
-
-
-def _search_rfps_tool(args: dict[str, Any]) -> dict[str, Any]:
-    q = normalize_ws(str(args.get("query") or ""), max_chars=400)
-    if not q:
-        return {"ok": False, "error": "missing_query"}
-    limit = int(args.get("limit") or 10)
-    limit = max(1, min(15, limit))
-    resp = list_rfps(page=1, limit=200, next_token=None)
-    rows = (resp or {}).get("data") if isinstance(resp, dict) else None
-    data = rows if isinstance(rows, list) else []
-    hits: list[dict[str, Any]] = []
-    ql = q.lower()
-    for r in data:
-        if not isinstance(r, dict):
-            continue
-        hay = f"{r.get('title') or ''} {r.get('clientName') or ''} {r.get('projectType') or ''}".lower()
-        if ql in hay:
-            rid = str(r.get("_id") or r.get("rfpId") or "").strip()
-            hits.append(
-                {
-                    "rfpId": rid,
-                    "title": str(r.get("title") or "RFP").strip(),
-                    "clientName": str(r.get("clientName") or "").strip(),
-                    "projectType": str(r.get("projectType") or "").strip(),
-                    "submissionDeadline": str(r.get("submissionDeadline") or "").strip(),
-                    "url": _rfp_url(rid) if rid else None,
-                }
-            )
-        if len(hits) >= limit:
-            break
-    return {"ok": True, "query": q, "data": hits}
-
-
-def _get_rfp_tool(args: dict[str, Any]) -> dict[str, Any]:
-    rid = str(args.get("rfpId") or "").strip()
-    if not rid:
-        return {"ok": False, "error": "missing_rfpId"}
-    r = get_rfp_by_id(rid)
-    if not r:
-        return {"ok": False, "error": "not_found"}
-    # Keep response bounded.
-    raw = str(r.get("rawText") or "")
-    r2 = dict(r)
-    r2["rawText"] = clip_text(raw, max_chars=9000)
-    r2["url"] = _rfp_url(rid)
-    return {"ok": True, "rfp": r2}
-
-
-def _list_proposals_tool(args: dict[str, Any]) -> dict[str, Any]:
-    limit = int(args.get("limit") or 10)
-    limit = max(1, min(25, limit))
-    resp = list_proposals(page=1, limit=limit, next_token=None)
-    rows = (resp or {}).get("data") if isinstance(resp, dict) else None
-    data = rows if isinstance(rows, list) else []
-    out: list[dict[str, Any]] = []
-    for p in data[:limit]:
-        if not isinstance(p, dict):
-            continue
-        pid = str(p.get("_id") or p.get("proposalId") or "").strip()
-        out.append(
-            {
-                "proposalId": pid,
-                "title": str(p.get("title") or "Proposal").strip(),
-                "status": str(p.get("status") or "").strip(),
-                "rfpId": str(p.get("rfpId") or "").strip(),
-                "url": _proposal_url(pid) if pid else None,
-            }
-        )
-    return {"ok": True, "data": out}
-
-
-def _search_proposals_tool(args: dict[str, Any]) -> dict[str, Any]:
-    q = normalize_ws(str(args.get("query") or ""), max_chars=400)
-    if not q:
-        return {"ok": False, "error": "missing_query"}
-    limit = int(args.get("limit") or 10)
-    limit = max(1, min(15, limit))
-    resp = list_proposals(page=1, limit=200, next_token=None)
-    rows = (resp or {}).get("data") if isinstance(resp, dict) else None
-    data = rows if isinstance(rows, list) else []
-    hits: list[dict[str, Any]] = []
-    ql = q.lower()
-    for p in data:
-        if not isinstance(p, dict):
-            continue
-        hay = f"{p.get('title') or ''} {p.get('status') or ''} {p.get('rfpId') or ''}".lower()
-        if ql in hay:
-            pid = str(p.get("_id") or p.get("proposalId") or "").strip()
-            hits.append(
-                {
-                    "proposalId": pid,
-                    "title": str(p.get("title") or "Proposal").strip(),
-                    "status": str(p.get("status") or "").strip(),
-                    "rfpId": str(p.get("rfpId") or "").strip(),
-                    "url": _proposal_url(pid) if pid else None,
-                }
-            )
-        if len(hits) >= limit:
-            break
-    return {"ok": True, "query": q, "data": hits}
-
-
-def _get_proposal_tool(args: dict[str, Any]) -> dict[str, Any]:
-    pid = str(args.get("proposalId") or "").strip()
-    if not pid:
-        return {"ok": False, "error": "missing_proposalId"}
-    p = get_proposal_by_id(pid, include_sections=True)
-    if not p:
-        return {"ok": False, "error": "not_found"}
-    p2 = dict(p)
-    # Bound sections payload (often large).
-    secs = p2.get("sections")
-    if isinstance(secs, dict):
-        # Keep only keys + content length
-        slim: dict[str, Any] = {}
-        for k, v in list(secs.items())[:80]:
-            if isinstance(v, dict):
-                c = v.get("content")
-                slim[str(k)] = {
-                    **{kk: vv for kk, vv in v.items() if kk != "content"},
-                    "contentPreview": clip_text(str(c or ""), max_chars=700),
-                }
-            else:
-                slim[str(k)] = {"contentPreview": clip_text(str(v or ""), max_chars=700)}
-        p2["sections"] = slim
-    p2["url"] = _proposal_url(pid)
-    return {"ok": True, "proposal": p2}
-
-
-def _list_tasks_for_rfp_tool(args: dict[str, Any]) -> dict[str, Any]:
-    rid = str(args.get("rfpId") or "").strip()
-    if not rid:
-        return {"ok": False, "error": "missing_rfpId"}
-    resp = list_tasks_for_rfp(rfp_id=rid, limit=200, next_token=None)
-    return {"ok": True, **(resp if isinstance(resp, dict) else {"data": []})}
-
-
-def _get_company_tool(args: dict[str, Any]) -> dict[str, Any]:
-    cid = str(args.get("companyId") or "").strip()
-    if not cid:
-        return {"ok": False, "error": "missing_companyId"}
-    c = content_repo.get_company_by_company_id(cid)
-    if not c:
-        return {"ok": False, "error": "not_found"}
-    # Keep response bounded.
-    c2 = dict(c)
-    for k in ("description", "coverLetter", "firmQualificationsAndExperience"):
-        if k in c2:
-            c2[k] = clip_text(str(c2.get(k) or ""), max_chars=2500)
-    return {"ok": True, "company": c2}
-
-
 ToolFn = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
-    "list_rfps": (
-        _tool_def(
-            "list_rfps",
-            "List recent RFPs (returns compact fields + links).",
-            {
-                "type": "object",
-                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 25}},
-                "required": [],
-                "additionalProperties": False,
-            },
-        ),
-        _list_rfps_tool,
-    ),
-    "search_rfps": (
-        _tool_def(
-            "search_rfps",
-            "Search RFPs by keywords over title/client/type (returns compact fields + links).",
-            {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "minLength": 1, "maxLength": 400},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 15},
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        ),
-        _search_rfps_tool,
-    ),
-    "get_rfp": (
-        _tool_def(
-            "get_rfp",
-            "Fetch one RFP by ID (includes clipped rawText).",
-            {
-                "type": "object",
-                "properties": {"rfpId": {"type": "string", "minLength": 1, "maxLength": 120}},
-                "required": ["rfpId"],
-                "additionalProperties": False,
-            },
-        ),
-        _get_rfp_tool,
-    ),
-    "list_proposals": (
-        _tool_def(
-            "list_proposals",
-            "List recent proposals (compact fields + links).",
-            {
-                "type": "object",
-                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 25}},
-                "required": [],
-                "additionalProperties": False,
-            },
-        ),
-        _list_proposals_tool,
-    ),
-    "search_proposals": (
-        _tool_def(
-            "search_proposals",
-            "Search proposals by keywords over title/status/rfpId (compact fields + links).",
-            {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "minLength": 1, "maxLength": 400},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 15},
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        ),
-        _search_proposals_tool,
-    ),
-    "get_proposal": (
-        _tool_def(
-            "get_proposal",
-            "Fetch one proposal by ID (includes clipped section previews).",
-            {
-                "type": "object",
-                "properties": {"proposalId": {"type": "string", "minLength": 1, "maxLength": 120}},
-                "required": ["proposalId"],
-                "additionalProperties": False,
-            },
-        ),
-        _get_proposal_tool,
-    ),
-    "list_tasks_for_rfp": (
-        _tool_def(
-            "list_tasks_for_rfp",
-            "List workflow tasks for a given RFP.",
-            {
-                "type": "object",
-                "properties": {"rfpId": {"type": "string", "minLength": 1, "maxLength": 120}},
-                "required": ["rfpId"],
-                "additionalProperties": False,
-            },
-        ),
-        _list_tasks_for_rfp_tool,
-    ),
-    "get_company": (
-        _tool_def(
-            "get_company",
-            "Fetch a company from the content library by companyId.",
-            {
-                "type": "object",
-                "properties": {"companyId": {"type": "string", "minLength": 1, "maxLength": 120}},
-                "required": ["companyId"],
-                "additionalProperties": False,
-            },
-        ),
-        _get_company_tool,
-    ),
-}
+READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = READ_TOOLS_REGISTRY
 
 
 ACTION_TOOL_NAME = "propose_action"
@@ -488,6 +249,16 @@ def _propose_action_tool_def() -> dict[str, Any]:
                         "self_modify_open_pr",
                         "self_modify_check_pr",
                         "self_modify_verify_ecs",
+                        # Infra operations (approval-gated)
+                        "ecs_update_service",
+                        "s3_copy_object",
+                        "s3_move_object",
+                        "s3_delete_object",
+                        "cognito_disable_user",
+                        "cognito_enable_user",
+                        "sqs_redrive_dlq",
+                        "github_create_issue",
+                        "github_comment",
                     ],
                 },
                 "args": {"type": "object"},
@@ -596,6 +367,9 @@ def run_slack_agent_question(
         [
             "You are Polaris, a Slack assistant for an RFP/proposal workflow platform.",
             "You can answer questions by calling tools to fetch current platform data.",
+            "You may also inspect raw platform storage *read-only* using tools:",
+            "- DynamoDB main table uses keys like pk/sk and GSI1 (gsi1pk/gsi1sk). Prefer querying by pk or gsi1pk; avoid broad scans.",
+            "- S3 assets bucket stores artifacts under prefixes like `rfp/` and `team/`.",
             "If the user asks you to perform an action (seed tasks, assign/complete a task, or update their saved preferences/memory), call `propose_action` with a concise summary and the minimal args needed.",
             "Never execute actions yourself; always propose then wait for confirmation.",
             "",
@@ -734,8 +508,8 @@ def run_slack_agent_question(
             "model": model,
             "tools": tools,
             "tool_choice": _tool_choice_allowed(tool_names),
-            "reasoning": {"effort": str(settings.openai_reasoning_effort_json or "low")},
-            "text": {"verbosity": str(settings.openai_text_verbosity_json or "low")},
+            "reasoning": {"effort": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).reasoning_effort},
+            "text": {"verbosity": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).verbosity},
             "max_output_tokens": 900,
         }
         if prev_id:
@@ -819,8 +593,8 @@ def run_slack_agent_question(
             input=outputs,
             tools=tools,
             tool_choice=_tool_choice_allowed(tool_names),
-            reasoning={"effort": str(settings.openai_reasoning_effort_json or "low")},
-            text={"verbosity": str(settings.openai_text_verbosity_json or "low")},
+            reasoning={"effort": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).reasoning_effort},
+            text={"verbosity": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).verbosity},
             max_output_tokens=900,
         )
         prev_id = str(getattr(resp2, "id", "") or "") or prev_id

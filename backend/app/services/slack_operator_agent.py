@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from ..ai.client import AiNotConfigured, _client
 from ..ai.context import normalize_ws
+from ..ai.tuning import tuning_for
 from ..observability.logging import get_logger
 from ..settings import settings
 from .agent_events_repo import append_event, list_recent_events
@@ -425,11 +426,46 @@ def run_slack_operator_for_mention(
             rfp_id = None
 
     if not rfp_id:
+        # No RFP scope: delegate to the conversational read-only Slack agent.
+        # This keeps @mentions responsive without requiring thread binding.
+        try:
+            from .slack_web import chat_post_message_result, get_user_info, slack_user_display_name
+            from .user_profiles_repo import get_user_profile_by_slack_user_id
+
+            slack_user = get_user_info(user_id=user_id or "") if user_id else None
+            display_name = slack_user_display_name(slack_user) if slack_user else None
+            prof = (slack_user.get("profile") if isinstance(slack_user, dict) else {}) or {}
+            email = str(prof.get("email") or "").strip().lower() or None
+            user_profile = get_user_profile_by_slack_user_id(slack_user_id=user_id or "") if user_id else None
+
+            ans = _sa.run_slack_agent_question(
+                question=q,
+                user_id=user_id,
+                user_display_name=display_name,
+                user_email=email,
+                user_profile=user_profile,
+                channel_id=ch,
+                thread_ts=th,
+            )
+            txt = str(ans.text or "").strip() or "No answer."
+            chat_post_message_result(
+                text=txt,
+                channel=ch,
+                thread_ts=th,
+                blocks=ans.blocks,
+                unfurl_links=False,
+            )
+            return SlackOperatorResult(did_post=True, text=txt, meta={"scoped": False, "delegated": "slack_agent"})
+        except Exception:
+            # Fall through to the binding prompt if anything goes wrong.
+            pass
+
         # Ask to include an explicit id or bind the thread; keep it short.
         msg = (
             "Which RFP is this about?\n"
             "- include an id like `rfp_...` in your message, or\n"
             "- bind this thread once with: `@polaris link rfp_...`"
+            "\n\nIf this isn’t about a specific RFP, use `/polaris ask <question>`."
         )
         try:
             from .slack_web import chat_post_message_result
@@ -606,8 +642,8 @@ def run_slack_operator_for_mention(
             "model": model,
             "tools": tools,
             "tool_choice": _sa._tool_choice_allowed(tool_names),
-            "reasoning": {"effort": str(settings.openai_reasoning_effort_json or "low")},
-            "text": {"verbosity": str(settings.openai_text_verbosity_json or "low")},
+            "reasoning": {"effort": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).reasoning_effort},
+            "text": {"verbosity": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).verbosity},
             "max_output_tokens": 1100,
         }
         if prev_id:
@@ -697,8 +733,8 @@ def run_slack_operator_for_mention(
             input=outputs,
             tools=tools,
             tool_choice=_sa._tool_choice_allowed(tool_names),
-            reasoning={"effort": str(settings.openai_reasoning_effort_json or "low")},
-            text={"verbosity": str(settings.openai_text_verbosity_json or "low")},
+            reasoning={"effort": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).reasoning_effort},
+            text={"verbosity": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).verbosity},
             max_output_tokens=1100,
         )
         prev_id = str(getattr(resp2, "id", "") or "") or prev_id

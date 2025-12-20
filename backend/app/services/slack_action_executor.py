@@ -4,6 +4,16 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..observability.logging import get_logger
+from .agent_events_repo import append_event
+from .agent_tools.aws_cognito import admin_disable_user as cognito_disable_user
+from .agent_tools.aws_cognito import admin_enable_user as cognito_enable_user
+from .agent_tools.aws_ecs import update_service as ecs_update_service
+from .agent_tools.aws_s3 import copy_object as s3_copy_object
+from .agent_tools.aws_s3 import delete_object as s3_delete_object
+from .agent_tools.aws_s3 import move_object as s3_move_object
+from .agent_tools.aws_sqs import redrive_dlq as sqs_redrive_dlq
+from .agent_tools.github_api import comment_on_issue_or_pr as github_comment
+from .agent_tools.github_api import create_issue as github_create_issue
 from .rfps_repo import get_rfp_by_id, list_rfp_proposal_summaries
 from .user_profiles_repo import get_user_profile_by_slack_user_id, upsert_user_profile
 from .workflow_tasks_repo import (
@@ -244,5 +254,118 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
                 pass
         return {"ok": True, "action": k, "job": job}
 
+    if k == "ecs_update_service":
+        # Approval-gated: update ECS service (forceNewDeployment and/or desiredCount).
+        cluster = str(a.get("cluster") or "").strip() or None
+        service = str(a.get("service") or "").strip() or None
+        force = bool(a.get("forceNewDeployment") is True)
+        desired_raw = a.get("desiredCount")
+        desired = int(desired_raw) if desired_raw is not None and str(desired_raw).strip() != "" else None
+        try:
+            res = ecs_update_service(cluster=cluster, service=service, force_new_deployment=force, desired_count=desired)
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "ecs_update_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "s3_copy_object":
+        try:
+            res = s3_copy_object(source_key=str(a.get("sourceKey") or ""), dest_key=str(a.get("destKey") or ""))
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "s3_copy_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "s3_move_object":
+        try:
+            res = s3_move_object(source_key=str(a.get("sourceKey") or ""), dest_key=str(a.get("destKey") or ""))
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "s3_move_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "s3_delete_object":
+        try:
+            res = s3_delete_object(key=str(a.get("key") or ""))
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "s3_delete_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "cognito_disable_user":
+        user_pool_id = str(a.get("userPoolId") or "").strip() or None
+        username = str(a.get("username") or "").strip()
+        try:
+            res = cognito_disable_user(user_pool_id=user_pool_id, username=username)
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "cognito_disable_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "cognito_enable_user":
+        user_pool_id = str(a.get("userPoolId") or "").strip() or None
+        username = str(a.get("username") or "").strip()
+        try:
+            res = cognito_enable_user(user_pool_id=user_pool_id, username=username)
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "cognito_enable_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "sqs_redrive_dlq":
+        src = str(a.get("sourceQueueUrl") or "").strip()
+        dst = str(a.get("destinationQueueUrl") or "").strip()
+        mps_raw = a.get("maxPerSecond")
+        mps = int(mps_raw) if mps_raw is not None and str(mps_raw).strip() else None
+        try:
+            res = sqs_redrive_dlq(source_queue_url=src, destination_queue_url=dst, max_per_second=mps)
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "sqs_redrive_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "github_create_issue":
+        repo = str(a.get("repo") or "").strip() or None
+        title = str(a.get("title") or "").strip()
+        body = str(a.get("body") or "").strip() or None
+        try:
+            res = github_create_issue(repo=repo, title=title, body=body)
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "github_create_issue_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
+    if k == "github_comment":
+        repo = str(a.get("repo") or "").strip() or None
+        number = int(a.get("number") or 0)
+        body = str(a.get("body") or "").strip()
+        try:
+            res = github_comment(repo=repo, number=number, body=body)
+        except Exception as e:
+            res = {"ok": False, "error": str(e) or "github_comment_failed"}
+        _audit_best_effort(args=a, action=k, ok=bool(res.get("ok")), result=res)
+        return {"ok": bool(res.get("ok")), "action": k, "result": res}
+
     return {"ok": False, "error": "unknown_action", "action": k}
+
+
+def _audit_best_effort(*, args: dict[str, Any], action: str, ok: bool, result: dict[str, Any]) -> None:
+    """
+    Append an AgentEvent if an rfpId is available (best-effort).
+    """
+    try:
+        rid = str(args.get("rfpId") or "").strip()
+        if not rid:
+            return
+        append_event(
+            rfp_id=rid,
+            type="action_execute",
+            tool=action,
+            payload={"ok": bool(ok)},
+            inputs_redacted={"argsKeys": [str(k) for k in list(args.keys())[:60]]},
+            outputs_redacted={"resultPreview": {k: result.get(k) for k in list(result.keys())[:30]}},
+            created_by="slack_action_executor",
+        )
+    except Exception:
+        return
 

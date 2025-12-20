@@ -45,9 +45,10 @@ from ..services.slack_notifier import (
 )
 from ..observability.logging import get_logger
 from ..settings import settings
-from ..ai.client import call_text, AiNotConfigured, AiError, AiUpstreamError
+from ..ai.client import AiNotConfigured, AiError, AiUpstreamError
 from ..ai.context import clip_text
 from ..ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI
+from ..ai.verified_calls import call_json_verified, call_text_verified
 
 import json
 import time
@@ -793,11 +794,9 @@ def ai_refresh_stream(id: str):
         ]
 
         def _call(purpose: str, model_cls: type, prompt: str, max_tokens: int) -> tuple[Any, Any]:
-            from ..ai.client import call_json
-
             parsed: Any
             meta: Any
-            parsed, meta = call_json(
+            parsed, meta = call_json_verified(
                 purpose=purpose,
                 response_model=model_cls,
                 messages=[{"role": "user", "content": prompt}],
@@ -962,7 +961,7 @@ def ai_summary_stream(id: str):
 
         try:
             # Prefer GPT-5.2 Responses API path (non-stream) and stream deltas ourselves.
-            full, meta = call_text(
+            full, meta = call_text_verified(
                 purpose="generate_content",
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1200,
@@ -1076,7 +1075,7 @@ def ai_section_summary(id: str, body: dict = Body(...)):
     )
 
     try:
-        summary, meta = call_text(
+        summary, meta = call_text_verified(
             purpose="rfp_section_summary",
             messages=[
                 {"role": "system", "content": system_prompt},

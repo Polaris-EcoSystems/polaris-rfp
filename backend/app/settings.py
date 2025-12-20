@@ -128,6 +128,25 @@ class Settings(BaseSettings):
         default=True, validation_alias="SLACK_AGENT_ACTIONS_ENABLED"
     )
 
+    # ---- AI agent allowlists (safety rails for tool use) ----
+    # Comma-separated allowlists. Empty means "derive from core config where possible".
+    agent_allowed_ddb_tables: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_DDB_TABLES")
+    agent_allowed_s3_buckets: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_S3_BUCKETS")
+    # Prefixes like: "rfp/,team/,contracting/". If unset, defaults are applied.
+    agent_allowed_s3_prefixes: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_S3_PREFIXES")
+    agent_allowed_sqs_queue_urls: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_SQS_QUEUE_URLS")
+    agent_allowed_ecs_clusters: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_ECS_CLUSTERS")
+    agent_allowed_ecs_services: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_ECS_SERVICES")
+    agent_allowed_cognito_user_pool_ids: str | None = Field(
+        default=None, validation_alias="AGENT_ALLOWED_COGNITO_USER_POOL_IDS"
+    )
+    agent_allowed_log_groups: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_LOG_GROUPS")
+    agent_allowed_secrets_arns: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_SECRETS_ARNS")
+    agent_allowed_github_repos: str | None = Field(default=None, validation_alias="AGENT_ALLOWED_GITHUB_REPOS")
+    agent_allowed_github_base_branches: str | None = Field(
+        default=None, validation_alias="AGENT_ALLOWED_GITHUB_BASE_BRANCHES"
+    )
+
     # Self-modifying pipeline (PR creation + CI verification + ECS verification)
     self_modify_enabled: bool = Field(default=False, validation_alias="SELF_MODIFY_ENABLED")
     # Comma-separated Slack user IDs allowed to trigger self-modifying actions (U…).

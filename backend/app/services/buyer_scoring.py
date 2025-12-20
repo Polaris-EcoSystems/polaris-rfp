@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..ai.client import AiError, call_json
+from ..ai.client import AiError
+from ..ai.verified_calls import call_json_verified
 from ..ai.schemas import BuyerEnrichmentAI
 from ..settings import settings
 
@@ -133,13 +134,25 @@ def enrich_buyer_profile_with_ai(
     )
 
     try:
-        parsed, _meta = call_json(
+        def _validate(parsed: BuyerEnrichmentAI) -> str | None:
+            if not str(parsed.personaSummary or "").strip():
+                return "personaSummary must be non-empty"
+            if not (3 <= len(parsed.likelyGoals or []) <= 6):
+                return "likelyGoals must have 3-6 items"
+            if not (3 <= len(parsed.likelyConcerns or []) <= 6):
+                return "likelyConcerns must have 3-6 items"
+            if not (3 <= len(parsed.bestAngles or []) <= 6):
+                return "bestAngles must have 3-6 items"
+            return None
+
+        parsed, _meta = call_json_verified(
             purpose="buyer_enrichment",
             response_model=BuyerEnrichmentAI,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=900,
             temperature=0.4,
             retries=2,
+            validate_parsed=_validate,
             # If AI fails, just leave profile un-enriched.
             fallback=None,
         )

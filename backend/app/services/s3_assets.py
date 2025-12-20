@@ -152,6 +152,72 @@ def get_object_bytes(*, key: str, max_bytes: int = 60 * 1024 * 1024) -> bytes:
     return data or b""
 
 
+def list_objects(
+    *,
+    prefix: str | None = None,
+    limit: int = 25,
+    continuation_token: str | None = None,
+) -> dict[str, Any]:
+    """
+    List objects in the assets bucket under an optional prefix (read-only).
+
+    Returns a compact payload:
+      { ok, bucket, prefix, objects: [{ key, size, lastModified }], nextToken? }
+    """
+    bucket = get_assets_bucket_name()
+    pfx = str(prefix or "").strip()
+    lim = max(1, min(50, int(limit or 25)))
+    token = str(continuation_token or "").strip() or None
+
+    kwargs: dict[str, Any] = {"Bucket": bucket, "MaxKeys": lim}
+    if pfx:
+        kwargs["Prefix"] = pfx
+    if token:
+        kwargs["ContinuationToken"] = token
+
+    resp = _s3_client().list_objects_v2(**kwargs)
+    rows = resp.get("Contents") if isinstance(resp, dict) else None
+    contents = rows if isinstance(rows, list) else []
+    out: list[dict[str, Any]] = []
+    for it in contents[:lim]:
+        if not isinstance(it, dict):
+            continue
+        k = str(it.get("Key") or "").strip()
+        if not k:
+            continue
+        out.append(
+            {
+                "key": k,
+                "size": int(it.get("Size") or 0),
+                "lastModified": str(it.get("LastModified") or "").strip() or None,
+            }
+        )
+
+    nxt = str(resp.get("NextContinuationToken") or "").strip() if isinstance(resp, dict) else ""
+    next_token = nxt or None
+    return {"ok": True, "bucket": bucket, "prefix": pfx or None, "objects": out, "nextToken": next_token}
+
+
+def get_object_text(*, key: str, max_bytes: int = 2 * 1024 * 1024, max_chars: int = 20_000) -> dict[str, Any]:
+    """
+    Fetch an S3 object and decode it as UTF-8 text (best-effort).
+
+    Intended for small text artifacts (JSON/MD/TXT). For binary files (PDF/DOCX),
+    prefer returning a presigned URL instead.
+    """
+    k = str(key or "").strip()
+    if not k:
+        return {"ok": False, "error": "missing_key"}
+    data = get_object_bytes(key=k, max_bytes=max(1, int(max_bytes or 0)))
+    try:
+        txt = data.decode("utf-8", errors="replace")
+    except Exception:
+        return {"ok": False, "error": "decode_failed"}
+    if len(txt) > int(max_chars):
+        txt = txt[: int(max_chars)] + "…"
+    return {"ok": True, "key": k, "text": txt}
+
+
 # Signed URL cache for headshots
 _HEADSHOT_GET_CACHE: TTLCache[str, str] = TTLCache(maxsize=2048, ttl=55 * 60)
 

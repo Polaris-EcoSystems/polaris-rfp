@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
 
-from ..ai.client import call_json
+from ..ai.verified_calls import call_json_verified
 from ..ai.schemas import CapabilitiesStatementAI
 
 from ..settings import settings
@@ -29,6 +30,17 @@ def _clean_list(values: Any, max_items: int = 50) -> list[str]:
         if len(out) >= max_items:
             break
     return out
+
+
+_RX_PROJ = re.compile(r"\[\[project:([^\]]+)\]\]")
+_RX_REF = re.compile(r"\[\[reference:([^\]]+)\]\]")
+
+
+def _extract_evidence_tokens(md: str) -> tuple[list[str], list[str]]:
+    s = str(md or "")
+    proj = [m.group(1).strip() for m in _RX_PROJ.finditer(s) if m.group(1).strip()]
+    ref = [m.group(1).strip() for m in _RX_REF.finditer(s) if m.group(1).strip()]
+    return proj, ref
 
 
 def _fallback_statement(
@@ -181,6 +193,9 @@ def _generate_with_openai(
 
     projects_payload = [proj_min(p) for p in projects[:30]]
     refs_payload = [ref_min(r) for r in references[:30]]
+    allowed_project_ids = {str(p.get("id") or "").strip() for p in projects_payload if str(p.get("id") or "").strip()}
+    allowed_ref_ids = {str(r.get("id") or "").strip() for r in refs_payload if str(r.get("id") or "").strip()}
+    company_name = str(company_payload.get("name") or "").strip() or "Company"
 
     system_prompt = (
         "You are an expert proposal writer. Generate a company capabilities statement that is grounded "
@@ -218,7 +233,51 @@ def _generate_with_openai(
         },
     }
 
-    parsed, meta = call_json(
+    def _validate(parsed: CapabilitiesStatementAI) -> str | None:
+        md = str(parsed.statementMarkdown or "").strip()
+        if not md:
+            return "statementMarkdown must be non-empty"
+        if "### Evidence" not in md:
+            return "statementMarkdown must include an '### Evidence' section"
+        if "### Core capabilities" not in md:
+            return "statementMarkdown must include a '### Core capabilities' section"
+        if "Capabilities Statement" not in md:
+            return "statementMarkdown must include a capabilities statement heading"
+
+        proj_tokens, ref_tokens = _extract_evidence_tokens(md)
+        bad_proj = [t for t in proj_tokens if t not in allowed_project_ids]
+        bad_ref = [t for t in ref_tokens if t not in allowed_ref_ids]
+        if bad_proj:
+            return f"unknown projectIds referenced: {bad_proj[:5]}"
+        if bad_ref:
+            return f"unknown referenceIds referenced: {bad_ref[:5]}"
+
+        # Keep structured ids consistent with tokens.
+        proj_ids = [str(x or "").strip() for x in (parsed.projectIds or []) if str(x or "").strip()]
+        ref_ids = [str(x or "").strip() for x in (parsed.referenceIds or []) if str(x or "").strip()]
+        if any(pid not in allowed_project_ids for pid in proj_ids):
+            return "projectIds must only include input pastProjects ids"
+        if any(rid not in allowed_ref_ids for rid in ref_ids):
+            return "referenceIds must only include input references ids"
+
+        # Evidence items must reference allowed ids and correct types.
+        for it in (parsed.evidenceItems or [])[:200]:
+            t = str(it.type or "").strip()
+            i = str(it.id or "").strip()
+            if t == "project":
+                if i not in allowed_project_ids:
+                    return "evidenceItems contain unknown project id"
+            elif t == "reference":
+                if i not in allowed_ref_ids:
+                    return "evidenceItems contain unknown reference id"
+            else:
+                return "evidenceItems.type must be 'project' or 'reference'"
+        # Bonus: ensure statement headings mention company name when possible.
+        if company_name and company_name.lower() not in md.lower():
+            return "statementMarkdown must mention the company name"
+        return None
+
+    parsed, meta = call_json_verified(
         purpose="generate_content",
         response_model=CapabilitiesStatementAI,
         messages=[
@@ -228,6 +287,7 @@ def _generate_with_openai(
         max_tokens=2000,
         temperature=0.3,
         retries=2,
+        validate_parsed=_validate,
         # If AI fails, let caller fall back to deterministic statement.
         fallback=None,
     )
