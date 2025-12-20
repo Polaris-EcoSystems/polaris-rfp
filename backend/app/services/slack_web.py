@@ -21,10 +21,12 @@ def get_bot_token() -> str | None:
     """
     if not bool(settings.slack_enabled):
         return None
+    # Prefer bot tokens (xoxb*) over rotating access tokens, since bot tokens
+    # are stable and are the intended credential for posting messages/files.
     return (
         (str(settings.slack_bot_token or "").strip() or None)
-        or get_secret_str("SLACK_ACCESS_TOKEN")
         or get_secret_str("SLACK_BOT_TOKEN")
+        or get_secret_str("SLACK_ACCESS_TOKEN")
     )
 
 

@@ -130,19 +130,26 @@ def _extract_first_json_object(text: str) -> str | None:
     return m.group(0) if m else None
 
 
-def _enforce_no_additional_properties(schema: Any) -> Any:
+def _normalize_openai_strict_json_schema(schema: Any) -> Any:
     """
-    OpenAI structured outputs require `additionalProperties: false` on objects.
-    Pydantic may omit it (implicitly allowing additional fields), so we enforce it.
+    OpenAI structured outputs (`response_format: json_schema` with `strict: true`) are
+    stricter than vanilla JSON Schema:
+    - objects must include `additionalProperties: false`
+    - objects must include `required`, and it must list EVERY key in `properties`
+
+    Pydantic may omit these when fields have defaults, so we enforce them recursively.
     """
     if isinstance(schema, dict):
         if schema.get("type") == "object":
+            props = schema.get("properties")
+            if isinstance(props, dict) and props:
+                schema["required"] = list(props.keys())
             schema["additionalProperties"] = False
         for v in schema.values():
-            _enforce_no_additional_properties(v)
+            _normalize_openai_strict_json_schema(v)
     elif isinstance(schema, list):
         for v in schema:
-            _enforce_no_additional_properties(v)
+            _normalize_openai_strict_json_schema(v)
     return schema
 
 
@@ -254,7 +261,7 @@ def call_json(
     messages = _normalize_messages(messages, max_prompt_chars)
 
     schema = response_model.model_json_schema()
-    schema = _enforce_no_additional_properties(schema)
+    schema = _normalize_openai_strict_json_schema(schema)
     # OpenAI structured output format wrapper.
     rf_json_schema: dict[str, Any] = {
         "type": "json_schema",
