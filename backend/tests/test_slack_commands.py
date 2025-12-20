@@ -41,6 +41,7 @@ def test_slack_commands_help_ok():
     payload = r.json()
     assert payload.get("response_type") == "in_channel"
     assert "Polaris RFP Slack commands" in str(payload.get("text") or "")
+    assert "/polaris upload" in str(payload.get("text") or "")
 
 
 def test_slack_commands_missing_signature_denied():

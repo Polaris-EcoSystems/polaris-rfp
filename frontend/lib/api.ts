@@ -360,6 +360,18 @@ export const rfpApi = {
     proxyUrl(`/api/rfp/${cleanPathToken(id)}/ai-refresh/stream`),
   aiSummaryStreamUrl: (id: string) =>
     proxyUrl(`/api/rfp/${cleanPathToken(id)}/ai-summary/stream`),
+  aiSectionSummary: (
+    id: string,
+    data: { sectionId: string; topic?: string; force?: boolean },
+  ) =>
+    api.post<{
+      ok: boolean
+      sectionId: string
+      topic: string
+      summary: string
+      updatedAt?: string | null
+      cached?: boolean
+    }>(proxyUrl(`/api/rfp/${cleanPathToken(id)}/ai-section-summary`), data),
   getProposals: (id: string) =>
     api.get<{ data: Proposal[] }>(
       proxyUrl(`/api/rfp/${cleanPathToken(id)}/proposals`),

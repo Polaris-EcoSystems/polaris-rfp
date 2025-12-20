@@ -98,6 +98,16 @@ export default function RFPDetailPage() {
   const [aiStreaming, setAiStreaming] = useState(false)
   const [aiSummary, setAiSummary] = useState<string>('')
   const [aiSummaryStreaming, setAiSummaryStreaming] = useState(false)
+  type SectionAiSummary = { text: string; topic: string; updatedAt?: string }
+  const [sectionAiSummaries, setSectionAiSummaries] = useState<
+    Partial<Record<string, SectionAiSummary>>
+  >({})
+  const [sectionAiLoading, setSectionAiLoading] = useState<
+    Partial<Record<string, boolean>>
+  >({})
+  const [sectionAiError, setSectionAiError] = useState<
+    Partial<Record<string, string>>
+  >({})
   type AiBucket = 'meta' | 'dates' | 'lists'
   type AiBucketStatus = 'idle' | 'running' | 'done' | 'error'
   const [aiRefreshStatus, setAiRefreshStatus] = useState<
@@ -118,6 +128,32 @@ export default function RFPDetailPage() {
       aiSummaryEsRef.current = null
     }
   }, [])
+
+  useEffect(() => {
+    // Seed section summaries from persisted RFP record (best-effort).
+    if (!rfp?._id) return
+    try {
+      const raw = (rfp as any)?.aiSectionSummaries
+      if (!raw || typeof raw !== 'object') return
+      const next: Record<string, SectionAiSummary> = {}
+      Object.entries(raw as Record<string, any>).forEach(([k, v]) => {
+        if (!k) return
+        if (!v || typeof v !== 'object') return
+        const text = String((v as any).text || '').trim()
+        if (!text) return
+        next[k] = {
+          text,
+          topic: String((v as any).topic || k),
+          updatedAt: String((v as any).updatedAt || '').trim() || undefined,
+        }
+      })
+      if (Object.keys(next).length === 0) return
+      setSectionAiSummaries((prev) => ({ ...next, ...prev }))
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rfp?._id])
 
   const isBucketRunning = (b: AiBucket) =>
     aiStreaming && aiRefreshStatus[b] === 'running'
@@ -796,6 +832,74 @@ export default function RFPDetailPage() {
     }
   }
 
+  const sectionTopic = (sid: CollapsibleSectionId): string => {
+    switch (sid) {
+      case 'suitability':
+        return 'Suitability / fit / risks / red flags'
+      case 'overview':
+        return 'High-level overview: scope, budget, key dates, project type'
+      case 'requirements':
+        return 'Key requirements and compliance obligations'
+      case 'deliverables':
+        return 'Deliverables, evaluation criteria, critical information, and questions'
+      case 'attachments':
+        return 'Submission instructions, required forms, and attachments'
+      case 'buyers':
+        return 'Stakeholders, buyer roles, contacts, and org context'
+      case 'generate':
+        return 'Suggested proposal outline and themes implied by the RFP'
+      case 'proposals':
+        return 'Proposal response format and required proposal sections'
+      case 'raw':
+        return 'What the extracted text contains (brief)'
+      default:
+        return String(sid)
+    }
+  }
+
+  const ensureSectionAiSummaryLoaded = async (
+    sid: CollapsibleSectionId,
+    force: boolean,
+  ) => {
+    if (!rfp?._id) return
+    const hasRaw = Boolean(String((rfp as any)?.rawText || '').trim())
+    if (!hasRaw) return
+
+    const key = String(sid)
+    if (!force && String(sectionAiSummaries?.[key]?.text || '').trim()) return
+    if (sectionAiLoading?.[key]) return
+
+    setSectionAiLoading((prev) => ({ ...prev, [key]: true }))
+    setSectionAiError((prev) => ({ ...prev, [key]: '' }))
+    try {
+      const resp = await rfpApi.aiSectionSummary(rfp._id, {
+        sectionId: key,
+        topic: sectionTopic(sid),
+        force,
+      })
+      const summary = String((resp as any)?.data?.summary || '').trim()
+      const topic = String(
+        (resp as any)?.data?.topic || sectionTopic(sid),
+      ).trim()
+      const updatedAt = String((resp as any)?.data?.updatedAt || '').trim()
+      if (!summary) throw new Error('Empty AI summary')
+      setSectionAiSummaries((prev) => ({
+        ...prev,
+        [key]: { text: summary, topic, updatedAt: updatedAt || undefined },
+      }))
+    } catch (e: any) {
+      const msg =
+        String(
+          e?.response?.data?.detail ||
+            e?.message ||
+            'Failed to generate AI summary',
+        ) || 'Failed to generate AI summary'
+      setSectionAiError((prev) => ({ ...prev, [key]: msg }))
+    } finally {
+      setSectionAiLoading((prev) => ({ ...prev, [key]: false }))
+    }
+  }
+
   const setSectionOpen = (sid: CollapsibleSectionId, nextOpen: boolean) => {
     setOpenSections((prev) => ({ ...prev, [sid]: nextOpen }))
     if (!nextOpen) return
@@ -807,6 +911,8 @@ export default function RFPDetailPage() {
     if (sid === 'proposals') {
       void ensureProposalsLoaded(id)
     }
+    // Lazy-load AI summary when a section is opened.
+    void ensureSectionAiSummaryLoaded(sid, false)
   }
 
   const setAllSectionsOpen = (open: boolean) => {
@@ -819,6 +925,9 @@ export default function RFPDetailPage() {
       void ensureTemplatesLoaded()
       void ensureCompaniesLoaded()
       void ensureProposalsLoaded(id)
+      collapsibleSectionDefs.forEach((s) => {
+        void ensureSectionAiSummaryLoaded(s.id, false)
+      })
     }
   }
 
@@ -905,6 +1014,16 @@ export default function RFPDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, rfp?._id])
 
+  useEffect(() => {
+    // Auto-generate summaries for sections that are open by default (best-effort).
+    if (!rfp?._id) return
+    const open = openSections || ({} as Record<CollapsibleSectionId, boolean>)
+    ;(Object.keys(open) as CollapsibleSectionId[]).forEach((sid) => {
+      if (open[sid]) void ensureSectionAiSummaryLoaded(sid, false)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rfp?._id])
+
   const scrollToSection = (sid: TocSectionId) => {
     if (sid !== 'bid-review') setSectionOpen(sid, true)
     const el = document.getElementById(sid)
@@ -955,6 +1074,69 @@ export default function RFPDetailPage() {
     }
   })()
 
+  const SectionAiSummaryCard = ({ sid }: { sid: CollapsibleSectionId }) => {
+    const key = String(sid)
+    const s = sectionAiSummaries?.[key]
+    const loading = Boolean(sectionAiLoading?.[key])
+    const err = String(sectionAiError?.[key] || '').trim()
+
+    return (
+      <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+              AI summary
+            </div>
+            <div className="mt-1 text-xs text-gray-500">
+              Topic: <span className="font-semibold">{sectionTopic(sid)}</span>
+              {s?.updatedAt ? (
+                <>
+                  {' '}
+                  • Updated:{' '}
+                  <span className="font-semibold">{s.updatedAt}</span>
+                </>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void ensureSectionAiSummaryLoaded(sid, false)}
+              disabled={loading}
+              className="inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50 disabled:opacity-50"
+            >
+              {s?.text ? 'Refresh' : 'Generate'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void ensureSectionAiSummaryLoaded(sid, true)}
+              disabled={loading}
+              className="inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50 disabled:opacity-50"
+            >
+              Regenerate
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3">
+          {loading ? (
+            <div className="text-sm text-gray-600">Generating…</div>
+          ) : err ? (
+            <div className="text-sm text-red-700">{err}</div>
+          ) : s?.text ? (
+            <div className="text-sm text-gray-800 whitespace-pre-wrap">
+              {s.text}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-600">
+              No summary yet. Click “Generate”.
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   const Section = ({
     sid,
     title,
@@ -969,33 +1151,24 @@ export default function RFPDetailPage() {
     const isOpen = Boolean(openSections[sid])
     return (
       <section id={sid} className="scroll-mt-32 lg:scroll-mt-24">
-        <details
-          open={isOpen}
-          onToggle={(e) =>
-            setSectionOpen(
-              sid,
-              Boolean((e.currentTarget as HTMLDetailsElement).open),
-            )
-          }
-          className="group rounded-xl border border-gray-200 bg-white shadow-sm"
-        >
-          <summary className="cursor-pointer select-none px-5 py-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-gray-900">
-                  {title}
-                </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  {isOpen ? 'Hide' : 'Show'}
-                </div>
+        <div className="group rounded-xl border border-gray-200 bg-white shadow-sm">
+          <div className="px-5 py-4 flex items-start justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => setSectionOpen(sid, !isOpen)}
+              className="flex-1 text-left"
+            >
+              <div className="text-sm font-semibold text-gray-900">{title}</div>
+              <div className="mt-1 text-xs text-gray-500">
+                {isOpen ? 'Hide' : 'Show'}
               </div>
-              {rightMeta ? (
-                <div className="text-xs text-gray-600">{rightMeta}</div>
-              ) : null}
-            </div>
-          </summary>
-          <div className="px-5 pb-5 pt-0">{children}</div>
-        </details>
+            </button>
+            {rightMeta ? (
+              <div className="text-xs text-gray-600 pt-0.5">{rightMeta}</div>
+            ) : null}
+          </div>
+          {isOpen ? <div className="px-5 pb-5 pt-0">{children}</div> : null}
+        </div>
       </section>
     )
   }
@@ -2214,6 +2387,7 @@ export default function RFPDetailPage() {
                     : undefined
                 }
               >
+                <SectionAiSummaryCard sid="suitability" />
                 {Array.isArray(rfp.dateWarnings) &&
                   rfp.dateWarnings.length > 0 && (
                     <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
@@ -2280,6 +2454,7 @@ export default function RFPDetailPage() {
               </Section>
 
               <Section sid="overview" title="Overview">
+                <SectionAiSummaryCard sid="overview" />
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
                     <div className="p-4">
@@ -2374,6 +2549,7 @@ export default function RFPDetailPage() {
                     : undefined
                 }
               >
+                <SectionAiSummaryCard sid="requirements" />
                 {rfp.keyRequirements && rfp.keyRequirements.length > 0 ? (
                   <div>
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
@@ -2540,6 +2716,7 @@ export default function RFPDetailPage() {
               </Section>
 
               <Section sid="deliverables" title="Deliverables & criteria">
+                <SectionAiSummaryCard sid="deliverables" />
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                   <div>
                     <div className="text-sm font-semibold text-gray-900">
@@ -2667,6 +2844,7 @@ export default function RFPDetailPage() {
                     : undefined
                 }
               >
+                <SectionAiSummaryCard sid="attachments" />
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-sm text-gray-600">
                     Upload and manage files related to this RFP.
@@ -2732,6 +2910,7 @@ export default function RFPDetailPage() {
                     : undefined
                 }
               >
+                <SectionAiSummaryCard sid="buyers" />
                 {Array.isArray((rfp as any)?.buyerProfiles) &&
                 (rfp as any).buyerProfiles.length > 0 ? (
                   <div>
@@ -2887,6 +3066,7 @@ export default function RFPDetailPage() {
               </Section>
 
               <Section sid="generate" title="Generate proposal">
+                <SectionAiSummaryCard sid="generate" />
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   <div className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors">
                     <div className="flex items-center mb-3">
@@ -3000,6 +3180,7 @@ export default function RFPDetailPage() {
               </Section>
 
               <Section sid="proposals" title="Proposals">
+                <SectionAiSummaryCard sid="proposals" />
                 {proposalsLoading ? (
                   <p className="text-sm text-gray-500">Loading proposals…</p>
                 ) : rfpProposals.length === 0 ? (
@@ -3117,6 +3298,7 @@ export default function RFPDetailPage() {
               </Section>
 
               <Section sid="raw" title="Raw / extracted text">
+                <SectionAiSummaryCard sid="raw" />
                 <div className="text-xs text-gray-600">
                   This is what the system extracted from the PDF / AI workflow.
                 </div>

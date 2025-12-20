@@ -7,16 +7,23 @@ import time
 from urllib.parse import parse_qs
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from ..observability.logging import get_logger
 from ..settings import settings
+from ..services.rfp_analyzer import analyze_rfp
 from ..services.proposals_repo import list_proposals
 from ..services.rfp_upload_jobs_repo import get_job
-from ..services.rfps_repo import get_rfp_by_id, list_rfps
+from ..services.rfps_repo import create_rfp_from_analysis, get_rfp_by_id, list_rfps
 from ..services.slack_response_url import respond as respond_via_response_url
 from ..services.slack_secrets import get_secret_str
-from ..services.slack_web import is_slack_configured, post_message
+from ..services.slack_web import (
+    download_slack_file,
+    get_bot_token,
+    is_slack_configured,
+    list_recent_channel_pdfs,
+    post_message,
+)
 
 
 router = APIRouter(tags=["integrations"])
@@ -26,7 +33,7 @@ def _command_response_type(subcommand: str) -> str:
     # Per request: make all commands public except `job` which can contain
     # operational details and is typically user-specific.
     sub = str(subcommand or "").strip().lower()
-    if sub == "job":
+    if sub in ("job", "upload", "ingest"):
         return "ephemeral"
     return "in_channel"
 
@@ -65,6 +72,88 @@ def _templates_url() -> str:
 
 def _upload_url() -> str:
     return str(settings.frontend_base_url or "").rstrip("/") + "/rfps/upload"
+
+
+def _slack_upload_latest_pdfs_task(*, response_url: str, channel_id: str, n: int) -> None:
+    """
+    Background task: fetch latest PDFs from Slack channel and create RFPs.
+    """
+    try:
+        want = max(1, min(5, int(n or 1)))
+        ch = str(channel_id or "").strip()
+        if not ch:
+            respond_via_response_url(
+                response_url=response_url,
+                text="Upload failed: missing channel context.",
+                response_type="ephemeral",
+            )
+            return
+
+        files = list_recent_channel_pdfs(channel_id=ch, max_files=want, max_messages=80)
+        if not files:
+            respond_via_response_url(
+                response_url=response_url,
+                text=(
+                    "No PDFs found in recent channel history.\n"
+                    "Upload one or more PDFs into this channel, then run:\n"
+                    "`/polaris upload` (or `/polaris upload 3`)"
+                ),
+                response_type="ephemeral",
+            )
+            return
+
+        lines: list[str] = []
+        ok = 0
+        for f in files:
+            name = str(f.get("name") or "upload.pdf").strip() or "upload.pdf"
+            size = int(f.get("size") or 0)
+            url = (
+                str(f.get("url_private_download") or "").strip()
+                or str(f.get("url_private") or "").strip()
+            )
+            if size and size > 60 * 1024 * 1024:
+                lines.append(f"- `{name}`: skipped (file too large: {size} bytes)")
+                continue
+            if not url:
+                lines.append(f"- `{name}`: skipped (missing download URL)")
+                continue
+
+            try:
+                pdf = download_slack_file(url=url, max_bytes=60 * 1024 * 1024)
+                analysis = analyze_rfp(pdf, name)
+                saved = create_rfp_from_analysis(
+                    analysis=analysis,
+                    source_file_name=name,
+                    source_file_size=len(pdf),
+                )
+                rid = str(saved.get("_id") or saved.get("rfpId") or "").strip()
+                if rid:
+                    ok += 1
+                    lines.append(f"- Created: <{_rfp_url(rid)}|{name}> `{rid}`")
+                else:
+                    lines.append(f"- `{name}`: created, but missing rfpId in response")
+            except Exception as e:
+                msg = str(e) or "upload_failed"
+                if len(msg) > 180:
+                    msg = msg[:180] + "…"
+                lines.append(f"- `{name}`: failed ({msg})")
+
+        header = f"*Uploaded {ok}/{len(files)} PDF(s) to Polaris*"
+        respond_via_response_url(
+            response_url=response_url,
+            text="\n".join([header] + lines),
+            response_type="ephemeral",
+        )
+    except Exception:
+        # Never fail silently; but keep response terse.
+        try:
+            respond_via_response_url(
+                response_url=response_url,
+                text="Upload failed (server error).",
+                response_type="ephemeral",
+            )
+        except Exception:
+            pass
 
 
 def _format_rfp_line(rfp: dict) -> str:
@@ -337,12 +426,13 @@ async def slack_events(request: Request):
 
 
 @router.post("/slack/commands")
-async def slack_commands(request: Request):
+async def slack_commands(request: Request, background_tasks: BackgroundTasks):
     body = await _require_slack_request(request)
 
     # Slack sends application/x-www-form-urlencoded for slash commands.
     form = parse_qs(body.decode("utf-8", errors="ignore"))
     text = str((form.get("text") or [""])[0] or "").strip()
+    response_url = str((form.get("response_url") or [""])[0] or "").strip() or None
 
     # Common fields (kept for future use)
     user_id = str((form.get("user_id") or [""])[0] or "").strip() or None
@@ -362,6 +452,7 @@ async def slack_commands(request: Request):
                     "- `/polaris help`",
                     "- `/polaris recent [n]` (list latest RFPs)",
                     "- `/polaris search <keywords>` (search title/client/type)",
+                    "- `/polaris upload [n]` (upload latest PDFs from this channel; default 1)",
                     "- `/polaris due [days]` (submission deadlines due soon; default 7)",
                     "- `/polaris pipeline [stage]` (group RFPs by workflow stage)",
                     "- `/polaris proposals [n]` (list latest proposals)",
@@ -389,6 +480,38 @@ async def slack_commands(request: Request):
                     f"- <{_content_url()}|Content Library>",
                 ]
             ),
+        }
+
+    if sub in ("upload", "ingest"):
+        # Slash commands must respond within 3 seconds. We ack quickly and post
+        # results later via response_url.
+        if not bool(settings.slack_enabled) or not get_bot_token():
+            return {
+                "response_type": "ephemeral",
+                "text": "Slack integration not configured on the server (missing bot token).",
+            }
+        if not channel_id or not response_url:
+            return {
+                "response_type": "ephemeral",
+                "text": "Missing channel context. Try running the command from a channel, not a DM.",
+            }
+        n = 1
+        if args:
+            try:
+                n = int(args[0])
+            except Exception:
+                n = 1
+        n = max(1, min(5, n))
+
+        background_tasks.add_task(
+            _slack_upload_latest_pdfs_task,
+            response_url=response_url,
+            channel_id=channel_id,
+            n=n,
+        )
+        return {
+            "response_type": "ephemeral",
+            "text": f"Uploading latest {n} PDF(s) from this channel…",
         }
 
     if sub in ("recent", "list", "rfps"):

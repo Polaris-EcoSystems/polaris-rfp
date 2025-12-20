@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from typing import Any
+
 from ..settings import settings
+from .rfps_repo import get_rfp_by_id
 from .slack_web import post_message
 
 
@@ -12,6 +15,37 @@ def _proposal_url(proposal_id: str) -> str:
     base = str(settings.frontend_base_url or "").rstrip("/")
     return f"{base}/proposals/{proposal_id}"
 
+def _format_rfp_upload_summary(*, rfp_id: str, file_name: str, job_id: str) -> str:
+    rid = str(rfp_id or "").strip()
+    name = str(file_name or "").strip() or "upload.pdf"
+    jid = str(job_id or "").strip() or "unknown"
+
+    # Best-effort: enrich message with RFP fields.
+    rfp: dict[str, Any] | None = None
+    try:
+        rfp = get_rfp_by_id(rid) if rid else None
+    except Exception:
+        rfp = None
+
+    title = str(((rfp or {}).get("title") or "RFP") if isinstance(rfp, dict) else "RFP").strip() or "RFP"
+    client = str(((rfp or {}).get("clientName") or "") if isinstance(rfp, dict) else "").strip()
+    ptype = str(((rfp or {}).get("projectType") or "") if isinstance(rfp, dict) else "").strip()
+    due = str(((rfp or {}).get("submissionDeadline") or "") if isinstance(rfp, dict) else "").strip()
+
+    link = f"<{_rfp_url(rid)}|{title}>" if rid else "RFP"
+    meta_parts: list[str] = []
+    if client:
+        meta_parts.append(client)
+    if ptype:
+        meta_parts.append(ptype)
+    if due:
+        meta_parts.append(f"due {due}")
+    meta = f" — {' · '.join(meta_parts)}" if meta_parts else ""
+
+    if rid:
+        return f"New RFP uploaded: {link} `{rid}`{meta} (file `{name}`, job `{jid}`)"
+    return f"New RFP uploaded: {link}{meta} (file `{name}`, job `{jid}`)"
+
 
 def notify_rfp_upload_job_completed(
     *,
@@ -21,11 +55,10 @@ def notify_rfp_upload_job_completed(
     channel: str | None = None,
 ) -> None:
     rid = str(rfp_id or "").strip()
-    link = f"<{_rfp_url(rid)}|Open RFP>" if rid else "(no rfpId)"
     name = str(file_name or "").strip() or "upload.pdf"
     ch = str(channel or settings.slack_rfp_machine_channel or "").strip() or None
     post_message(
-        text=f"RFP upload completed: {link} (job `{job_id}`, file `{name}`)",
+        text=_format_rfp_upload_summary(rfp_id=rid, file_name=name, job_id=job_id),
         channel=ch,
         unfurl_links=False,
     )

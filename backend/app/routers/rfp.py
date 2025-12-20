@@ -33,7 +33,7 @@ from ..services.slack_notifier import (
 )
 from ..observability.logging import get_logger
 from ..settings import settings
-from ..ai.client import stream_text, AiNotConfigured, AiError
+from ..ai.client import call_text, stream_text, AiNotConfigured, AiError, AiUpstreamError
 from ..ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI
 
 import json
@@ -783,6 +783,146 @@ def ai_summary_stream(id: str):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/{id}/ai-section-summary")
+def ai_section_summary(id: str, body: dict = Body(...)):
+    """
+    Generate (and persist) a short, section-specific AI summary based on the stored rawText.
+
+    Body:
+      - sectionId: string (required)
+      - topic: string (optional; defaults to sectionId)
+      - force: boolean (optional; if true, regenerate even if cached)
+    """
+    rfp = get_rfp_by_id(id)
+    if not rfp:
+        raise HTTPException(status_code=404, detail="RFP not found")
+
+    b = body or {}
+    section_id = str(b.get("sectionId") or "").strip()
+    if not section_id:
+        raise HTTPException(status_code=400, detail="sectionId is required")
+    if len(section_id) > 80:
+        raise HTTPException(status_code=400, detail="sectionId is too long")
+
+    topic = str(b.get("topic") or section_id).strip()
+    if len(topic) > 200:
+        topic = topic[:200]
+
+    force = bool(b.get("force") or False)
+
+    existing = rfp.get("aiSectionSummaries")
+    existing_map: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    cached = existing_map.get(section_id) if isinstance(existing_map, dict) else None
+    if not force and isinstance(cached, dict) and str(cached.get("text") or "").strip():
+        return {
+            "ok": True,
+            "sectionId": section_id,
+            "topic": str(cached.get("topic") or topic),
+            "summary": str(cached.get("text") or "").strip(),
+            "updatedAt": cached.get("updatedAt"),
+            "cached": True,
+        }
+
+    raw_text = str(rfp.get("rawText") or "").strip()
+    if not raw_text:
+        raise HTTPException(status_code=409, detail="RFP has no rawText")
+
+    # Keep prompt sizes bounded and deterministic.
+    text_clip = raw_text[:120000]
+    title = str(rfp.get("title") or "").strip()
+    client = str(rfp.get("clientName") or "").strip()
+    submission_deadline = str(rfp.get("submissionDeadline") or "").strip()
+    questions_deadline = str(rfp.get("questionsDeadline") or "").strip()
+    budget = str(rfp.get("budgetRange") or "").strip()
+    project_type = str(rfp.get("projectType") or "").strip()
+
+    system_prompt = (
+        "You are an expert RFP analyst. "
+        "Write a short, specific summary for the given TOPIC using only the provided RFP text. "
+        "If the RFP text does not mention the topic, explicitly say it is not specified in the RFP text. "
+        "Return plain text only (no markdown, no bullets)."
+    )
+    user_prompt = (
+        f"TOPIC: {topic}\n\n"
+        "CONSTRAINTS:\n"
+        "- 2 to 4 sentences\n"
+        "- Max ~80 words\n"
+        "- Plain text only\n"
+        "- No speculation; use 'Not specified in the RFP text.' when missing\n\n"
+        "RFP_META:\n"
+        f"- Title: {title or '—'}\n"
+        f"- Client: {client or '—'}\n"
+        f"- Project type: {project_type or '—'}\n"
+        f"- Budget: {budget or '—'}\n"
+        f"- Submission deadline: {submission_deadline or '—'}\n"
+        f"- Questions deadline: {questions_deadline or '—'}\n\n"
+        f"RFP_TEXT:\n{text_clip}"
+    )
+
+    try:
+        summary, meta = call_text(
+            purpose="rfp_section_summary",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=220,
+            temperature=0.2,
+            retries=2,
+        )
+        summary = str(summary or "").strip()
+        if not summary:
+            raise HTTPException(status_code=502, detail="AI returned empty summary")
+
+        now = now_iso()
+        next_map = dict(existing_map)
+        next_map[section_id] = {
+            "text": summary,
+            "topic": topic,
+            "updatedAt": now,
+            "model": meta.model,
+            "purpose": meta.purpose,
+        }
+        try:
+            update_rfp(id, {"aiSectionSummaries": next_map})
+        except Exception:
+            # Best-effort: don't fail the request if persistence errors.
+            pass
+
+        return {
+            "ok": True,
+            "sectionId": section_id,
+            "topic": topic,
+            "summary": summary,
+            "updatedAt": now,
+            "cached": False,
+            "meta": {
+                "purpose": meta.purpose,
+                "model": meta.model,
+                "attempts": meta.attempts,
+            },
+        }
+    except HTTPException:
+        raise
+    except AiNotConfigured:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    except AiUpstreamError as e:
+        raise HTTPException(status_code=502, detail={"error": "AI upstream failure", "details": str(e)})
+    except AiError as e:
+        raise HTTPException(status_code=502, detail={"error": "AI failure", "details": str(e)})
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to generate section summary", "details": str(e)},
+        )
+
+
+@router.post("/{id}/ai-section-summary/", include_in_schema=False)
+def ai_section_summary_slash(id: str, body: dict = Body(...)):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return ai_section_summary(id=id, body=body)
 
 
 @router.put("/{id}")
