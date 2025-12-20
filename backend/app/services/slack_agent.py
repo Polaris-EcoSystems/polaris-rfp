@@ -114,6 +114,52 @@ def _safe_json(obj: Any, *, max_chars: int = 25_000) -> str:
     return clip_text(s, max_chars=max_chars)
 
 
+def _supports_responses_api(client: Any) -> bool:
+    try:
+        r = getattr(client, "responses", None)
+        return bool(r) and callable(getattr(r, "create", None))
+    except Exception:
+        return False
+
+
+def _to_chat_tool(t: dict[str, Any]) -> dict[str, Any]:
+    """
+    Convert a Responses-style function tool spec into a Chat Completions tool spec.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": str(t.get("name") or ""),
+            "description": str(t.get("description") or ""),
+            "parameters": t.get("parameters") or {"type": "object", "properties": {}},
+        },
+    }
+
+
+def _chat_tool_calls(completion: Any) -> list[dict[str, Any]]:
+    try:
+        msg = completion.choices[0].message
+        calls = getattr(msg, "tool_calls", None)
+        if calls:
+            # Convert SDK objects to dict-ish shape.
+            out: list[dict[str, Any]] = []
+            for c in calls:
+                fn = getattr(c, "function", None)
+                out.append(
+                    {
+                        "id": getattr(c, "id", None),
+                        "function": {
+                            "name": getattr(fn, "name", None),
+                            "arguments": getattr(fn, "arguments", None),
+                        },
+                    }
+                )
+            return out
+    except Exception:
+        return []
+    return []
+
+
 def _list_rfps_tool(args: dict[str, Any]) -> dict[str, Any]:
     limit = int(args.get("limit") or 10)
     limit = max(1, min(25, limit))
@@ -483,6 +529,7 @@ def run_slack_agent_question(
     if bool(settings.slack_agent_actions_enabled):
         tools.append(_propose_action_tool_def())
     tool_names = [tpl["name"] for tpl in tools if isinstance(tpl, dict) and tpl.get("name")]
+    chat_tools = [_to_chat_tool(tpl) for tpl in tools if isinstance(tpl, dict)]
 
     system = "\n".join(
         [
@@ -505,6 +552,110 @@ def run_slack_agent_question(
 
     # First call: provide combined instruction + question as plain input text.
     input0 = f"{system}\n\nUSER_QUESTION:\n{q}"
+
+    # If the runtime SDK does not support Responses API, fall back to Chat Completions tool calling.
+    if not _supports_responses_api(client):
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": q},
+        ]
+        steps = 0
+        while True:
+            steps += 1
+            if steps > max(1, int(max_steps)):
+                raise AiUpstreamError("slack_agent_max_steps_exceeded")
+
+            completion = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=chat_tools,
+                tool_choice="auto",
+                temperature=0.2,
+                max_completion_tokens=900,
+            )
+
+            calls = _chat_tool_calls(completion)
+            if not calls:
+                out = (completion.choices[0].message.content or "").strip()
+                if not out:
+                    raise AiUpstreamError("empty_model_response")
+                return SlackAgentAnswer(
+                    text=out,
+                    meta={"model": model, "steps": steps, "response_format": "chat_tools"},
+                )
+
+            # Add the assistant tool call message (required by tool protocol)
+            try:
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": c.get("id"),
+                                "type": "function",
+                                "function": {
+                                    "name": (c.get("function") or {}).get("name"),
+                                    "arguments": (c.get("function") or {}).get("arguments"),
+                                },
+                            }
+                            for c in calls
+                        ],
+                    }
+                )
+            except Exception:
+                # If formatting fails, just break.
+                raise AiUpstreamError("tool_call_format_failed")
+
+            # Execute each tool call and append tool outputs
+            for c in calls:
+                call_id = str(c.get("id") or "").strip()
+                fn = c.get("function") if isinstance(c.get("function"), dict) else {}
+                name = str((fn or {}).get("name") or "").strip()
+                raw_args = (fn or {}).get("arguments")
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) and raw_args else {}
+                except Exception:
+                    args = {}
+
+                if name == ACTION_TOOL_NAME:
+                    action = str((args or {}).get("action") or "").strip()
+                    aargs = (args or {}).get("args") if isinstance(args, dict) else {}
+                    summary = str((args or {}).get("summary") or "").strip()
+                    saved = create_action(
+                        kind=action or "unknown",
+                        payload={
+                            "action": action,
+                            "args": aargs if isinstance(aargs, dict) else {},
+                            "requestedBySlackUserId": user_id,
+                            "channelId": channel_id,
+                            "threadTs": thread_ts,
+                            "question": q,
+                        },
+                        ttl_seconds=600,
+                    )
+                    aid = str(saved.get("actionId") or "").strip()
+                    blocks = _blocks_for_proposed_action(action_id=aid, summary=summary or action)
+                    return SlackAgentAnswer(
+                        text=f"{summary}\n\nAction id: `{aid}`",
+                        blocks=blocks,
+                        meta={"model": model, "steps": steps, "response_format": "chat_tools", "proposedAction": saved},
+                    )
+
+                tool = READ_TOOLS.get(name)
+                if not tool:
+                    messages.append(
+                        {"role": "tool", "tool_call_id": call_id, "content": _safe_json({"ok": False, "error": "unknown_tool"})}
+                    )
+                    continue
+                _tpl, func = tool
+                try:
+                    result = func(args if isinstance(args, dict) else {})
+                except Exception as e:
+                    result = {"ok": False, "error": str(e) or "tool_failed"}
+                messages.append(
+                    {"role": "tool", "tool_call_id": call_id, "content": _safe_json(result)}
+                )
 
     prev_id: str | None = None
     steps = 0

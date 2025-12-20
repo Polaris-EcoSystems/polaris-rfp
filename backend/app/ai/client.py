@@ -178,6 +178,18 @@ def _client(*, timeout_s: int = 60) -> Any:
     )
 
 
+def _supports_responses_api(client: Any) -> bool:
+    """
+    Some OpenAI SDK versions ship without `client.responses`.
+    We treat Responses API as optional and fall back to chat.completions when missing.
+    """
+    try:
+        r = getattr(client, "responses", None)
+        return bool(r) and callable(getattr(r, "create", None))
+    except Exception:
+        return False
+
+
 def _clip(s: str, max_len: int) -> str:
     s = str(s or "")
     if len(s) <= max_len:
@@ -407,7 +419,7 @@ def call_text(
         for attempt in range(1, max(1, int(retries) + 1) + 1):
             try:
                 # Prefer Responses API for GPT-5 family (supports reasoning/verbosity).
-                if _is_gpt5_family(model):
+                if _is_gpt5_family(model) and _supports_responses_api(client):
                     eff = str(settings.openai_reasoning_effort_text or settings.openai_reasoning_effort or "none")
                     vb = str(settings.openai_text_verbosity or "medium")
                     out, meta = _responses_create_text(
@@ -559,7 +571,7 @@ def call_json(
     for model in _models_to_try(purpose):
         for attempt in range(1, max(1, int(retries)) + 1):
             # Prefer Responses API for GPT-5 family.
-            if _is_gpt5_family(model):
+            if _is_gpt5_family(model) and _supports_responses_api(client):
                 try:
                     eff = str(settings.openai_reasoning_effort_json or settings.openai_reasoning_effort or "low")
                     vb = str(settings.openai_text_verbosity_json or settings.openai_text_verbosity or "low")
