@@ -339,6 +339,12 @@ def get_one(id: str):
         raise HTTPException(status_code=500, detail="Failed to fetch RFP")
 
 
+@router.get("/{id}/", include_in_schema=False)
+def get_one_slash(id: str):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return get_one(id)
+
+
 @router.post("/{id}/ai-section-titles")
 def ai_section_titles(id: str):
     try:
@@ -356,6 +362,12 @@ def ai_section_titles(id: str):
         raise HTTPException(
             status_code=500, detail={"error": "Failed to generate section titles", "message": str(e)}
         )
+
+
+@router.post("/{id}/ai-section-titles/", include_in_schema=False)
+def ai_section_titles_slash(id: str):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return ai_section_titles(id)
 
 
 @router.put("/{id}")
@@ -377,6 +389,12 @@ def update_one(id: str, body: dict):
         raise
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to update RFP")
+
+
+@router.put("/{id}/", include_in_schema=False)
+def update_one_slash(id: str, body: dict):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return update_one(id, body)
 
 
 @router.put("/{id}/review")
@@ -508,6 +526,12 @@ def update_review(id: str, request: Request, body: dict = Body(...)):
         return out
 
 
+@router.put("/{id}/review/", include_in_schema=False)
+def update_review_slash(id: str, request: Request, body: dict = Body(...)):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return update_review(id=id, request=request, body=body)
+
+
 @router.get("/{id}/proposals")
 def proposals_for_rfp(id: str):
     try:
@@ -517,6 +541,12 @@ def proposals_for_rfp(id: str):
         raise HTTPException(status_code=500, detail="Failed to fetch RFP proposals")
 
 
+@router.get("/{id}/proposals/", include_in_schema=False)
+def proposals_for_rfp_slash(id: str):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return proposals_for_rfp(id)
+
+
 @router.delete("/{id}")
 def delete_one(id: str):
     try:
@@ -524,6 +554,12 @@ def delete_one(id: str):
         return {"message": "RFP deleted successfully"}
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to delete RFP")
+
+
+@router.delete("/{id}/", include_in_schema=False)
+def delete_one_slash(id: str):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return delete_one(id)
 
 
 @router.post("/{id}/buyer-profiles/remove")
@@ -583,3 +619,9 @@ def remove_buyer_profiles(id: str, body: dict = Body(...)):
 
     updated = update_rfp(id, {"buyerProfiles": kept})
     return {"success": True, "removed": removed, "remaining": len(kept), "rfp": updated}
+
+
+@router.post("/{id}/buyer-profiles/remove/", include_in_schema=False)
+def remove_buyer_profiles_slash(id: str, body: dict = Body(...)):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return remove_buyer_profiles(id=id, body=body)

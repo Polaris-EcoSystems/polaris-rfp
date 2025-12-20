@@ -39,7 +39,7 @@ def test_slack_commands_help_ok():
     )
     assert r.status_code == 200
     payload = r.json()
-    assert payload.get("response_type") == "ephemeral"
+    assert payload.get("response_type") == "in_channel"
     assert "Polaris RFP Slack commands" in str(payload.get("text") or "")
 
 

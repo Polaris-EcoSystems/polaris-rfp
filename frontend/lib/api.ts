@@ -12,9 +12,34 @@ import axios, {
  *   from an httpOnly cookie (set during magic-link verification).
  */
 export function proxyUrl(path: string): string {
-  const p = String(path || '').trim()
-  if (!p) return '/api/proxy/'
-  return `/api/proxy${p.startsWith('/') ? p : `/${p}`}`
+  const raw = String(path ?? '').trim()
+  if (!raw) return '/api/proxy/'
+
+  // Idempotent: if a caller already passed a proxied path, keep it.
+  if (raw.startsWith('/api/proxy')) return raw
+  if (raw.startsWith('api/proxy')) return `/${raw}`
+
+  // Convenience: allow passing a full URL and proxy its pathname+search.
+  if (raw.startsWith('http://') || raw.startsWith('https://')) {
+    try {
+      const u = new URL(raw)
+      return proxyUrl(`${u.pathname}${u.search}`)
+    } catch {
+      // fall through
+    }
+  }
+
+  return `/api/proxy${raw.startsWith('/') ? raw : `/${raw}`}`
+}
+
+function cleanPathToken(token: string): string {
+  // Defensive: trim whitespace and strip leading/trailing slashes
+  // (avoids accidental `/api/rfp/<id>/` 404s and double-segment bugs).
+  const t = String(token ?? '')
+    .trim()
+    .replace(/^\/+/, '')
+    .replace(/\/+$/, '')
+  return encodeURIComponent(t)
 }
 
 // Ensure we only ever have ONE axios instance, even if the module is imported via
@@ -298,9 +323,9 @@ export const rfpApi = {
         nextToken: params?.nextToken,
       },
     }),
-  get: (id: string) => api.get<RFP>(proxyUrl(`/api/rfp/${id}`)),
+  get: (id: string) => api.get<RFP>(proxyUrl(`/api/rfp/${cleanPathToken(id)}`)),
   update: (id: string, data: any) =>
-    api.put<RFP>(proxyUrl(`/api/rfp/${id}`), data),
+    api.put<RFP>(proxyUrl(`/api/rfp/${cleanPathToken(id)}`), data),
   updateReview: (
     id: string,
     data: {
@@ -319,22 +344,38 @@ export const rfpApi = {
         mappedSections?: string[]
       }[]
     },
-  ) => api.put<RFP>(proxyUrl(`/api/rfp/${id}/review`), data),
-  delete: (id: string) => api.delete(proxyUrl(`/api/rfp/${id}`)),
+  ) => api.put<RFP>(proxyUrl(`/api/rfp/${cleanPathToken(id)}/review`), data),
+  delete: (id: string) =>
+    api.delete(proxyUrl(`/api/rfp/${cleanPathToken(id)}`)),
   getSectionTitles: (id: string) =>
     api.post<{ titles: string[] }>(
-      proxyUrl(`/api/rfp/${id}/ai-section-titles`),
+      proxyUrl(`/api/rfp/${cleanPathToken(id)}/ai-section-titles`),
     ),
   getProposals: (id: string) =>
-    api.get<{ data: Proposal[] }>(proxyUrl(`/api/rfp/${id}/proposals`)),
+    api.get<{ data: Proposal[] }>(
+      proxyUrl(`/api/rfp/${cleanPathToken(id)}/proposals`),
+    ),
   uploadAttachments: (id: string, data: FormData) =>
-    api.post(proxyUrl(`/api/rfp/${id}/upload-attachments`), data),
+    api.post(
+      proxyUrl(`/api/rfp/${cleanPathToken(id)}/upload-attachments`),
+      data,
+    ),
   deleteAttachment: (rfpId: string, attachmentId: string) =>
-    api.delete(proxyUrl(`/api/rfp/${rfpId}/attachments/${attachmentId}`)),
+    api.delete(
+      proxyUrl(
+        `/api/rfp/${cleanPathToken(rfpId)}/attachments/${cleanPathToken(
+          attachmentId,
+        )}`,
+      ),
+    ),
   removeBuyerProfiles: (
     rfpId: string,
     data: { selected?: string[]; clear?: boolean },
-  ) => api.post(proxyUrl(`/api/rfp/${rfpId}/buyer-profiles/remove`), data),
+  ) =>
+    api.post(
+      proxyUrl(`/api/rfp/${cleanPathToken(rfpId)}/buyer-profiles/remove`),
+      data,
+    ),
 }
 
 // Proposal API calls

@@ -22,6 +22,15 @@ from ..services.slack_web import is_slack_configured, post_message
 router = APIRouter(tags=["integrations"])
 log = get_logger("integrations_slack")
 
+def _command_response_type(subcommand: str) -> str:
+    # Per request: make all commands public except `job` which can contain
+    # operational details and is typically user-specific.
+    sub = str(subcommand or "").strip().lower()
+    if sub == "job":
+        return "ephemeral"
+    return "in_channel"
+
+
 def _rfp_url(rfp_id: str) -> str:
     base = str(settings.frontend_base_url or "").rstrip("/")
     rid = str(rfp_id or "").strip()
@@ -342,10 +351,11 @@ async def slack_commands(request: Request):
     parts = [p for p in text.split() if p.strip()]
     sub = (parts[0].lower() if parts else "help").strip()
     args = parts[1:]
+    rt = _command_response_type(sub)
 
     if sub in ("help", "h", "?"):
         return {
-            "response_type": "ephemeral",
+            "response_type": rt,
             "text": "\n".join(
                 [
                     "*Polaris RFP Slack commands*",
@@ -367,7 +377,7 @@ async def slack_commands(request: Request):
 
     if sub == "links":
         return {
-            "response_type": "ephemeral",
+            "response_type": rt,
             "text": "\n".join(
                 [
                     "*Quick links*",
@@ -391,35 +401,35 @@ async def slack_commands(request: Request):
         n = max(1, min(15, n))
         items = _recent_rfps(max_results=n)
         if not items:
-            return {"response_type": "ephemeral", "text": "No RFPs found."}
+            return {"response_type": rt, "text": "No RFPs found."}
         lines = [f"*Latest {min(n, len(items))} RFPs*"] + [_format_rfp_line(r) for r in items[:n]]
-        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+        return {"response_type": rt, "text": "\n".join(lines)}
 
     if sub in ("search", "find"):
         if not args:
-            return {"response_type": "ephemeral", "text": "Usage: `/polaris search <keywords>`"}
+            return {"response_type": rt, "text": "Usage: `/polaris search <keywords>`"}
         q = " ".join(args).strip()
         hits = _search_rfps(q, max_results=10)
         if not hits:
-            return {"response_type": "ephemeral", "text": f"No matches for: `{q}`"}
+            return {"response_type": rt, "text": f"No matches for: `{q}`"}
         lines = [f"*Search results for:* `{q}`"] + [_format_rfp_line(r) for r in hits]
-        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+        return {"response_type": rt, "text": "\n".join(lines)}
 
     if sub == "open":
         if not args:
-            return {"response_type": "ephemeral", "text": "Usage: `/polaris open <keywords>`"}
+            return {"response_type": rt, "text": "Usage: `/polaris open <keywords>`"}
         q = " ".join(args).strip()
         hits = _search_rfps(q, max_results=1)
         if not hits:
-            return {"response_type": "ephemeral", "text": f"No matches for: `{q}`"}
+            return {"response_type": rt, "text": f"No matches for: `{q}`"}
         r = hits[0]
         rid = str(r.get("_id") or "").strip()
         if not rid:
-            return {"response_type": "ephemeral", "text": "Match found but missing rfpId."}
+            return {"response_type": rt, "text": "Match found but missing rfpId."}
         title = str(r.get("title") or "RFP").strip()
         client = str(r.get("clientName") or "").strip()
         extra = f" ({client})" if client else ""
-        return {"response_type": "ephemeral", "text": f"<{_rfp_url(rid)}|{title}>{extra}"}
+        return {"response_type": rt, "text": f"<{_rfp_url(rid)}|{title}>{extra}"}
 
     if sub in ("due", "deadlines"):
         days = 7
@@ -446,7 +456,7 @@ async def slack_commands(request: Request):
         )
         if not hits:
             return {
-                "response_type": "ephemeral",
+                "response_type": rt,
                 "text": f"No RFPs due in the next {days} days.",
             }
         lines = [f"*RFPs due in the next {days} days*"] + [
@@ -454,7 +464,7 @@ async def slack_commands(request: Request):
         ]
         if len(hits) > 12:
             lines.append(f"_Showing 12 of {len(hits)}._")
-        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+        return {"response_type": rt, "text": "\n".join(lines)}
 
     if sub == "pipeline":
         stage_filter = str(args[0] or "").strip().lower() if args else ""
@@ -504,7 +514,7 @@ async def slack_commands(request: Request):
 
         if want and all(len(grouped.get(k, [])) == 0 for k in grouped.keys()):
             return {
-                "response_type": "ephemeral",
+                "response_type": rt,
                 "text": f"No RFPs found in stage `{want}`.",
             }
 
@@ -528,7 +538,7 @@ async def slack_commands(request: Request):
                 lines.append(_format_rfp_line(r))
             if len(grouped[k]) > 6:
                 lines.append(f"_…and {len(grouped[k]) - 6} more_")
-        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+        return {"response_type": rt, "text": "\n".join(lines)}
 
     if sub in ("proposals", "proposal-list"):
         n = 8
@@ -540,43 +550,43 @@ async def slack_commands(request: Request):
         n = max(1, min(15, n))
         items = _recent_proposals(max_results=n)
         if not items:
-            return {"response_type": "ephemeral", "text": "No proposals found."}
+            return {"response_type": rt, "text": "No proposals found."}
         lines = [f"*Latest {min(n, len(items))} proposals*"] + [
             _format_proposal_line(p) for p in items[:n]
         ]
-        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+        return {"response_type": rt, "text": "\n".join(lines)}
 
     if sub == "proposal":
         if not args:
             return {
-                "response_type": "ephemeral",
+                "response_type": rt,
                 "text": "Usage: `/polaris proposal <keywords>`",
             }
         q = " ".join(args).strip()
         hits = _search_proposals(q, max_results=5)
         if not hits:
-            return {"response_type": "ephemeral", "text": f"No proposal matches for: `{q}`"}
+            return {"response_type": rt, "text": f"No proposal matches for: `{q}`"}
         if len(hits) == 1:
             p = hits[0]
             pid = str(p.get("_id") or "").strip()
             title = str(p.get("title") or "Proposal").strip()
             return {
-                "response_type": "ephemeral",
+                "response_type": rt,
                 "text": f"<{_proposal_url(pid)}|{title}> `{pid}`",
             }
         lines = [f"*Proposal matches for:* `{q}`"] + [_format_proposal_line(p) for p in hits]
-        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+        return {"response_type": rt, "text": "\n".join(lines)}
 
     if sub in ("summarize", "summary"):
         if not args:
             return {
-                "response_type": "ephemeral",
+                "response_type": rt,
                 "text": "Usage: `/polaris summarize <rfp keywords>`",
             }
         q = " ".join(args).strip()
         hits = _search_rfps(q, max_results=5)
         if not hits:
-            return {"response_type": "ephemeral", "text": f"No RFP matches for: `{q}`"}
+            return {"response_type": rt, "text": f"No RFP matches for: `{q}`"}
 
         r = hits[0]
         rid = str(r.get("_id") or "").strip()
@@ -611,20 +621,20 @@ async def slack_commands(request: Request):
             for alt in hits[1:4]:
                 lines.append(_format_rfp_line(alt))
         text = (text0 + ("\n" + "\n".join(lines) if lines else "")).strip()
-        return {"response_type": "ephemeral", "text": text, "blocks": blocks}
+        return {"response_type": rt, "text": text, "blocks": blocks}
 
     if sub == "rfp":
         if not args:
-            return {"response_type": "ephemeral", "text": "Usage: `/polaris rfp <rfpId>`"}
+            return {"response_type": rt, "text": "Usage: `/polaris rfp <rfpId>`"}
         rfp_id = str(args[0]).strip()
         rfp = get_rfp_by_id(rfp_id)
         if not rfp:
-            return {"response_type": "ephemeral", "text": f"RFP not found: `{rfp_id}`"}
+            return {"response_type": rt, "text": f"RFP not found: `{rfp_id}`"}
         url = _rfp_url(rfp_id)
         title = str(rfp.get("title") or "RFP").strip()
         client = str(rfp.get("clientName") or "").strip()
         extra = f" ({client})" if client else ""
-        return {"response_type": "ephemeral", "text": f"<{url}|{title}>{extra}"}
+        return {"response_type": rt, "text": f"<{url}|{title}>{extra}"}
 
     if sub == "job":
         if not args:
