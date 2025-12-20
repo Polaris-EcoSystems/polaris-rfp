@@ -702,6 +702,8 @@ def run_slack_operator_for_mention(
         return SlackOperatorResult(did_post=False, text=None, meta={"error": "missing_params"})
 
     # Best-effort identity resolution for safer write actions (and future "me" support).
+    actor_ctx = None
+    actor_user_sub = None
     try:
         from .slack_actor_context import resolve_actor_context
 
@@ -865,6 +867,8 @@ def run_slack_operator_for_mention(
             "- Never invent IDs, dates, or commitments. Cite tool output or ask a single clarifying question.",
             "- For code changes: first call `create_change_proposal` (stores a patch + rationale). Then propose an approval-gated action `self_modify_open_pr` with the `proposalId`.",
             "- Use `agent_job_list` to check job status when users ask about scheduled/running jobs.",
+            "- When users ask about their resume, check the user context for resume S3 keys. For PDF or DOCX files, use `extract_resume_text` to extract text content. For plain text files, use `s3_get_object_text`. For binary files that need downloading, use `s3_presign_get` to get a download URL.",
+            "- When users ask about their professional background, check both user context (job titles, certifications) and linked team member information (biography, bioProfiles) if available. Use `get_team_member` tool to fetch full team member details if needed.",
             "",
             "Runtime context:",
             f"- channel: {ch}",
@@ -874,6 +878,107 @@ def run_slack_operator_for_mention(
             f"- correlation_id: {corr or '(none)'}",
         ]
     )
+    
+    # Add user context if available (resume, job titles, linked team member, etc.)
+    if actor_ctx and actor_ctx.user_profile:
+        prof = actor_ctx.user_profile
+        user_ctx_lines: list[str] = []
+        user_sub_str = str(actor_ctx.user_sub or "").strip()
+        if user_sub_str:
+            user_ctx_lines.append(f"- user_sub: {user_sub_str}")
+        if actor_ctx.display_name:
+            user_ctx_lines.append(f"- name: {actor_ctx.display_name}")
+        if actor_ctx.email:
+            user_ctx_lines.append(f"- email: {actor_ctx.email.lower()}")
+
+        # Profile completion status
+        profile_completed_at = prof.get("profileCompletedAt")
+        if profile_completed_at:
+            user_ctx_lines.append(f"- profile_completed_at: {profile_completed_at}")
+        onboarding_version = prof.get("onboardingVersion")
+        if onboarding_version:
+            user_ctx_lines.append(f"- onboarding_version: {onboarding_version}")
+
+        # Timestamps
+        created_at = prof.get("createdAt")
+        if created_at:
+            user_ctx_lines.append(f"- profile_created_at: {created_at}")
+        updated_at = prof.get("updatedAt")
+        if updated_at:
+            user_ctx_lines.append(f"- profile_updated_at: {updated_at}")
+
+        # Include resume information if available
+        resume_assets = prof.get("resumeAssets")
+        if isinstance(resume_assets, list) and resume_assets:
+            resume_info: list[str] = []
+            for asset in resume_assets[:5]:  # Limit to 5 most recent
+                if not isinstance(asset, dict):
+                    continue
+                file_name = str(asset.get("fileName") or "").strip()
+                s3_key = str(asset.get("s3Key") or "").strip()
+                uploaded_at = str(asset.get("uploadedAt") or "").strip()
+                content_type = str(asset.get("contentType") or "").strip().lower()
+                if file_name and s3_key:
+                    resume_entry = f"{file_name} (S3: {s3_key})"
+                    if content_type:
+                        resume_entry += f" [{content_type}]"
+                    if uploaded_at:
+                        resume_entry += f" uploaded {uploaded_at}"
+                    resume_info.append(resume_entry)
+            if resume_info:
+                user_ctx_lines.append(f"- resumes: {', '.join(resume_info)}")
+
+        # Include job titles and certifications if available
+        job_titles = prof.get("jobTitles")
+        if isinstance(job_titles, list) and job_titles:
+            titles_str = ", ".join([str(t) for t in job_titles[:5]])
+            if titles_str:
+                user_ctx_lines.append(f"- job_titles: {titles_str}")
+
+        certs = prof.get("certifications")
+        if isinstance(certs, list) and certs:
+            certs_str = ", ".join([str(c) for c in certs[:10]])
+            if certs_str:
+                user_ctx_lines.append(f"- certifications: {certs_str}")
+
+        # Include linked team member information if available
+        linked_team_member_id = prof.get("linkedTeamMemberId")
+        if linked_team_member_id:
+            user_ctx_lines.append(f"- linked_team_member_id: {linked_team_member_id}")
+            # Fetch and include team member details
+            try:
+                from .. import content_repo
+                team_member = content_repo.get_team_member_by_id(str(linked_team_member_id).strip())
+                if team_member and isinstance(team_member, dict):
+                    tm_name = str(team_member.get("nameWithCredentials") or team_member.get("name") or "").strip()
+                    if tm_name:
+                        user_ctx_lines.append(f"- team_member_name: {tm_name}")
+                    tm_position = str(team_member.get("position") or "").strip()
+                    if tm_position:
+                        user_ctx_lines.append(f"- team_member_position: {tm_position}")
+                    tm_bio = str(team_member.get("biography") or "").strip()
+                    if tm_bio:
+                        # Clip biography to reasonable length for context
+                        bio_preview = tm_bio[:500] + "..." if len(tm_bio) > 500 else tm_bio
+                        user_ctx_lines.append(f"- team_member_biography: {bio_preview}")
+                    # Include bio profiles (project-type-specific bios)
+                    bio_profiles = team_member.get("bioProfiles")
+                    if isinstance(bio_profiles, list) and bio_profiles:
+                        for bp in bio_profiles[:3]:  # Limit to 3 most relevant
+                            if isinstance(bp, dict):
+                                bp_label = str(bp.get("label") or "").strip()
+                                bp_project_types = bp.get("projectTypes")
+                                if bp_label:
+                                    types_str = ""
+                                    if isinstance(bp_project_types, list) and bp_project_types:
+                                        types_str = f" ({', '.join([str(t) for t in bp_project_types[:3]])})"
+                                    user_ctx_lines.append(f"- team_member_bio_profile: {bp_label}{types_str}")
+            except Exception:
+                # Best-effort: if fetching team member fails, continue without it
+                pass
+
+        if user_ctx_lines:
+            system += "\n\nUser context:\n" + "\n".join(user_ctx_lines) + "\n"
     if thread_context:
         system += thread_context
     if recent_jobs_context:

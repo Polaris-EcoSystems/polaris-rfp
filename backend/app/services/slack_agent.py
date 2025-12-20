@@ -555,6 +555,93 @@ def run_slack_agent_question(
         user_ctx_lines.append(f"- email: {str(user_email).strip().lower()}")
     if user_id:
         user_ctx_lines.append(f"- slack_user_id: {str(user_id).strip()}")
+    
+    # Profile completion status
+    profile_completed_at = prof.get("profileCompletedAt")
+    if profile_completed_at:
+        user_ctx_lines.append(f"- profile_completed_at: {profile_completed_at}")
+    onboarding_version = prof.get("onboardingVersion")
+    if onboarding_version:
+        user_ctx_lines.append(f"- onboarding_version: {onboarding_version}")
+
+    # Timestamps
+    created_at = prof.get("createdAt")
+    if created_at:
+        user_ctx_lines.append(f"- profile_created_at: {created_at}")
+    updated_at = prof.get("updatedAt")
+    if updated_at:
+        user_ctx_lines.append(f"- profile_updated_at: {updated_at}")
+
+    # Include resume information if available
+    resume_assets = prof.get("resumeAssets")
+    if isinstance(resume_assets, list) and resume_assets:
+        resume_info: list[str] = []
+        for asset in resume_assets[:5]:  # Limit to 5 most recent
+            if not isinstance(asset, dict):
+                continue
+            file_name = str(asset.get("fileName") or "").strip()
+            s3_key = str(asset.get("s3Key") or "").strip()
+            uploaded_at = str(asset.get("uploadedAt") or "").strip()
+            content_type = str(asset.get("contentType") or "").strip().lower()
+            if file_name and s3_key:
+                resume_entry = f"{file_name} (S3: {s3_key})"
+                if content_type:
+                    resume_entry += f" [{content_type}]"
+                if uploaded_at:
+                    resume_entry += f" uploaded {uploaded_at}"
+                resume_info.append(resume_entry)
+        if resume_info:
+            user_ctx_lines.append(f"- resumes: {', '.join(resume_info)}")
+    
+    # Include job titles and certifications if available
+    job_titles = prof.get("jobTitles")
+    if isinstance(job_titles, list) and job_titles:
+        titles_str = ", ".join([str(t) for t in job_titles[:5]])
+        if titles_str:
+            user_ctx_lines.append(f"- job_titles: {titles_str}")
+    
+    certs = prof.get("certifications")
+    if isinstance(certs, list) and certs:
+        certs_str = ", ".join([str(c) for c in certs[:10]])
+        if certs_str:
+            user_ctx_lines.append(f"- certifications: {certs_str}")
+
+    # Include linked team member information if available
+    linked_team_member_id = prof.get("linkedTeamMemberId")
+    if linked_team_member_id:
+        user_ctx_lines.append(f"- linked_team_member_id: {linked_team_member_id}")
+        # Fetch and include team member details
+        try:
+            from .. import content_repo
+            team_member = content_repo.get_team_member_by_id(str(linked_team_member_id).strip())
+            if team_member and isinstance(team_member, dict):
+                tm_name = str(team_member.get("nameWithCredentials") or team_member.get("name") or "").strip()
+                if tm_name:
+                    user_ctx_lines.append(f"- team_member_name: {tm_name}")
+                tm_position = str(team_member.get("position") or "").strip()
+                if tm_position:
+                    user_ctx_lines.append(f"- team_member_position: {tm_position}")
+                tm_bio = str(team_member.get("biography") or "").strip()
+                if tm_bio:
+                    # Clip biography to reasonable length for context
+                    bio_preview = tm_bio[:500] + "..." if len(tm_bio) > 500 else tm_bio
+                    user_ctx_lines.append(f"- team_member_biography: {bio_preview}")
+                # Include bio profiles (project-type-specific bios)
+                bio_profiles = team_member.get("bioProfiles")
+                if isinstance(bio_profiles, list) and bio_profiles:
+                    for bp in bio_profiles[:3]:  # Limit to 3 most relevant
+                        if isinstance(bp, dict):
+                            bp_label = str(bp.get("label") or "").strip()
+                            bp_project_types = bp.get("projectTypes")
+                            if bp_label:
+                                types_str = ""
+                                if isinstance(bp_project_types, list) and bp_project_types:
+                                    types_str = f" ({', '.join([str(t) for t in bp_project_types[:3]])})"
+                                user_ctx_lines.append(f"- team_member_bio_profile: {bp_label}{types_str}")
+        except Exception:
+            # Best-effort: if fetching team member fails, continue without it
+            pass
+    
     if isinstance(prefs, dict) and prefs:
         # Keep this compact.
         try:
@@ -574,10 +661,10 @@ def run_slack_agent_question(
             
             result = slack_get_thread(channel=channel_id, thread_ts=thread_ts, limit=50)
             if result.get("ok"):
-                messages = result.get("messages", [])
-                if messages and isinstance(messages, list):
+                thread_messages = result.get("messages", [])
+                if thread_messages and isinstance(thread_messages, list):
                     lines: list[str] = []
-                    for msg in messages:
+                    for msg in thread_messages:
                         if not isinstance(msg, dict):
                             continue
                         user_id_msg = str(msg.get("user") or "").strip()
@@ -621,6 +708,8 @@ def run_slack_agent_question(
             "- If you are uncertain, call a tool or ask a single clarifying question.",
             "- Do NOT invent IDs, dates, or numbers. Use tool results only.",
             "- Use the thread conversation history below to remember previous context (channel names, permissions, user preferences, etc.).",
+            "- When users ask about their resume, check the user context for resume S3 keys. For PDF or DOCX files, use `extract_resume_text` to extract text content. For plain text files, use `s3_get_object_text`. For binary files that need downloading, use `s3_presign_get` to get a download URL.",
+            "- When users ask about their professional background, check both user context (job titles, certifications) and linked team member information (biography, bioProfiles) if available. Use `get_team_member` tool to fetch full team member details if needed.",
             "",
             "Slack formatting:",
             "- Use bullets only when presenting a list (do not force bullets for single sentences).",

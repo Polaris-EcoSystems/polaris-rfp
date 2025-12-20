@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import io
 import json
+import tempfile
+from pathlib import Path
 from typing import Any, Callable
 
 from boto3.dynamodb.conditions import Key
+import docx2txt
+from pypdf import PdfReader
 
 from ...ai.context import clip_text, normalize_ws
 from ...db.dynamodb.table import get_main_table, get_table
@@ -11,6 +16,7 @@ from ...settings import settings
 from .. import content_repo
 from ..proposals_repo import get_proposal_by_id, list_proposals
 from ..rfps_repo import get_rfp_by_id, list_rfps
+from ..s3_assets import get_object_bytes
 from ..s3_assets import get_object_text as s3_get_object_text
 from ..s3_assets import list_objects as s3_list_objects
 from ..s3_assets import presign_get_object as s3_presign_get_object
@@ -721,6 +727,122 @@ def _get_company_tool(args: dict[str, Any]) -> dict[str, Any]:
         if k in c2:
             c2[k] = clip_text(str(c2.get(k) or ""), max_chars=2500)
     return {"ok": True, "company": c2}
+
+
+def _get_team_member_tool(args: dict[str, Any]) -> dict[str, Any]:
+    mid = str(args.get("memberId") or "").strip()
+    if not mid:
+        return {"ok": False, "error": "missing_memberId"}
+    m = content_repo.get_team_member_by_id(mid)
+    if not m:
+        return {"ok": False, "error": "not_found"}
+    m2 = dict(m)
+    # Clip long text fields
+    for k in ("biography",):
+        if k in m2:
+            m2[k] = clip_text(str(m2.get(k) or ""), max_chars=2500)
+    # Clip bio profiles
+    if "bioProfiles" in m2 and isinstance(m2["bioProfiles"], list):
+        for bp in m2["bioProfiles"]:
+            if isinstance(bp, dict):
+                for k in ("bio", "experience"):
+                    if k in bp:
+                        bp[k] = clip_text(str(bp.get(k) or ""), max_chars=1500)
+    return {"ok": True, "teamMember": m2}
+
+
+def _list_team_members_tool(args: dict[str, Any]) -> dict[str, Any]:
+    limit = max(1, min(100, int(args.get("limit") or 50)))
+    members = content_repo.list_team_members(limit=limit)
+    # Clip long fields for list view
+    slim: list[dict[str, Any]] = []
+    for m in members:
+        if not isinstance(m, dict):
+            continue
+        m2 = dict(m)
+        # Only include key fields for list view
+        m2.pop("biography", None)
+        if "bioProfiles" in m2:
+            m2.pop("bioProfiles", None)
+        slim.append(m2)
+    return {"ok": True, "teamMembers": slim}
+
+
+def _extract_resume_text_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """
+    Extract text from a resume file in S3 (PDF or DOCX format).
+    Returns the extracted text for analysis.
+    """
+    s3_key = str(args.get("s3Key") or "").strip()
+    if not s3_key:
+        return {"ok": False, "error": "missing_s3Key"}
+    
+    max_bytes = max(5 * 1024 * 1024, min(20 * 1024 * 1024, int(args.get("maxBytes") or 10 * 1024 * 1024)))
+    max_chars = max(5000, min(100_000, int(args.get("maxChars") or 50_000)))
+    
+    try:
+        data = get_object_bytes(key=s3_key, max_bytes=max_bytes)
+        if not data:
+            return {"ok": False, "error": "empty_file"}
+        
+        # Determine file type from extension or content
+        s3_key_lower = s3_key.lower()
+        is_pdf = s3_key_lower.endswith(".pdf") or data[:4] == b"%PDF"
+        is_docx = s3_key_lower.endswith((".docx", ".doc")) or (
+            len(data) > 4 and data[:2] == b"PK"  # DOCX is a ZIP file
+        )
+        
+        text = ""
+        
+        if is_pdf:
+            try:
+                reader = PdfReader(io.BytesIO(data))
+                parts: list[str] = []
+                for page in reader.pages:
+                    try:
+                        parts.append(page.extract_text() or "")
+                    except Exception:
+                        continue
+                text = "\n".join([p for p in parts if p]).strip()
+            except Exception as e:
+                return {"ok": False, "error": f"pdf_extraction_failed: {str(e)}"}
+        
+        elif is_docx:
+            try:
+                # docx2txt.process requires a file path, so we use a temp file
+                with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
+                    tmp.write(data)
+                    tmp_path = tmp.name
+                try:
+                    text = docx2txt.process(tmp_path) or ""
+                    text = text.strip()
+                finally:
+                    # Clean up temp file
+                    try:
+                        Path(tmp_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            except Exception as e:
+                return {"ok": False, "error": f"docx_extraction_failed: {str(e)}"}
+        
+        else:
+            # Try UTF-8 decode for plain text
+            try:
+                text = data.decode("utf-8", errors="replace").strip()
+            except Exception:
+                return {"ok": False, "error": "unsupported_format"}
+        
+        if not text:
+            return {"ok": False, "error": "no_text_extracted"}
+        
+        # Clip if too long
+        if len(text) > max_chars:
+            text = text[:max_chars] + "…"
+        
+        return {"ok": True, "s3Key": s3_key, "text": text, "extractedChars": len(text)}
+    
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "extraction_failed"}
 
 
 # --- Generic storage inspection tools (bounded, allowlisted) ---
@@ -1492,6 +1614,49 @@ READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
             },
         ),
         _get_company_tool,
+    ),
+    "get_team_member": (
+        tool_def(
+            "get_team_member",
+            "Fetch a team member from the content library by memberId. Returns biography, bioProfiles, position, and other details.",
+            {
+                "type": "object",
+                "properties": {"memberId": {"type": "string", "minLength": 1, "maxLength": 120}},
+                "required": ["memberId"],
+                "additionalProperties": False,
+            },
+        ),
+        _get_team_member_tool,
+    ),
+    "list_team_members": (
+        tool_def(
+            "list_team_members",
+            "List team members from the content library (returns compact list without full biography details).",
+            {
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _list_team_members_tool,
+    ),
+    "extract_resume_text": (
+        tool_def(
+            "extract_resume_text",
+            "Extract text from a resume file stored in S3 (supports PDF and DOCX formats). Returns extracted text for analysis.",
+            {
+                "type": "object",
+                "properties": {
+                    "s3Key": {"type": "string", "minLength": 1, "maxLength": 500},
+                    "maxBytes": {"type": "integer", "minimum": 1024, "maximum": 20 * 1024 * 1024},
+                    "maxChars": {"type": "integer", "minimum": 1000, "maximum": 200_000},
+                },
+                "required": ["s3Key"],
+                "additionalProperties": False,
+            },
+        ),
+        _extract_resume_text_tool,
     ),
     "ddb_get_item": (
         tool_def(
