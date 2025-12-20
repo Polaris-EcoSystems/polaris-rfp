@@ -234,3 +234,46 @@ def call_json(
         )
 
     raise AiUpstreamError(str(last_err) if last_err else "ai_json_failed")
+
+
+def stream_text(
+    *,
+    purpose: str,
+    messages: list[dict[str, str]],
+    max_tokens: int = 1200,
+    temperature: float = 0.4,
+    timeout_s: int = 90,
+    max_prompt_chars: int = 220_000,
+) -> tuple[object, AiMeta]:
+    """
+    Stream tokens from OpenAI chat.completions.
+
+    Returns:
+      - stream iterator (sync) yielding OpenAI events
+      - AiMeta
+
+    Note: This is for text streaming UX. For structured JSON extraction, streaming
+    is usually not helpful because validation only happens once you have the full object.
+    """
+    model = settings.openai_model_for(purpose)
+    if not settings.openai_api_key:
+        raise AiNotConfigured("OPENAI_API_KEY not configured")
+    client = OpenAI(api_key=settings.openai_api_key, max_retries=0, timeout=int(timeout_s or 90))  # type: ignore[arg-type]
+    messages = _normalize_messages(messages, max_prompt_chars)
+
+    try:
+        stream = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            stream=True,
+        )
+        return stream, AiMeta(
+            purpose=purpose,
+            model=model,
+            attempts=1,
+            used_response_format="stream",
+        )
+    except Exception as e:
+        raise AiUpstreamError(str(e) or "ai_stream_failed")

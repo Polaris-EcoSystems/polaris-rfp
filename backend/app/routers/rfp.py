@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterator
 
 from fastapi import APIRouter, BackgroundTasks, Body, File, HTTPException, Request, UploadFile
+from fastapi.responses import StreamingResponse
 
 from ..services.ai_section_titles import generate_section_titles
 from ..services.rfp_analyzer import analyze_rfp
@@ -21,6 +22,7 @@ from ..services.s3_assets import (
     get_object_bytes,
     head_object,
     make_rfp_upload_key,
+    presign_get_object,
     presign_put_object,
     to_s3_uri,
 )
@@ -30,6 +32,13 @@ from ..services.slack_notifier import (
     notify_rfp_upload_job_failed,
 )
 from ..observability.logging import get_logger
+from ..settings import settings
+from ..ai.client import stream_text, AiNotConfigured, AiError
+from ..ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI
+
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 router = APIRouter(tags=["rfp"])
 log = get_logger("rfp")
@@ -99,6 +108,17 @@ async def upload(file: UploadFile = File(...)):
             source_file_name=file.filename or "upload.pdf",
             source_file_size=len(data),
         )
+        # Best-effort: notify Slack (machine channel) for direct uploads too.
+        try:
+            rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
+            notify_rfp_upload_job_completed(
+                job_id="direct_upload",
+                rfp_id=rfp_id,
+                file_name=file.filename or "upload.pdf",
+                channel=str(settings.slack_rfp_machine_channel or "").strip() or None,
+            )
+        except Exception:
+            pass
         return saved
     except RuntimeError as e:
         msg = str(e) or "Failed to analyze PDF"
@@ -255,6 +275,33 @@ def _process_rfp_upload_job(job_id: str) -> None:
         )
         rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
 
+        # Persist the source PDF reference on the RFP so it can be viewed later.
+        try:
+            if rfp_id and key:
+                update_rfp(
+                    rfp_id,
+                    {
+                        "sourceS3Key": key,
+                        "sourceS3Uri": to_s3_uri(
+                            bucket=get_assets_bucket_name(),
+                            key=key,
+                        ),
+                    },
+                )
+        except Exception:
+            # Best-effort only; do not fail the upload job if this metadata update fails.
+            pass
+
+        # Best-effort: generate AI section titles immediately so the RFP page
+        # can offer AI proposal scaffolding without another round trip.
+        try:
+            titles = generate_section_titles(saved)
+            if titles:
+                update_rfp(rfp_id, {"sectionTitles": titles})
+        except Exception:
+            # Do not fail the upload job if AI generation errors.
+            pass
+
         update_job(
             job_id=job_id,
             updates_obj={
@@ -266,7 +313,12 @@ def _process_rfp_upload_job(job_id: str) -> None:
             },
         )
         log.info("rfp_upload_job_completed", jobId=job_id, rfpId=rfp_id)
-        notify_rfp_upload_job_completed(job_id=job_id, rfp_id=rfp_id, file_name=file_name)
+        notify_rfp_upload_job_completed(
+            job_id=job_id,
+            rfp_id=rfp_id,
+            file_name=file_name,
+            channel=str(settings.slack_rfp_machine_channel or "").strip() or None,
+        )
     except Exception as e:
         update_job(
             job_id=job_id,
@@ -281,6 +333,7 @@ def _process_rfp_upload_job(job_id: str) -> None:
             job_id=job_id,
             file_name=str(job.get("fileName") or "").strip() or file_name,
             error=str(e) or "Failed to process RFP",
+            channel=str(settings.slack_rfp_machine_channel or "").strip() or None,
         )
         log.exception("rfp_upload_job_failed", jobId=job_id)
 
@@ -345,6 +398,34 @@ def get_one_slash(id: str):
     return get_one(id)
 
 
+@router.get("/{id}/source-pdf/presign")
+def presign_source_pdf(id: str):
+    """
+    Return a short-lived signed URL for the originally uploaded RFP PDF (if present).
+    """
+    rfp = get_rfp_by_id(id)
+    if not rfp:
+        raise HTTPException(status_code=404, detail="RFP not found")
+
+    key = str(rfp.get("sourceS3Key") or "").strip()
+    if not key:
+        raise HTTPException(status_code=404, detail="No source PDF stored for this RFP")
+
+    signed = presign_get_object(key=key, expires_in=3600)
+    return {
+        "ok": True,
+        "url": signed.get("url"),
+        "bucket": signed.get("bucket"),
+        "key": signed.get("key"),
+        "expiresInSeconds": 3600,
+    }
+
+
+@router.get("/{id}/source-pdf/presign/", include_in_schema=False)
+def presign_source_pdf_slash(id: str):
+    return presign_source_pdf(id)
+
+
 @router.post("/{id}/ai-section-titles")
 def ai_section_titles(id: str):
     try:
@@ -368,6 +449,315 @@ def ai_section_titles(id: str):
 def ai_section_titles_slash(id: str):
     # Accept trailing slash to avoid 404s when clients normalize URLs.
     return ai_section_titles(id)
+
+
+@router.post("/{id}/ai-reanalyze")
+def ai_reanalyze(id: str):
+    """
+    Re-run RFP analysis using the stored rawText (and AI if configured).
+    Updates the RFP fields in-place and returns the updated record.
+    """
+    try:
+        rfp = get_rfp_by_id(id)
+        if not rfp:
+            raise HTTPException(status_code=404, detail="RFP not found")
+
+        raw_text = str(rfp.get("rawText") or "").strip()
+        if not raw_text:
+            raise HTTPException(
+                status_code=409,
+                detail="RFP has no rawText to re-analyze (re-upload required)",
+            )
+
+        source_name = str(rfp.get("fileName") or rfp.get("title") or "rfp").strip()
+        analysis = analyze_rfp(raw_text, source_name)
+
+        # Overwrite only the analysis-derived fields (plus AI artifacts).
+        updated = update_rfp(id, analysis)
+        if not updated:
+            raise HTTPException(status_code=404, detail="RFP not found")
+
+        return updated
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail={"error": "Failed to re-analyze RFP", "message": str(e)}
+        )
+
+
+@router.post("/{id}/ai-reanalyze/", include_in_schema=False)
+def ai_reanalyze_slash(id: str):
+    return ai_reanalyze(id)
+
+
+@router.get("/{id}/ai-refresh/stream")
+def ai_refresh_stream(id: str):
+    """
+    Stream incremental AI extraction updates over SSE.
+
+    Events:
+      - meta | dates | lists: { bucket, updates, meta }
+      - done: { ok: true, rfp }
+      - error: { ok: false, error }
+    """
+    rfp = get_rfp_by_id(id)
+    if not rfp:
+        raise HTTPException(status_code=404, detail="RFP not found")
+
+    raw_text = str(rfp.get("rawText") or "").strip()
+    if not raw_text:
+        raise HTTPException(
+            status_code=409,
+            detail="RFP has no rawText to refresh (re-upload required)",
+        )
+
+    source_name = str(rfp.get("fileName") or rfp.get("title") or "rfp").strip()
+    text_clip = raw_text[:200000]
+
+    def sse(event: str, data: dict[str, Any]) -> bytes:
+        return (
+            f"event: {event}\n"
+            f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+        ).encode("utf-8")
+
+    def _prompt_meta() -> str:
+        return (
+            "Extract basic RFP metadata from the text.\n"
+            "Return JSON ONLY (no markdown):\n"
+            "{"
+            '"title": string, '
+            '"clientName": string, '
+            '"projectType": string, '
+            '"budgetRange": string, '
+            '"location": string, '
+            '"contactInformation": string'
+            "}\n\n"
+            f"SOURCE_NAME: {source_name}\n\n"
+            f"RFP_TEXT:\n{text_clip}"
+        )
+
+    def _prompt_dates() -> str:
+        return (
+            "Extract the key RFP dates.\n"
+            "Use 'Not available' if unknown. Prefer MM/DD/YYYY when possible.\n"
+            "Return JSON ONLY:\n"
+            "{"
+            '"submissionDeadline": string, '
+            '"questionsDeadline": string, '
+            '"bidMeetingDate": string, '
+            '"bidRegistrationDate": string, '
+            '"projectDeadline": string'
+            "}\n\n"
+            f"RFP_TEXT:\n{text_clip}"
+        )
+
+    def _prompt_lists() -> str:
+        return (
+            "Extract lists from the RFP.\n"
+            "Return JSON ONLY:\n"
+            "{"
+            '"keyRequirements": string[], '
+            '"deliverables": string[], '
+            '"criticalInformation": string[], '
+            '"timeline": string[], '
+            '"clarificationQuestions": string[]'
+            "}\n\n"
+            f"RFP_TEXT:\n{text_clip}"
+        )
+
+    def gen() -> Iterator[bytes]:
+        # Initial hello
+        yield sse("hello", {"ok": True, "rfpId": id})
+
+        jobs = [
+            ("meta", "rfp_analysis_meta", RfpMetaAI, _prompt_meta(), 800),
+            ("dates", "rfp_analysis_dates", RfpDatesAI, _prompt_dates(), 600),
+            ("lists", "rfp_analysis_lists", RfpListsAI, _prompt_lists(), 1400),
+        ]
+
+        def _call(purpose: str, model_cls: type, prompt: str, max_tokens: int):
+            from ..ai.client import call_json
+
+            parsed, meta = call_json(
+                purpose=purpose,
+                response_model=model_cls,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                temperature=0.2,
+                retries=2,
+                fallback=None,
+            )
+            return parsed, meta
+
+        fields_meta: list[dict[str, Any]] = []
+
+        try:
+            with ThreadPoolExecutor(max_workers=3) as ex:
+                fut_map = {
+                    ex.submit(_call, purpose, model_cls, prmpt, mt): (bucket, purpose)
+                    for (bucket, purpose, model_cls, prmpt, mt) in jobs
+                }
+                for fut in as_completed(fut_map):
+                    bucket, purpose = fut_map[fut]
+                    try:
+                        parsed, meta = fut.result()
+                        updates = parsed.model_dump()
+
+                        # Always preserve stored rawText and keep analysis meta updated.
+                        updates["_analysis"] = {
+                            "version": 2,
+                            "usedAi": True,
+                            "model": meta.model,
+                            "sourceName": source_name,
+                            "extractedChars": len(raw_text),
+                            "ts": int(time.time()),
+                        }
+
+                        updated = update_rfp(id, updates) or {}
+                        fields_meta.append(
+                            {
+                                "purpose": meta.purpose,
+                                "model": meta.model,
+                                "attempts": meta.attempts,
+                                "responseFormat": meta.used_response_format,
+                            }
+                        )
+                        yield sse(
+                            bucket,
+                            {
+                                "ok": True,
+                                "bucket": bucket,
+                                "updates": updates,
+                            },
+                        )
+                    except Exception as e:
+                        fields_meta.append({"purpose": purpose, "error": str(e)[:200]})
+                        yield sse(
+                            "error",
+                            {
+                                "ok": False,
+                                "bucket": bucket,
+                                "error": str(e) or "bucket_failed",
+                            },
+                        )
+
+            # Attach bucket execution metadata (best-effort)
+            try:
+                update_rfp(
+                    id,
+                    {
+                        "_analysis": {
+                            "version": 2,
+                            "usedAi": True,
+                            "model": settings.openai_model_for("rfp_analysis"),
+                            "sourceName": source_name,
+                            "extractedChars": len(raw_text),
+                            "ts": int(time.time()),
+                            "fields": fields_meta[:20],
+                        }
+                    },
+                )
+            except Exception:
+                pass
+
+            final = get_rfp_by_id(id) or {}
+            yield sse("done", {"ok": True, "rfp": final})
+        except AiNotConfigured as e:
+            yield sse("error", {"ok": False, "error": str(e)})
+        except AiError as e:
+            yield sse("error", {"ok": False, "error": str(e) or "ai_failed"})
+        except Exception as e:
+            yield sse("error", {"ok": False, "error": str(e) or "stream_failed"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # helpful behind some proxies
+        },
+    )
+
+
+@router.get("/{id}/ai-summary/stream")
+def ai_summary_stream(id: str):
+    """
+    Stream an AI summary (token-by-token) over SSE and persist it to the RFP.
+    """
+    rfp = get_rfp_by_id(id)
+    if not rfp:
+        raise HTTPException(status_code=404, detail="RFP not found")
+
+    raw_text = str(rfp.get("rawText") or "").strip()
+    if not raw_text:
+        raise HTTPException(status_code=409, detail="RFP has no rawText")
+
+    source_name = str(rfp.get("fileName") or rfp.get("title") or "rfp").strip()
+    text_clip = raw_text[:120000]
+
+    def sse(event: str, data: dict[str, Any]) -> bytes:
+        return (
+            f"event: {event}\n"
+            f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+        ).encode("utf-8")
+
+    def gen() -> Iterator[bytes]:
+        yield sse("hello", {"ok": True, "rfpId": id})
+        prompt = (
+            "Write a concise, skimmable summary of this RFP for internal triage.\n"
+            "Include:\n"
+            "- What it is\n"
+            "- Key requirements (bullets)\n"
+            "- Deadlines and budget (if present)\n"
+            "- Open questions / risks\n\n"
+            "Use markdown.\n\n"
+            f"SOURCE_NAME: {source_name}\n\n"
+            f"RFP_TEXT:\n{text_clip}"
+        )
+
+        try:
+            stream, meta = stream_text(
+                purpose="generate_content",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1200,
+                temperature=0.3,
+                timeout_s=120,
+            )
+
+            buf: list[str] = []
+            for ev in stream:
+                try:
+                    delta = (ev.choices[0].delta.content or "")  # type: ignore[attr-defined]
+                except Exception:
+                    delta = ""
+                if not delta:
+                    continue
+                buf.append(delta)
+                yield sse("delta", {"text": delta})
+
+            full = "".join(buf).strip()
+            if full:
+                try:
+                    update_rfp(id, {"aiSummary": full, "aiSummaryUpdatedAt": now_iso()})
+                except Exception:
+                    pass
+            yield sse("done", {"ok": True, "meta": meta.__dict__, "aiSummary": full})
+        except AiNotConfigured as e:
+            yield sse("error", {"ok": False, "error": str(e)})
+        except Exception as e:
+            yield sse("error", {"ok": False, "error": str(e) or "ai_summary_failed"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.put("/{id}")

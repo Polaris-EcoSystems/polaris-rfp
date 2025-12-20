@@ -151,6 +151,14 @@ def update_rfp(rfp_id: str, updates_obj: dict[str, Any]) -> dict[str, Any] | Non
         "clarificationQuestions",
         "sectionTitles",
         "buyerProfiles",
+        # Source artifact (original PDF) for viewing/downloading
+        "sourceS3Key",
+        "sourceS3Uri",
+        # AI artifacts (only written by server-side flows)
+        "rawText",
+        "_analysis",
+        "aiSummary",
+        "aiSummaryUpdatedAt",
         # Review workflow (bid/no-bid decision, notes, etc.)
         "review",
     }

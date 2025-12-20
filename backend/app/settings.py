@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     slack_bot_token: str | None = Field(default=None, validation_alias="SLACK_BOT_TOKEN")
     slack_signing_secret: str | None = Field(default=None, validation_alias="SLACK_SIGNING_SECRET")
     slack_default_channel: str | None = Field(default=None, validation_alias="SLACK_DEFAULT_CHANNEL")
+    # Optional: dedicated channel for machine-emitted RFP upload notifications.
+    # Can be a channel ID (recommended) or name (e.g. "rfp-machine").
+    slack_rfp_machine_channel: str | None = Field(
+        default="rfp-machine", validation_alias="SLACK_RFP_MACHINE_CHANNEL"
+    )
     # Prefer injecting a single Secrets Manager ARN and resolving keys at runtime.
     slack_secret_arn: str | None = Field(default=None, validation_alias="SLACK_SECRET_ARN")
 

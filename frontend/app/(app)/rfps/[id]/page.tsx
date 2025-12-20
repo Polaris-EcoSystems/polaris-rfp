@@ -9,6 +9,7 @@ import {
   contentApi,
   extractList,
   proposalApi,
+  proxyUrl,
   RFP,
   rfpApi,
   Template,
@@ -56,6 +57,12 @@ export default function RFPDetailPage() {
   const params = useParams<{ id?: string }>()
   const id = typeof params?.id === 'string' ? params.id : ''
 
+  type PageTab = 'details' | 'pdf'
+  const [pageTab, setPageTab] = useState<PageTab>('details')
+  const [sourcePdfUrl, setSourcePdfUrl] = useState<string | null>(null)
+  const [sourcePdfLoading, setSourcePdfLoading] = useState(false)
+  const [sourcePdfError, setSourcePdfError] = useState<string | null>(null)
+
   const [rfp, setRfp] = useState<RFP | null>(null)
   const [templates, setTemplates] = useState<Template[]>([])
   const [rfpProposals, setRfpProposals] = useState<any[]>([])
@@ -87,6 +94,89 @@ export default function RFPDetailPage() {
   )
   const [buyerRemoving, setBuyerRemoving] = useState(false)
   const buyerHeaderCheckboxRef = useRef<HTMLInputElement | null>(null)
+  const [reanalyzingAi, setReanalyzingAi] = useState(false)
+  const [aiStreaming, setAiStreaming] = useState(false)
+  const [aiSummary, setAiSummary] = useState<string>('')
+  const [aiSummaryStreaming, setAiSummaryStreaming] = useState(false)
+  type AiBucket = 'meta' | 'dates' | 'lists'
+  type AiBucketStatus = 'idle' | 'running' | 'done' | 'error'
+  const [aiRefreshStatus, setAiRefreshStatus] = useState<
+    Record<AiBucket, AiBucketStatus>
+  >({ meta: 'idle', dates: 'idle', lists: 'idle' })
+  const aiRefreshEsRef = useRef<EventSource | null>(null)
+  const aiSummaryEsRef = useRef<EventSource | null>(null)
+
+  useEffect(() => {
+    return () => {
+      try {
+        aiRefreshEsRef.current?.close()
+      } catch {}
+      try {
+        aiSummaryEsRef.current?.close()
+      } catch {}
+      aiRefreshEsRef.current = null
+      aiSummaryEsRef.current = null
+    }
+  }, [])
+
+  const isBucketRunning = (b: AiBucket) =>
+    aiStreaming && aiRefreshStatus[b] === 'running'
+
+  useEffect(() => {
+    if (pageTab !== 'pdf') return
+    if (!rfp?._id) return
+
+    let cancelled = false
+
+    const fallbackFromAttachments = (): string | null => {
+      const atts = Array.isArray((rfp as any)?.attachments)
+        ? ((rfp as any).attachments as any[])
+        : []
+      const pdf = atts.find((a) => {
+        const mt = String(a?.mimeType || '').toLowerCase()
+        const ft = String(a?.fileType || '').toLowerCase()
+        const name = String(a?.originalName || a?.fileName || '').toLowerCase()
+        return mt === 'application/pdf' || ft === 'pdf' || name.endsWith('.pdf')
+      })
+      const attId = String(pdf?._id || pdf?.id || '').trim()
+      if (!attId) return null
+      return proxyUrl(
+        `/api/rfp/${encodeURIComponent(
+          rfp._id,
+        )}/attachments/${encodeURIComponent(attId)}`,
+      )
+    }
+
+    ;(async () => {
+      setSourcePdfLoading(true)
+      setSourcePdfError(null)
+
+      try {
+        const resp = await rfpApi.presignSourcePdf(rfp._id)
+        const url = String(resp?.data?.url || '').trim()
+        if (!url) throw new Error('No URL returned')
+        if (cancelled) return
+        setSourcePdfUrl(url)
+      } catch (e) {
+        console.warn('Failed to presign source PDF:', e)
+        const fallback = fallbackFromAttachments()
+        if (cancelled) return
+        if (fallback) {
+          setSourcePdfUrl(fallback)
+          setSourcePdfError(null)
+        } else {
+          setSourcePdfUrl(null)
+          setSourcePdfError('No original PDF is available for this RFP.')
+        }
+      } finally {
+        if (!cancelled) setSourcePdfLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [pageTab, rfp])
 
   // --- Bid / no-bid review state ---
   type BidDecision = '' | 'bid' | 'no_bid' | 'maybe'
@@ -1143,6 +1233,159 @@ export default function RFPDetailPage() {
     }
   }
 
+  const rerunAiAnalysis = async () => {
+    if (!rfp?._id) return
+    setReanalyzingAi(true)
+    try {
+      const resp = await rfpApi.reanalyze(rfp._id)
+      setRfp(resp.data)
+      toast.success('Re-analyzed RFP')
+    } catch (e) {
+      console.error('Failed to re-analyze RFP:', e)
+      toast.error('Failed to re-analyze RFP')
+    } finally {
+      setReanalyzingAi(false)
+    }
+  }
+
+  const streamAiRefresh = async () => {
+    if (!rfp?._id) return
+    if (aiStreaming) return
+    setAiStreaming(true)
+    setAiRefreshStatus({ meta: 'running', dates: 'running', lists: 'running' })
+    try {
+      const url = rfpApi.aiRefreshStreamUrl(rfp._id)
+      try {
+        aiRefreshEsRef.current?.close()
+      } catch {}
+      const es = new EventSource(url)
+      aiRefreshEsRef.current = es
+
+      es.addEventListener('meta', (ev: any) => {
+        try {
+          const payload = JSON.parse(ev.data || '{}')
+          if (payload?.updates)
+            setRfp((prev) => (prev ? { ...prev, ...payload.updates } : prev))
+          setAiRefreshStatus((prev) => ({ ...prev, meta: 'done' }))
+        } catch {}
+      })
+      es.addEventListener('dates', (ev: any) => {
+        try {
+          const payload = JSON.parse(ev.data || '{}')
+          if (payload?.updates)
+            setRfp((prev) => (prev ? { ...prev, ...payload.updates } : prev))
+          setAiRefreshStatus((prev) => ({ ...prev, dates: 'done' }))
+        } catch {}
+      })
+      es.addEventListener('lists', (ev: any) => {
+        try {
+          const payload = JSON.parse(ev.data || '{}')
+          if (payload?.updates)
+            setRfp((prev) => (prev ? { ...prev, ...payload.updates } : prev))
+          setAiRefreshStatus((prev) => ({ ...prev, lists: 'done' }))
+        } catch {}
+      })
+      es.addEventListener('error', (ev: any) => {
+        try {
+          const payload = JSON.parse(ev.data || '{}')
+          const msg = String(payload?.error || 'AI refresh failed')
+          toast.error(msg)
+          const bucket = String(payload?.bucket || '').trim() as AiBucket
+          if (bucket === 'meta' || bucket === 'dates' || bucket === 'lists') {
+            setAiRefreshStatus((prev) => ({ ...prev, [bucket]: 'error' }))
+          } else {
+            setAiRefreshStatus({
+              meta: 'error',
+              dates: 'error',
+              lists: 'error',
+            })
+          }
+        } catch {
+          toast.error('AI refresh failed')
+          setAiRefreshStatus({ meta: 'error', dates: 'error', lists: 'error' })
+        } finally {
+          es.close()
+          setAiStreaming(false)
+          aiRefreshEsRef.current = null
+        }
+      })
+      es.addEventListener('done', (ev: any) => {
+        try {
+          const payload = JSON.parse(ev.data || '{}')
+          if (payload?.rfp) setRfp(payload.rfp)
+          toast.success('AI refresh complete')
+        } catch {
+          toast.success('AI refresh complete')
+        } finally {
+          es.close()
+          setAiStreaming(false)
+          setAiRefreshStatus({ meta: 'done', dates: 'done', lists: 'done' })
+          aiRefreshEsRef.current = null
+        }
+      })
+    } catch (e) {
+      console.error('SSE failed', e)
+      toast.error('Failed to start AI refresh stream')
+      setAiStreaming(false)
+      setAiRefreshStatus({ meta: 'error', dates: 'error', lists: 'error' })
+      aiRefreshEsRef.current = null
+    }
+  }
+
+  const streamAiSummary = async () => {
+    if (!rfp?._id) return
+    if (aiSummaryStreaming) return
+    setAiSummary('')
+    setAiSummaryStreaming(true)
+    try {
+      const url = rfpApi.aiSummaryStreamUrl(rfp._id)
+      try {
+        aiSummaryEsRef.current?.close()
+      } catch {}
+      const es = new EventSource(url)
+      aiSummaryEsRef.current = es
+
+      es.addEventListener('delta', (ev: any) => {
+        try {
+          const payload = JSON.parse(ev.data || '{}')
+          const t = String(payload?.text || '')
+          if (t) setAiSummary((prev) => prev + t)
+        } catch {}
+      })
+      es.addEventListener('error', (ev: any) => {
+        try {
+          const payload = JSON.parse(ev.data || '{}')
+          toast.error(String(payload?.error || 'AI summary failed'))
+        } catch {
+          toast.error('AI summary failed')
+        } finally {
+          es.close()
+          setAiSummaryStreaming(false)
+          aiSummaryEsRef.current = null
+        }
+      })
+      es.addEventListener('done', (ev: any) => {
+        try {
+          const payload = JSON.parse(ev.data || '{}')
+          if (typeof payload?.aiSummary === 'string')
+            setAiSummary(payload.aiSummary)
+          toast.success('AI summary complete')
+        } catch {
+          toast.success('AI summary complete')
+        } finally {
+          es.close()
+          setAiSummaryStreaming(false)
+          aiSummaryEsRef.current = null
+        }
+      })
+    } catch (e) {
+      console.error('SSE failed', e)
+      toast.error('Failed to start AI summary stream')
+      setAiSummaryStreaming(false)
+      aiSummaryEsRef.current = null
+    }
+  }
+
   const setProposalDecision = async (
     proposalId: string,
     next: '' | 'shortlist' | 'reject',
@@ -1225,1406 +1468,1679 @@ export default function RFPDetailPage() {
           </Link>
         </div>
       </div>
-      {/* Disqualified Banner */}
-      {rfp.isDisqualified && (
-        <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 h-2.5 w-2.5 rounded-full bg-red-500" />
-            <div className="text-sm text-red-800">
-              <span className="font-semibold">Disqualified:</span> One or more
-              critical deadlines for this RFP have passed.
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Hero */}
-      <div className="rounded-2xl border border-gray-200 bg-white/80 backdrop-blur shadow-sm">
-        <div className="p-5 sm:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <div className="flex items-start gap-3">
-                <div className="mt-0.5 rounded-xl bg-primary-50 p-2 ring-1 ring-primary-100">
-                  <DocumentTextIcon className="h-6 w-6 text-primary-700" />
-                </div>
-                <div className="min-w-0">
-                  <h1
-                    className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900"
-                    title={rfp.title}
-                  >
-                    {rfp.title || 'RFP'}
-                  </h1>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-gray-600">
-                    <span className="inline-flex items-center gap-1.5">
-                      <BuildingOfficeIcon className="h-4 w-4 text-gray-400" />
-                      <span className="font-medium text-gray-900">
-                        {rfp.clientName || 'Unknown client'}
-                      </span>
-                    </span>
-                    <span className="text-gray-300">•</span>
-                    <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-100">
-                      {String(rfp.projectType || '').replace(/_/g, ' ') ||
-                        'Unknown type'}
-                    </span>
-                    <span className="text-gray-300">•</span>
-                    <span className="inline-flex items-center gap-1.5">
-                      <span className="text-gray-500">ID</span>
-                      <span className="font-mono text-xs text-gray-900">
-                        {rfp._id}
-                      </span>
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-xl border border-gray-200 bg-white p-4">
-                  <div className="flex items-center gap-2">
-                    <CurrencyDollarIcon className="h-5 w-5 text-emerald-600" />
-                    <div>
-                      <div className="text-xs font-semibold text-gray-500">
-                        Budget range
-                      </div>
-                      <div className="text-sm font-semibold text-gray-900">
-                        {rfp.budgetRange || 'Not specified'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div className="rounded-xl border border-gray-200 bg-white p-4">
-                  <div className="flex items-center gap-2">
-                    <CalendarDaysIcon className="h-5 w-5 text-rose-600" />
-                    <div>
-                      <div className="text-xs font-semibold text-gray-500">
-                        Submission deadline
-                      </div>
-                      <div className="text-sm font-semibold text-gray-900">
-                        {rfp.submissionDeadline
-                          ? new Date(rfp.submissionDeadline).toLocaleDateString(
-                              'en-US',
-                            )
-                          : 'Not specified'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div className="rounded-xl border border-gray-200 bg-white p-4">
-                  <div className="flex items-center gap-2">
-                    <ClockIcon className="h-5 w-5 text-amber-600" />
-                    <div>
-                      <div className="text-xs font-semibold text-gray-500">
-                        Timeline
-                      </div>
-                      <div className="text-sm font-semibold text-gray-900">
-                        {rfp.timeline || 'TBD'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div className="rounded-xl border border-gray-200 bg-white p-4">
-                  <div className="flex items-center gap-2">
-                    <DocumentTextIcon className="h-5 w-5 text-primary-600" />
-                    <div>
-                      <div className="text-xs font-semibold text-gray-500">
-                        Fit score
-                      </div>
-                      <div className="text-sm font-semibold text-gray-900">
-                        {typeof (rfp as any)?.fitScore === 'number'
-                          ? String((rfp as any).fitScore)
-                          : '—'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-col sm:flex-row lg:flex-col gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => scrollToSection('bid-review')}
-                className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50"
-              >
-                Make bid decision
-              </button>
-              <button
-                type="button"
-                onClick={() => scrollToSection('requirements')}
-                className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50"
-              >
-                Review requirements
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Mobile jump bar (offset for global header) */}
-      <div className="lg:hidden sticky top-16 z-30 -mx-4 sm:-mx-6 bg-white/90 backdrop-blur border-y border-gray-200 px-4 sm:px-6 py-3">
-        <div className="flex items-center gap-2">
-          <select
-            value={activeSection}
-            onChange={(e) => scrollToSection(e.target.value as TocSectionId)}
-            className="flex-1 border border-gray-300 rounded-lg px-3 py-2 bg-white text-sm"
-            aria-label="Jump to section"
-          >
-            {tocSectionDefs.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.label}
-              </option>
-            ))}
-          </select>
+      {/* Page tabs */}
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8">
           <button
+            onClick={() => setPageTab('details')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
+              pageTab === 'details'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
             type="button"
-            onClick={() => setAllSectionsOpen(true)}
-            className="inline-flex items-center justify-center px-3 py-2 text-sm font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
           >
-            Open
+            <DocumentTextIcon className="h-5 w-5 inline mr-2" />
+            Details
           </button>
           <button
+            onClick={() => setPageTab('pdf')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
+              pageTab === 'pdf'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
             type="button"
-            onClick={() => setAllSectionsOpen(false)}
-            className="inline-flex items-center justify-center px-3 py-2 text-sm font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
           >
-            Close
+            <PaperClipIcon className="h-5 w-5 inline mr-2" />
+            Original PDF
           </button>
-        </div>
+        </nav>
       </div>
 
-      {/* Content */}
-      <div className="lg:grid lg:grid-cols-12 lg:gap-8 items-start">
-        {/* Sticky TOC */}
-        <aside className="hidden lg:block lg:col-span-3 lg:order-1">
-          <div className="sticky top-24 space-y-3">
-            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-              <div className="px-4 py-4 border-b border-gray-100">
-                <div className="text-sm font-semibold text-gray-900">
-                  On this page
-                </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  Review suitability, then take action
-                </div>
-              </div>
-              <div className="px-3 py-3 border-b border-gray-100 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setAllSectionsOpen(true)}
-                  className="flex-1 inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
-                >
-                  Open all
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAllSectionsOpen(false)}
-                  className="flex-1 inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
-                >
-                  Collapse all
-                </button>
-              </div>
-              <nav className="px-2 py-2 max-h-[calc(100vh-16rem)] overflow-auto custom-scrollbar">
-                {tocSectionDefs.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => scrollToSection(s.id)}
-                    className={`w-full text-left px-3 py-2 rounded-xl text-sm transition-colors ${
-                      activeSection === s.id
-                        ? 'bg-primary-50 text-primary-700 font-semibold'
-                        : 'text-gray-700 hover:bg-gray-50'
-                    }`}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </nav>
+      {pageTab === 'pdf' ? (
+        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-gray-200">
+            <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+              <PaperClipIcon className="h-5 w-5 text-gray-500" />
+              Original PDF
             </div>
-            {supportingError ? (
-              <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl p-3">
-                {supportingError}
-              </div>
+            {sourcePdfUrl ? (
+              <a
+                href={sourcePdfUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm font-semibold text-primary-600 hover:text-primary-700"
+              >
+                Open in new tab
+              </a>
             ) : null}
           </div>
-        </aside>
-
-        {/* Right rail: Next steps */}
-        <aside className="lg:col-span-3 lg:order-3 order-1 space-y-4">
-          <div className="lg:sticky lg:top-24 space-y-4">
-            <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
-              <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-semibold text-gray-900">
-                    Next steps
-                  </div>
-                  <div className="mt-1 text-xs text-gray-600">
-                    {checklistDone}/{checklist.length} checklist items complete
-                  </div>
-                </div>
-                {nextStep ? (
-                  <button
-                    type="button"
-                    onClick={nextStep.onClick}
-                    className="inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg text-white bg-primary-600 hover:bg-primary-700"
-                  >
-                    {nextStep.label}
-                  </button>
-                ) : null}
+          <div className="h-[75vh] bg-white">
+            {sourcePdfLoading ? (
+              <div className="flex items-center justify-center h-full">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600"></div>
               </div>
-              <div className="px-5 py-4">
-                {checklist.length === 0 ? (
-                  <div className="text-sm text-gray-500">No checklist.</div>
-                ) : (
-                  <ul className="space-y-2">
-                    {checklist.map((it) => (
-                      <li
-                        key={it.id}
-                        className="flex items-start justify-between gap-3 rounded-xl border border-gray-200 bg-white p-3"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-sm font-semibold text-gray-900">
-                            {it.label}
-                          </div>
-                          {it.hint ? (
-                            <div className="mt-0.5 text-xs text-gray-600 line-clamp-2">
-                              {it.hint}
-                            </div>
-                          ) : null}
-                        </div>
-                        <span
-                          className={`shrink-0 px-2 py-1 rounded-full text-xs font-semibold ${
-                            it.done
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-gray-100 text-gray-700'
-                          }`}
-                        >
-                          {it.done ? 'Done' : 'Pending'}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          </div>
-        </aside>
-
-        {/* Main column */}
-        <main className="lg:col-span-6 lg:order-2 order-2 space-y-6">
-          {/* Bid / no-bid panel */}
-          <div
-            id="bid-review"
-            className="rounded-2xl border border-gray-200 bg-white shadow-sm scroll-mt-32 lg:scroll-mt-24"
-          >
-            <div className="px-5 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <div className="text-sm font-semibold text-gray-900">
-                  Bid / No-bid review
+            ) : sourcePdfError ? (
+              <div className="p-6 text-sm text-gray-700">
+                <div className="font-semibold text-gray-900">
+                  PDF unavailable
                 </div>
-                <span
-                  className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${decisionPill(
-                    bidDecision,
-                  )}`}
-                >
-                  {decisionLabel(bidDecision)}
-                </span>
-                {(rfp as any)?.review?.updatedAt ? (
-                  <span className="text-xs text-gray-500">
-                    Updated {String((rfp as any).review.updatedAt).slice(0, 10)}
-                  </span>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                <select
-                  value={bidDecision}
-                  onChange={(e) =>
-                    setBidDecision(e.target.value as BidDecision)
-                  }
-                  className="border border-gray-300 rounded-md px-3 py-2 bg-white text-sm"
-                  aria-label="Bid decision"
-                >
-                  <option value="">Unreviewed</option>
-                  <option value="bid">Bid</option>
-                  <option value="maybe">Maybe</option>
-                  <option value="no_bid">No-bid</option>
-                </select>
-                <button
-                  type="button"
-                  onClick={saveBidReview}
-                  disabled={!bidDirty || bidSaving}
-                  className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                >
-                  {bidSaving ? 'Saving…' : bidDirty ? 'Save' : 'Saved'}
-                </button>
-              </div>
-            </div>
-
-            <div className="px-5 py-4">
-              {bidBlockers.length > 0 ? (
-                <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
-                  <div className="text-sm font-semibold text-amber-900">
-                    Potential blockers
-                  </div>
-                  <ul className="mt-2 text-sm text-amber-800 list-disc pl-5 space-y-1">
-                    {bidBlockers.map((b, idx) => (
-                      <li key={idx}>{b}</li>
-                    ))}
-                  </ul>
-                  {bidBlockersList.length === 0 ? (
-                    <div className="mt-3">
-                      <button
-                        type="button"
-                        onClick={initBlockersFromDetected}
-                        className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-amber-300 text-amber-900 bg-white hover:bg-amber-50"
-                      >
-                        Initialize checklist from these
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="mb-4 text-sm text-gray-600">
-                  No obvious blockers detected from deadlines/budget.
-                </div>
-              )}
-
-              <div className="mb-4">
-                <div className="text-sm font-semibold text-gray-900">
-                  Blockers checklist
-                </div>
-                <div className="mt-2 space-y-2">
-                  {bidBlockersList.length === 0 ? (
-                    <div className="text-sm text-gray-500">
-                      No blockers tracked yet.
-                    </div>
-                  ) : (
-                    bidBlockersList.map((b) => (
-                      <div
-                        key={b.id}
-                        className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white p-3"
-                      >
-                        <select
-                          value={b.status}
-                          onChange={(e) => {
-                            const v = e.target.value as
-                              | 'open'
-                              | 'resolved'
-                              | 'waived'
-                            setBidBlockersList((prev) =>
-                              prev.map((x) =>
-                                x.id === b.id ? { ...x, status: v } : x,
-                              ),
-                            )
-                          }}
-                          className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white"
-                          aria-label="Blocker status"
-                        >
-                          <option value="open">Open</option>
-                          <option value="resolved">Resolved</option>
-                          <option value="waived">Waived</option>
-                        </select>
-                        <input
-                          value={b.text}
-                          onChange={(e) => {
-                            const v = e.target.value
-                            setBidBlockersList((prev) =>
-                              prev.map((x) =>
-                                x.id === b.id ? { ...x, text: v } : x,
-                              ),
-                            )
-                          }}
-                          className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm"
-                          placeholder="Blocker description"
-                        />
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setBidBlockersList((prev) =>
-                              prev.filter((x) => x.id !== b.id),
-                            )
-                          }
-                          className="inline-flex items-center justify-center px-2 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                          title="Remove blocker"
-                        >
-                          <XMarkIcon className="h-4 w-4" />
-                        </button>
-                      </div>
-                    ))
-                  )}
-
-                  <div className="flex items-center gap-2">
-                    <input
-                      value={newBlockerText}
-                      onChange={(e) => setNewBlockerText(e.target.value)}
-                      className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm"
-                      placeholder="Add a blocker…"
-                    />
-                    <button
-                      type="button"
-                      onClick={addBlocker}
-                      className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
-                    >
-                      Add
-                    </button>
-                  </div>
+                <div className="mt-1">{sourcePdfError}</div>
+                <div className="mt-3 text-xs text-gray-500">
+                  Tip: if you upload the RFP as an attachment, the viewer will
+                  fall back to that file.
                 </div>
               </div>
-
-              <div className="text-sm font-semibold text-gray-900">
-                Reasons (quick tags)
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {[
-                  'Strong fit',
-                  'Strategic client',
-                  'Budget too low',
-                  'Timeline too tight',
-                  'Outside scope',
-                  'Missing info',
-                  'Competitive / price-sensitive',
-                ].map((r) => {
-                  const on = bidReasons.includes(r)
-                  return (
-                    <button
-                      key={r}
-                      type="button"
-                      onClick={() => toggleBidReason(r)}
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
-                        on
-                          ? 'bg-primary-50 border-primary-200 text-primary-800'
-                          : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
-                      }`}
-                    >
-                      {r}
-                    </button>
-                  )
-                })}
-              </div>
-
-              <div className="mt-4">
-                <label className="block text-sm font-semibold text-gray-900">
-                  Notes
-                </label>
-                <textarea
-                  value={bidNotes}
-                  onChange={(e) => setBidNotes(e.target.value)}
-                  rows={4}
-                  className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                  placeholder="What matters for suitability? Key risks? Who needs to be involved? What would make this a 'yes'?"
-                />
-              </div>
-            </div>
-          </div>
-
-          <Section
-            sid="suitability"
-            title="Suitability"
-            rightMeta={
-              typeof (rfp as any)?.fitScore === 'number'
-                ? `Fit ${(rfp as any).fitScore}`
-                : undefined
-            }
-          >
-            {Array.isArray(rfp.dateWarnings) && rfp.dateWarnings.length > 0 && (
-              <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
-                <div className="text-sm font-semibold text-amber-900">
-                  Timing / sanity warnings
-                </div>
-                <ul className="mt-2 text-sm text-amber-800 list-disc pl-5 space-y-1">
-                  {rfp.dateWarnings.slice(0, 10).map((w, idx) => (
-                    <li key={idx}>{w}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {typeof (rfp as any)?.fitScore === 'number' && (
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Buyer Profiles fit score
-                  </div>
-                  <div className="text-sm font-semibold text-slate-900">
-                    {(rfp as any).fitScore}
-                  </div>
-                </div>
-                {Array.isArray((rfp as any)?.fitReasons) &&
-                  (rfp as any).fitReasons.length > 0 && (
-                    <ul className="mt-2 text-sm text-slate-700 list-disc pl-5 space-y-1">
-                      {(rfp as any).fitReasons
-                        .slice(0, 12)
-                        .map((w: any, idx: any) => (
-                          <li key={idx}>{w}</li>
-                        ))}
-                    </ul>
-                  )}
-              </div>
-            )}
-
-            {(rfp as any)?.rawText ? (
-              <div className="mt-4 text-xs text-gray-500">
-                Extracted text length:{' '}
-                <span className="font-semibold">
-                  {String((rfp as any).rawText || '').length}
-                </span>
-                {typeof (rfp as any)?._analysis?.usedAi === 'boolean' ? (
-                  <>
-                    {' '}
-                    • AI:{' '}
-                    <span className="font-semibold">
-                      {(rfp as any)?._analysis?.usedAi ? 'on' : 'off'}
-                    </span>
-                  </>
-                ) : null}
-                {(rfp as any)?._analysis?.model ? (
-                  <>
-                    {' '}
-                    • Model:{' '}
-                    <span className="font-semibold">
-                      {(rfp as any)?._analysis?.model}
-                    </span>
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-          </Section>
-
-          <Section sid="overview" title="Overview">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                <div className="p-4">
-                  <div className="flex items-center">
-                    <CurrencyDollarIcon className="h-5 w-5 text-green-500" />
-                    <div className="ml-3">
-                      <div className="text-xs text-gray-500">Budget Range</div>
-                      <div className="text-sm font-semibold text-gray-900">
-                        {rfp.budgetRange || 'Not specified'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                <div className="p-4">
-                  <div className="flex items-center">
-                    <CalendarDaysIcon className="h-5 w-5 text-red-500" />
-                    <div className="ml-3">
-                      <div className="text-xs text-gray-500">
-                        Submission deadline
-                      </div>
-                      <div className="text-sm font-semibold text-gray-900">
-                        {rfp.submissionDeadline
-                          ? new Date(rfp.submissionDeadline).toLocaleDateString(
-                              'en-US',
-                            )
-                          : 'Not specified'}
-                      </div>
-                      {rfp.submissionDeadline &&
-                        isDatePassed(rfp.submissionDeadline) && (
-                          <div className="text-xs font-medium text-red-600 mt-1">
-                            Deadline passed
-                          </div>
-                        )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                <div className="p-4">
-                  <div className="flex items-center">
-                    <ClockIcon className="h-5 w-5 text-yellow-500" />
-                    <div className="ml-3">
-                      <div className="text-xs text-gray-500">Timeline</div>
-                      <div className="text-sm font-semibold text-gray-900">
-                        {rfp.timeline || 'To be determined'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-                <div className="p-4">
-                  <div className="flex items-center">
-                    <DocumentTextIcon className="h-5 w-5 text-primary-500" />
-                    <div className="ml-3">
-                      <div className="text-xs text-gray-500">
-                        Questions deadline
-                      </div>
-                      <div className="text-sm font-semibold text-gray-900">
-                        {rfp.questionsDeadline
-                          ? new Date(rfp.questionsDeadline).toLocaleDateString(
-                              'en-US',
-                            )
-                          : 'Not specified'}
-                      </div>
-                      {rfp.questionsDeadline &&
-                        isDatePassed(rfp.questionsDeadline) && (
-                          <div className="text-xs font-medium text-red-600 mt-1">
-                            Deadline passed
-                          </div>
-                        )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Section>
-
-          <Section
-            sid="requirements"
-            title="Key requirements"
-            rightMeta={
-              Array.isArray(rfp.keyRequirements)
-                ? `${rfp.keyRequirements.length} items`
-                : undefined
-            }
-          >
-            {rfp.keyRequirements && rfp.keyRequirements.length > 0 ? (
-              <div>
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
-                  <div className="text-sm text-gray-600">
-                    Assess each requirement for suitability, then copy a
-                    compliance matrix for proposal work.
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={copyComplianceMatrix}
-                      className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                    >
-                      Copy compliance matrix
-                    </button>
-                    <button
-                      type="button"
-                      onClick={downloadComplianceCsv}
-                      className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                    >
-                      Download CSV
-                    </button>
-                    <button
-                      type="button"
-                      onClick={saveRequirements}
-                      disabled={reqSaving}
-                      className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                    >
-                      {reqSaving ? 'Saving…' : 'Save'}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mb-4 rounded-lg border border-gray-200 bg-white p-4">
-                  <div className="text-sm font-semibold text-gray-900">
-                    Auto-seed mapped proposal sections
-                  </div>
-                  <div className="mt-2 text-sm text-gray-600">
-                    Picks 1–2 likely proposal sections per requirement using a
-                    template’s section titles (only fills empty mappings).
-                  </div>
-                  <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
-                    <select
-                      value={seedTemplateId}
-                      onChange={(e) => setSeedTemplateId(e.target.value)}
-                      className="flex-1 border border-gray-300 rounded-md px-3 py-2 bg-white text-sm"
-                    >
-                      <option value="">
-                        {templates?.length
-                          ? 'Choose template (optional)'
-                          : 'Templates not loaded yet'}
-                      </option>
-                      {(templates || []).map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name} ({t.projectType})
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={autoseedMappedSections}
-                      disabled={seedingReqs}
-                      className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                    >
-                      {seedingReqs ? 'Seeding…' : 'Auto-seed'}
-                    </button>
-                    {!templates?.length ? (
-                      <button
-                        type="button"
-                        onClick={() => void ensureTemplatesLoaded()}
-                        className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                      >
-                        Load templates
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {rfp.keyRequirements.slice(0, 40).map((req, idx) => {
-                    const text = String(req || '').trim()
-                    const a = reqAssessments[text] || {
-                      text,
-                      status: 'unknown' as ReqStatus,
-                      notes: '',
-                      mappedSections: [],
-                    }
-                    return (
-                      <div
-                        key={`${idx}-${text}`}
-                        className="rounded-lg border border-gray-200 bg-white p-4"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-start gap-3">
-                            <div className="mt-2 h-2 w-2 rounded-full bg-primary-600" />
-                            <div className="text-sm font-semibold text-gray-900">
-                              {text}
-                            </div>
-                          </div>
-                          <select
-                            value={a.status}
-                            onChange={(e) =>
-                              setReq(text, {
-                                status: e.target.value as ReqStatus,
-                              })
-                            }
-                            className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white"
-                            aria-label="Requirement assessment"
-                          >
-                            <option value="unknown">Unknown</option>
-                            <option value="ok">OK</option>
-                            <option value="risk">Risk</option>
-                            <option value="gap">Gap</option>
-                          </select>
-                        </div>
-
-                        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
-                          <div>
-                            <label className="block text-xs font-semibold text-gray-700">
-                              Notes
-                            </label>
-                            <textarea
-                              value={a.notes}
-                              onChange={(e) =>
-                                setReq(text, { notes: e.target.value })
-                              }
-                              rows={3}
-                              className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                              placeholder="Why OK/risk/gap? What’s needed?"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-xs font-semibold text-gray-700">
-                              Proposal sections (comma-separated)
-                            </label>
-                            <input
-                              value={(a.mappedSections || []).join(', ')}
-                              onChange={(e) =>
-                                setReq(text, {
-                                  mappedSections: String(e.target.value || '')
-                                    .split(',')
-                                    .map((x) => x.trim())
-                                    .filter(Boolean)
-                                    .slice(0, 20),
-                                })
-                              }
-                              className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
-                              placeholder="e.g. Approach, Experience, Timeline"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
+            ) : sourcePdfUrl ? (
+              <iframe
+                src={`${sourcePdfUrl}#view=FitH&toolbar=1&navpanes=0`}
+                className="w-full h-full bg-white block"
+                title="Original RFP PDF"
+                style={{
+                  backgroundColor: 'white',
+                  border: 'none',
+                  outline: 'none',
+                }}
+              />
             ) : (
-              <div className="text-sm text-gray-500">
-                No specific requirements identified.
+              <div className="p-6 text-sm text-gray-700">
+                No original PDF is available for this RFP.
               </div>
             )}
-          </Section>
+          </div>
+        </div>
+      ) : null}
 
-          <Section sid="deliverables" title="Deliverables & criteria">
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              <div>
-                <div className="text-sm font-semibold text-gray-900">
-                  Expected deliverables
-                </div>
-                <div className="mt-2">
-                  {rfp.deliverables && rfp.deliverables.length > 0 ? (
-                    <ul className="space-y-2">
-                      {rfp.deliverables.slice(0, 12).map((deliverable, idx) => (
-                        <li key={idx} className="flex items-start gap-3">
-                          <div className="mt-2 h-2 w-2 rounded-full bg-green-600" />
-                          <div className="text-sm text-gray-800">
-                            {deliverable}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="text-sm text-gray-500">
-                      No specific deliverables identified.
-                    </div>
-                  )}
+      {pageTab === 'details' ? (
+        <>
+          {/* Disqualified Banner */}
+          {rfp.isDisqualified && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 h-2.5 w-2.5 rounded-full bg-red-500" />
+                <div className="text-sm text-red-800">
+                  <span className="font-semibold">Disqualified:</span> One or
+                  more critical deadlines for this RFP have passed.
                 </div>
               </div>
+            </div>
+          )}
 
-              <div>
-                <div className="text-sm font-semibold text-gray-900">
-                  Evaluation criteria
-                </div>
-                <div className="mt-2">
-                  {(rfp as any).evaluationCriteria &&
-                  (rfp as any).evaluationCriteria.length > 0 ? (
-                    <ul className="space-y-2">
-                      {(rfp as any).evaluationCriteria
-                        .slice(0, 12)
-                        .map((criteria: any, idx: number) => (
-                          <li key={idx} className="flex items-start gap-3">
-                            <div className="mt-2 h-2 w-2 rounded-full bg-yellow-600" />
-                            <div className="text-sm text-gray-800">
-                              {typeof criteria === 'string'
-                                ? criteria
-                                : criteria?.criteria || 'Evaluation criterion'}
-                            </div>
-                          </li>
-                        ))}
-                    </ul>
-                  ) : (
-                    <div className="text-sm text-gray-500">
-                      No evaluation criteria specified.
+          {/* Hero */}
+          <div className="rounded-2xl border border-gray-200 bg-white/80 backdrop-blur shadow-sm">
+            <div className="p-5 sm:p-6">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 rounded-xl bg-primary-50 p-2 ring-1 ring-primary-100">
+                      <DocumentTextIcon className="h-6 w-6 text-primary-700" />
                     </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="lg:col-span-2">
-                <div className="text-sm font-semibold text-gray-900">
-                  Critical information
-                </div>
-                <div className="mt-2">
-                  {rfp.criticalInformation &&
-                  rfp.criticalInformation.length > 0 ? (
-                    <ul className="space-y-2">
-                      {rfp.criticalInformation.slice(0, 12).map((info, idx) => (
-                        <li key={idx} className="flex items-start gap-3">
-                          <div className="mt-2 h-2 w-2 rounded-full bg-red-600" />
-                          <div className="text-sm text-gray-800">{info}</div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="text-sm text-gray-500">
-                      No critical information identified.
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div className="lg:col-span-2">
-                <div className="text-sm font-semibold text-gray-900">
-                  Clarification questions
-                </div>
-                <div className="mt-2">
-                  {rfp.clarificationQuestions &&
-                  rfp.clarificationQuestions.length > 0 ? (
-                    <div className="space-y-2">
-                      {rfp.clarificationQuestions
-                        .slice(0, 25)
-                        .map((question, index) => (
-                          <div
-                            key={index}
-                            className="flex items-start py-3 px-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
-                          >
-                            <span className="flex-shrink-0 inline-flex items-center justify-center h-6 w-6 rounded-full bg-primary-100 text-primary-600 text-xs font-medium mr-3 mt-0.5">
-                              {index + 1}
+                    <div className="min-w-0">
+                      {isBucketRunning('meta') ? (
+                        <div className="animate-pulse">
+                          <div className="h-7 sm:h-8 w-72 max-w-full bg-gray-200 rounded-lg" />
+                        </div>
+                      ) : (
+                        <h1
+                          className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900"
+                          title={rfp.title}
+                        >
+                          {rfp.title || 'RFP'}
+                        </h1>
+                      )}
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-gray-600">
+                        <span className="inline-flex items-center gap-1.5">
+                          <BuildingOfficeIcon className="h-4 w-4 text-gray-400" />
+                          {isBucketRunning('meta') ? (
+                            <span className="animate-pulse inline-block h-4 w-36 bg-gray-200 rounded" />
+                          ) : (
+                            <span className="font-medium text-gray-900">
+                              {rfp.clientName || 'Unknown client'}
                             </span>
-                            <p className="text-sm text-gray-700 leading-relaxed flex-1">
-                              {question}
-                            </p>
-                          </div>
-                        ))}
+                          )}
+                        </span>
+                        <span className="text-gray-300">•</span>
+                        {isBucketRunning('meta') ? (
+                          <span className="animate-pulse inline-flex items-center rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-transparent ring-1 ring-gray-200">
+                            Loading type…
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 ring-1 ring-blue-100">
+                            {String(rfp.projectType || '').replace(/_/g, ' ') ||
+                              'Unknown type'}
+                          </span>
+                        )}
+                        <span className="text-gray-300">•</span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <span className="text-gray-500">ID</span>
+                          <span className="font-mono text-xs text-gray-900">
+                            {rfp._id}
+                          </span>
+                        </span>
+                        {aiStreaming ? (
+                          <>
+                            <span className="text-gray-300">•</span>
+                            <span className="inline-flex items-center gap-2 text-xs font-semibold text-gray-600">
+                              <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />
+                              Refreshing…
+                            </span>
+                          </>
+                        ) : null}
+                      </div>
                     </div>
-                  ) : (
-                    <div className="text-sm text-gray-500">
-                      No clarification questions identified.
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </Section>
+                  </div>
 
-          <Section
-            sid="attachments"
-            title="Attachments"
-            rightMeta={
-              Array.isArray((rfp as any)?.attachments)
-                ? `${(rfp as any).attachments.length} files`
-                : undefined
-            }
-          >
-            <div className="flex items-center justify-between gap-3">
-              <div className="text-sm text-gray-600">
-                Upload and manage files related to this RFP.
-              </div>
-              <button
-                onClick={() => setShowAttachmentModal(true)}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700"
-              >
-                <PaperClipIcon className="h-5 w-5 mr-2" />
-                Add attachments
-              </button>
-            </div>
-
-            <div className="mt-4">
-              {rfp?.attachments?.length ? (
-                <ul role="list" className="divide-y divide-gray-200">
-                  {rfp.attachments.map((file) => (
-                    <li
-                      key={file.fileName}
-                      className="py-4 flex items-center justify-between"
-                    >
-                      <div className="flex items-center space-x-3">
-                        <PaperClipIcon className="h-5 w-5 text-gray-400" />
+                  <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <div className="flex items-center gap-2">
+                        <CurrencyDollarIcon className="h-5 w-5 text-emerald-600" />
                         <div>
-                          <p className="text-sm font-medium text-gray-900">
-                            {file.originalName}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            {(file.fileSize / 1024).toFixed(1)} KB •{' '}
-                            {file.fileType.toUpperCase()}
-                          </p>
+                          <div className="text-xs font-semibold text-gray-500">
+                            Budget range
+                          </div>
+                          <div className="text-sm font-semibold text-gray-900">
+                            {isBucketRunning('meta') ? (
+                              <span className="animate-pulse inline-block h-4 w-24 bg-gray-200 rounded" />
+                            ) : (
+                              rfp.budgetRange || 'Not specified'
+                            )}
+                          </div>
                         </div>
                       </div>
-                      <button
-                        onClick={() =>
-                          handleDeleteAttachment(file._id, file.originalName)
-                        }
-                        className="inline-flex items-center p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-md transition-colors"
-                        title="Delete attachment"
-                      >
-                        <XMarkIcon className="h-5 w-5" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-sm text-gray-500">
-                  No attachments uploaded yet.
-                </p>
-              )}
-            </div>
-          </Section>
-
-          <Section
-            sid="buyers"
-            title="Buyers"
-            rightMeta={
-              Array.isArray((rfp as any)?.buyerProfiles)
-                ? `${(rfp as any).buyerProfiles.length} saved`
-                : undefined
-            }
-          >
-            {Array.isArray((rfp as any)?.buyerProfiles) &&
-            (rfp as any).buyerProfiles.length > 0 ? (
-              <div>
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-sm font-semibold text-gray-900">
-                      Saved buyer profiles
                     </div>
-                    <div className="mt-1 text-xs text-gray-600">
-                      Selected:{' '}
-                      <span className="font-semibold">
-                        {buyerSelectedList.length}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={copySavedBuyers}
-                      className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
-                    >
-                      Copy
-                    </button>
-                    <button
-                      type="button"
-                      onClick={removeSelectedBuyers}
-                      disabled={buyerRemoving || buyerSelectedList.length === 0}
-                      className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
-                    >
-                      {buyerRemoving ? 'Working…' : 'Remove selected'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={clearAllBuyers}
-                      disabled={buyerRemoving}
-                      className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-red-300 text-red-700 bg-white hover:bg-red-50 disabled:opacity-50"
-                    >
-                      Clear all
-                    </button>
-                    <Link
-                      href={`/linkedin-finder?rfpId=${encodeURIComponent(
-                        rfp._id,
-                      )}`}
-                      className="text-xs text-primary-600 hover:text-primary-800"
-                    >
-                      Update via Buyer Profiles →
-                    </Link>
-                  </div>
-                </div>
-                <div className="mt-3 overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="text-left text-xs uppercase tracking-wider text-gray-500">
-                        <th className="py-2 pr-4">
-                          <input
-                            ref={buyerHeaderCheckboxRef}
-                            type="checkbox"
-                            onChange={() => {
-                              const total = visibleSavedTokens.length
-                              if (total === 0) return
-                              if (selectedVisibleSavedCount === total) {
-                                setBuyerSelected((prev) => {
-                                  const next = { ...prev }
-                                  visibleSavedTokens.forEach((tok) => {
-                                    delete next[tok]
-                                  })
-                                  return next
-                                })
-                              } else {
-                                const next: Record<string, boolean> = {}
-                                visibleSavedTokens.forEach((tok) => {
-                                  next[tok] = true
-                                })
-                                setBuyerSelected((prev) => ({
-                                  ...prev,
-                                  ...next,
-                                }))
-                              }
-                            }}
-                          />
-                        </th>
-                        <th className="py-2 pr-4">Score</th>
-                        <th className="py-2 pr-4">Name</th>
-                        <th className="py-2 pr-4">Title</th>
-                        <th className="py-2 pr-4">Profile</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {(rfp as any).buyerProfiles.slice(0, 25).map((p: any) => (
-                        <tr
-                          key={p?.profileId || p?.profileUrl}
-                          className="align-top"
-                        >
-                          <td className="py-3 pr-4">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(
-                                buyerSelected[buyerToken(p)] || false,
-                              )}
-                              onChange={() => {
-                                const tok = buyerToken(p)
-                                if (!tok) return
-                                setBuyerSelected((prev) => ({
-                                  ...prev,
-                                  [tok]: !prev[tok],
-                                }))
-                              }}
-                            />
-                          </td>
-                          <td className="py-3 pr-4 font-semibold text-gray-900">
-                            {p?.buyerScore ?? 0}
-                          </td>
-                          <td className="py-3 pr-4 text-gray-900">
-                            <div>{p?.name || '—'}</div>
-                            {p?.ai?.personaSummary && (
-                              <div className="mt-1 text-xs text-gray-700 max-w-xl">
-                                {p.ai.personaSummary}
-                              </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <div className="flex items-center gap-2">
+                        <CalendarDaysIcon className="h-5 w-5 text-rose-600" />
+                        <div>
+                          <div className="text-xs font-semibold text-gray-500">
+                            Submission deadline
+                          </div>
+                          <div className="text-sm font-semibold text-gray-900">
+                            {isBucketRunning('dates') ? (
+                              <span className="animate-pulse inline-block h-4 w-24 bg-gray-200 rounded" />
+                            ) : rfp.submissionDeadline ? (
+                              new Date(
+                                rfp.submissionDeadline,
+                              ).toLocaleDateString('en-US')
+                            ) : (
+                              'Not specified'
                             )}
-                          </td>
-                          <td className="py-3 pr-4 text-gray-900">
-                            {p?.title || '—'}
-                          </td>
-                          <td className="py-3 pr-4">
-                            {p?.profileUrl ? (
-                              <a
-                                href={p.profileUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-primary-600 hover:text-primary-800"
-                              >
-                                Open →
-                              </a>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <div className="flex items-center gap-2">
+                        <ClockIcon className="h-5 w-5 text-amber-600" />
+                        <div>
+                          <div className="text-xs font-semibold text-gray-500">
+                            Timeline
+                          </div>
+                          <div className="text-sm font-semibold text-gray-900">
+                            {isBucketRunning('lists') ? (
+                              <span className="animate-pulse inline-block h-4 w-24 bg-gray-200 rounded" />
+                            ) : Array.isArray(rfp.timeline) ? (
+                              rfp.timeline[0] || 'TBD'
+                            ) : (
+                              (rfp.timeline as any) || 'TBD'
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <div className="flex items-center gap-2">
+                        <DocumentTextIcon className="h-5 w-5 text-primary-600" />
+                        <div>
+                          <div className="text-xs font-semibold text-gray-500">
+                            Fit score
+                          </div>
+                          <div className="text-sm font-semibold text-gray-900">
+                            {aiStreaming ? (
+                              <span className="animate-pulse inline-block h-4 w-10 bg-gray-200 rounded" />
+                            ) : typeof (rfp as any)?.fitScore === 'number' ? (
+                              String((rfp as any).fitScore)
                             ) : (
                               '—'
                             )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div className="text-sm text-gray-500">
-                No saved buyer profiles yet.
-              </div>
-            )}
-          </Section>
 
-          <Section sid="generate" title="Generate proposal">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <div className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors">
-                <div className="flex items-center mb-3">
-                  <div className="w-10 h-10 bg-gradient-to-br from-purple-100 to-pink-100 rounded-lg flex items-center justify-center mr-3">
-                    <PlusIcon className="h-5 w-5 text-purple-600" />
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-gray-900">AI Template</h4>
-                    <p className="text-sm text-gray-500">
-                      Generate a first-pass proposal
-                    </p>
-                  </div>
+                <div className="flex flex-col sm:flex-row lg:flex-col gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => scrollToSection('bid-review')}
+                    className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50"
+                  >
+                    Make bid decision
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => scrollToSection('requirements')}
+                    className="inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50"
+                  >
+                    Review requirements
+                  </button>
                 </div>
-                <button
-                  onClick={() => setShowAIPreviewModal(true)}
-                  className="w-full inline-flex items-center justify-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
-                >
-                  Preview
-                </button>
               </div>
             </div>
+          </div>
 
-            <div className="mt-6">
-              <div className="text-sm font-semibold text-gray-900">
-                Templates
-              </div>
-              <div className="mt-2">
-                {companies.length > 0 && (
-                  <div className="mb-4">
-                    <label className="block text-sm font-medium text-gray-900 mb-2">
-                      Proposal Company / Branding
-                    </label>
-                    <select
-                      value={selectedCompanyId || ''}
-                      onChange={(e) =>
-                        setSelectedCompanyId(e.target.value || null)
-                      }
-                      className="w-full sm:w-96 border border-gray-300 rounded-md px-3 py-2 bg-gray-100 text-gray-900"
-                    >
-                      {companies.map((c) => (
-                        <option key={c.companyId} value={c.companyId}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-gray-500">
-                      Controls Title/Cover Letter/Experience content and
-                      exports.
-                    </p>
-                  </div>
-                )}
+          {/* Mobile jump bar (offset for global header) */}
+          <div className="lg:hidden sticky top-16 z-30 -mx-4 sm:-mx-6 bg-white/90 backdrop-blur border-y border-gray-200 px-4 sm:px-6 py-3">
+            <div className="flex items-center gap-2">
+              <select
+                value={activeSection}
+                onChange={(e) =>
+                  scrollToSection(e.target.value as TocSectionId)
+                }
+                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 bg-white text-sm"
+                aria-label="Jump to section"
+              >
+                {tocSectionDefs.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => setAllSectionsOpen(true)}
+                className="inline-flex items-center justify-center px-3 py-2 text-sm font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
+              >
+                Open
+              </button>
+              <button
+                type="button"
+                onClick={() => setAllSectionsOpen(false)}
+                className="inline-flex items-center justify-center px-3 py-2 text-sm font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+          </div>
 
-                {templatesLoading || companiesLoading ? (
-                  <p className="text-sm text-gray-500">
-                    Loading templates/companies…
-                  </p>
-                ) : templates.length > 0 ? (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    {templates.map((template) => (
-                      <div
-                        key={template.id}
-                        className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors"
-                      >
-                        <h4 className="font-medium text-gray-900">
-                          {template.name}
-                        </h4>
-                        <p className="text-sm text-gray-500 mt-1">
-                          {template.sectionCount} sections
-                        </p>
-                        <p className="text-xs text-gray-400 mt-2">
-                          {template.projectType.replace('_', ' ')}
-                        </p>
-                        <button
-                          onClick={() => generateProposal(template.id)}
-                          disabled={generatingTemplate !== null}
-                          className="mt-3 w-full inline-flex items-center justify-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {generatingTemplate === template.id ? (
-                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                          ) : (
-                            <>
-                              <PlusIcon className="h-4 w-4 mr-1" />
-                              Generate
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm text-gray-500">
-                      No templates loaded yet.
+          {/* Content */}
+          <div className="lg:grid lg:grid-cols-12 lg:gap-8 items-start">
+            {/* Sticky TOC */}
+            <aside className="hidden lg:block lg:col-span-3 lg:order-1">
+              <div className="sticky top-24 space-y-3">
+                <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                  <div className="px-4 py-4 border-b border-gray-100">
+                    <div className="text-sm font-semibold text-gray-900">
+                      On this page
                     </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      Review suitability, then take action
+                    </div>
+                  </div>
+                  <div className="px-3 py-3 border-b border-gray-100 flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        void ensureTemplatesLoaded()
-                        void ensureCompaniesLoaded()
-                      }}
-                      className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                      onClick={() => setAllSectionsOpen(true)}
+                      className="flex-1 inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
                     >
-                      Load templates
+                      Open all
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAllSectionsOpen(false)}
+                      className="flex-1 inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg border border-gray-300 text-gray-900 bg-white hover:bg-gray-50"
+                    >
+                      Collapse all
                     </button>
                   </div>
-                )}
+                  <nav className="px-2 py-2 max-h-[calc(100vh-16rem)] overflow-auto custom-scrollbar">
+                    {tocSectionDefs.map((s) => (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => scrollToSection(s.id)}
+                        className={`w-full text-left px-3 py-2 rounded-xl text-sm transition-colors ${
+                          activeSection === s.id
+                            ? 'bg-primary-50 text-primary-700 font-semibold'
+                            : 'text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </nav>
+                </div>
+                {supportingError ? (
+                  <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl p-3">
+                    {supportingError}
+                  </div>
+                ) : null}
               </div>
-            </div>
-          </Section>
+            </aside>
 
-          <Section sid="proposals" title="Proposals">
-            {proposalsLoading ? (
-              <p className="text-sm text-gray-500">Loading proposals…</p>
-            ) : rfpProposals.length === 0 ? (
-              <p className="text-sm text-gray-500">
-                No proposals yet for this RFP.
-              </p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Proposal
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Score
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Status
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Updated
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Decision
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {[...rfpProposals]
-                      .sort((a, b) => {
-                        const as = a?.review?.score
-                        const bs = b?.review?.score
-                        const an = typeof as === 'number' ? as : -1
-                        const bn = typeof bs === 'number' ? bs : -1
-                        if (bn !== an) return bn - an
-                        return (
-                          new Date(b.updatedAt).getTime() -
-                          new Date(a.updatedAt).getTime()
-                        )
-                      })
-                      .map((p) => (
-                        <tr key={p._id} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 text-sm text-gray-900">
-                            <Link
-                              href={`/proposals/${p._id}`}
-                              className="text-primary-600 hover:text-primary-800 font-medium"
-                            >
-                              {p.title}
-                            </Link>
-                          </td>
-                          <td className="px-4 py-3 text-sm text-gray-900">
-                            {typeof p?.review?.score === 'number'
-                              ? p.review.score
-                              : '—'}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-gray-900">
-                            {p.status}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-gray-600">
-                            {p.updatedAt
-                              ? new Date(p.updatedAt).toLocaleDateString(
-                                  'en-US',
-                                )
-                              : '—'}
-                          </td>
-                          <td className="px-4 py-3 text-sm text-gray-900">
-                            <div className="flex items-center space-x-2">
-                              <button
-                                onClick={() =>
-                                  setProposalDecision(
-                                    p._id,
-                                    p?.review?.decision === 'shortlist'
-                                      ? ''
-                                      : 'shortlist',
-                                  )
-                                }
-                                disabled={updatingDecisionId === p._id}
-                                className={`px-2 py-1 text-xs font-medium rounded ${
-                                  p?.review?.decision === 'shortlist'
-                                    ? 'bg-green-100 text-green-800'
-                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                } disabled:opacity-50`}
-                                title="Toggle shortlist"
-                              >
-                                Shortlist
-                              </button>
-                              <button
-                                onClick={() =>
-                                  setProposalDecision(
-                                    p._id,
-                                    p?.review?.decision === 'reject'
-                                      ? ''
-                                      : 'reject',
-                                  )
-                                }
-                                disabled={updatingDecisionId === p._id}
-                                className={`px-2 py-1 text-xs font-medium rounded ${
-                                  p?.review?.decision === 'reject'
-                                    ? 'bg-red-100 text-red-800'
-                                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                } disabled:opacity-50`}
-                                title="Toggle reject"
-                              >
-                                Reject
-                              </button>
+            {/* Right rail: Next steps */}
+            <aside className="lg:col-span-3 lg:order-3 order-1 space-y-4">
+              <div className="lg:sticky lg:top-24 space-y-4">
+                <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                  <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        Next steps
+                      </div>
+                      <div className="mt-1 text-xs text-gray-600">
+                        {checklistDone}/{checklist.length} checklist items
+                        complete
+                      </div>
+                    </div>
+                    {nextStep ? (
+                      <button
+                        type="button"
+                        onClick={nextStep.onClick}
+                        className="inline-flex items-center justify-center px-3 py-2 text-xs font-semibold rounded-lg text-white bg-primary-600 hover:bg-primary-700"
+                      >
+                        {nextStep.label}
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="px-5 py-4">
+                    {checklist.length === 0 ? (
+                      <div className="text-sm text-gray-500">No checklist.</div>
+                    ) : (
+                      <ul className="space-y-2">
+                        {checklist.map((it) => (
+                          <li
+                            key={it.id}
+                            className="flex items-start justify-between gap-3 rounded-xl border border-gray-200 bg-white p-3"
+                          >
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold text-gray-900">
+                                {it.label}
+                              </div>
+                              {it.hint ? (
+                                <div className="mt-0.5 text-xs text-gray-600 line-clamp-2">
+                                  {it.hint}
+                                </div>
+                              ) : null}
                             </div>
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Section>
+                            <span
+                              className={`shrink-0 px-2 py-1 rounded-full text-xs font-semibold ${
+                                it.done
+                                  ? 'bg-green-100 text-green-800'
+                                  : 'bg-gray-100 text-gray-700'
+                              }`}
+                            >
+                              {it.done ? 'Done' : 'Pending'}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
 
-          <Section sid="raw" title="Raw / extracted text">
-            <div className="text-xs text-gray-600">
-              This is what the system extracted from the PDF / AI workflow.
-            </div>
-            <div className="mt-3">
-              <pre className="whitespace-pre-wrap text-xs bg-gray-50 border border-gray-200 rounded-lg p-3 max-h-[420px] overflow-auto">
-                {String((rfp as any)?.rawText || '').slice(0, 200000) ||
-                  '(No raw text available)'}
-              </pre>
-            </div>
-            {(rfp as any)?._analysis ? (
-              <div className="mt-3 text-xs text-gray-500">
-                <div className="font-semibold text-gray-700">Analysis meta</div>
-                <pre className="mt-1 whitespace-pre-wrap bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-auto">
-                  {JSON.stringify((rfp as any)._analysis, null, 2)}
-                </pre>
+                <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                  <div className="px-5 py-4 border-b border-gray-100">
+                    <div className="text-sm font-semibold text-gray-900">
+                      AI
+                    </div>
+                    <div className="mt-1 text-xs text-gray-600">
+                      Generate/refresh machine-generated artifacts
+                    </div>
+                  </div>
+                  <div className="px-5 py-4 space-y-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowAIPreviewModal(true)}
+                      className="w-full inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg text-white bg-primary-600 hover:bg-primary-700"
+                    >
+                      Preview AI template
+                    </button>
+                    <button
+                      type="button"
+                      onClick={rerunAiAnalysis}
+                      disabled={reanalyzingAi}
+                      className="w-full inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      {reanalyzingAi ? 'Re-analyzing…' : 'Re-run AI extraction'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={streamAiRefresh}
+                      disabled={aiStreaming}
+                      className="w-full inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      {aiStreaming
+                        ? 'Streaming refresh…'
+                        : 'Stream AI refresh (SSE)'}
+                    </button>
+                    {aiStreaming ? (
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+                        <div className="text-xs font-semibold text-gray-700">
+                          Refresh progress
+                        </div>
+                        <div className="mt-2 space-y-1 text-xs text-gray-700">
+                          {(['meta', 'dates', 'lists'] as AiBucket[]).map(
+                            (k) => {
+                              const st = aiRefreshStatus[k]
+                              const dot =
+                                st === 'done'
+                                  ? 'bg-green-500'
+                                  : st === 'error'
+                                  ? 'bg-red-500'
+                                  : st === 'running'
+                                  ? 'bg-blue-500'
+                                  : 'bg-gray-300'
+                              const label =
+                                k === 'meta'
+                                  ? 'Metadata'
+                                  : k === 'dates'
+                                  ? 'Dates'
+                                  : 'Requirements/lists'
+                              return (
+                                <div
+                                  key={k}
+                                  className="flex items-center justify-between gap-2"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span
+                                      className={`h-2 w-2 rounded-full ${dot}`}
+                                    />
+                                    <span>{label}</span>
+                                  </div>
+                                  <span className="font-semibold text-gray-600">
+                                    {st === 'running'
+                                      ? 'Running…'
+                                      : st === 'done'
+                                      ? 'Done'
+                                      : st === 'error'
+                                      ? 'Error'
+                                      : 'Idle'}
+                                  </span>
+                                </div>
+                              )
+                            },
+                          )}
+                        </div>
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={streamAiSummary}
+                      disabled={aiSummaryStreaming}
+                      className="w-full inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      {aiSummaryStreaming
+                        ? 'Streaming summary…'
+                        : 'Stream AI summary'}
+                    </button>
+                    {aiSummary ? (
+                      <div className="mt-2 rounded-xl border border-gray-200 bg-gray-50 p-3">
+                        <div className="text-xs font-semibold text-gray-700 mb-1">
+                          AI summary
+                        </div>
+                        <pre className="whitespace-pre-wrap text-xs text-gray-800 max-h-64 overflow-auto custom-scrollbar">
+                          {aiSummary}
+                        </pre>
+                      </div>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => scrollToSection('generate')}
+                      className="w-full inline-flex items-center justify-center px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 bg-white text-gray-900 hover:bg-gray-50"
+                    >
+                      Go to proposal generation
+                    </button>
+                  </div>
+                </div>
               </div>
-            ) : null}
-          </Section>
-        </main>
-      </div>
+            </aside>
+
+            {/* Main column */}
+            <main className="lg:col-span-6 lg:order-2 order-2 space-y-6">
+              {/* Bid / no-bid panel */}
+              <div
+                id="bid-review"
+                className="rounded-2xl border border-gray-200 bg-white shadow-sm scroll-mt-32 lg:scroll-mt-24"
+              >
+                <div className="px-5 py-4 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-semibold text-gray-900">
+                      Bid / No-bid review
+                    </div>
+                    <span
+                      className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold ${decisionPill(
+                        bidDecision,
+                      )}`}
+                    >
+                      {decisionLabel(bidDecision)}
+                    </span>
+                    {(rfp as any)?.review?.updatedAt ? (
+                      <span className="text-xs text-gray-500">
+                        Updated{' '}
+                        {String((rfp as any).review.updatedAt).slice(0, 10)}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={bidDecision}
+                      onChange={(e) =>
+                        setBidDecision(e.target.value as BidDecision)
+                      }
+                      className="border border-gray-300 rounded-md px-3 py-2 bg-white text-sm"
+                      aria-label="Bid decision"
+                    >
+                      <option value="">Unreviewed</option>
+                      <option value="bid">Bid</option>
+                      <option value="maybe">Maybe</option>
+                      <option value="no_bid">No-bid</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={saveBidReview}
+                      disabled={!bidDirty || bidSaving}
+                      className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                    >
+                      {bidSaving ? 'Saving…' : bidDirty ? 'Save' : 'Saved'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="px-5 py-4">
+                  {bidBlockers.length > 0 ? (
+                    <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                      <div className="text-sm font-semibold text-amber-900">
+                        Potential blockers
+                      </div>
+                      <ul className="mt-2 text-sm text-amber-800 list-disc pl-5 space-y-1">
+                        {bidBlockers.map((b, idx) => (
+                          <li key={idx}>{b}</li>
+                        ))}
+                      </ul>
+                      {bidBlockersList.length === 0 ? (
+                        <div className="mt-3">
+                          <button
+                            type="button"
+                            onClick={initBlockersFromDetected}
+                            className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-amber-300 text-amber-900 bg-white hover:bg-amber-50"
+                          >
+                            Initialize checklist from these
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="mb-4 text-sm text-gray-600">
+                      No obvious blockers detected from deadlines/budget.
+                    </div>
+                  )}
+
+                  <div className="mb-4">
+                    <div className="text-sm font-semibold text-gray-900">
+                      Blockers checklist
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      {bidBlockersList.length === 0 ? (
+                        <div className="text-sm text-gray-500">
+                          No blockers tracked yet.
+                        </div>
+                      ) : (
+                        bidBlockersList.map((b) => (
+                          <div
+                            key={b.id}
+                            className="flex items-start gap-2 rounded-lg border border-gray-200 bg-white p-3"
+                          >
+                            <select
+                              value={b.status}
+                              onChange={(e) => {
+                                const v = e.target.value as
+                                  | 'open'
+                                  | 'resolved'
+                                  | 'waived'
+                                setBidBlockersList((prev) =>
+                                  prev.map((x) =>
+                                    x.id === b.id ? { ...x, status: v } : x,
+                                  ),
+                                )
+                              }}
+                              className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white"
+                              aria-label="Blocker status"
+                            >
+                              <option value="open">Open</option>
+                              <option value="resolved">Resolved</option>
+                              <option value="waived">Waived</option>
+                            </select>
+                            <input
+                              value={b.text}
+                              onChange={(e) => {
+                                const v = e.target.value
+                                setBidBlockersList((prev) =>
+                                  prev.map((x) =>
+                                    x.id === b.id ? { ...x, text: v } : x,
+                                  ),
+                                )
+                              }}
+                              className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm"
+                              placeholder="Blocker description"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setBidBlockersList((prev) =>
+                                  prev.filter((x) => x.id !== b.id),
+                                )
+                              }
+                              className="inline-flex items-center justify-center px-2 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                              title="Remove blocker"
+                            >
+                              <XMarkIcon className="h-4 w-4" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={newBlockerText}
+                          onChange={(e) => setNewBlockerText(e.target.value)}
+                          className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm"
+                          placeholder="Add a blocker…"
+                        />
+                        <button
+                          type="button"
+                          onClick={addBlocker}
+                          className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-sm font-semibold text-gray-900">
+                    Reasons (quick tags)
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {[
+                      'Strong fit',
+                      'Strategic client',
+                      'Budget too low',
+                      'Timeline too tight',
+                      'Outside scope',
+                      'Missing info',
+                      'Competitive / price-sensitive',
+                    ].map((r) => {
+                      const on = bidReasons.includes(r)
+                      return (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => toggleBidReason(r)}
+                          className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition-colors ${
+                            on
+                              ? 'bg-primary-50 border-primary-200 text-primary-800'
+                              : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          {r}
+                        </button>
+                      )
+                    })}
+                  </div>
+
+                  <div className="mt-4">
+                    <label className="block text-sm font-semibold text-gray-900">
+                      Notes
+                    </label>
+                    <textarea
+                      value={bidNotes}
+                      onChange={(e) => setBidNotes(e.target.value)}
+                      rows={4}
+                      className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                      placeholder="What matters for suitability? Key risks? Who needs to be involved? What would make this a 'yes'?"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <Section
+                sid="suitability"
+                title="Suitability"
+                rightMeta={
+                  typeof (rfp as any)?.fitScore === 'number'
+                    ? `Fit ${(rfp as any).fitScore}`
+                    : undefined
+                }
+              >
+                {Array.isArray(rfp.dateWarnings) &&
+                  rfp.dateWarnings.length > 0 && (
+                    <div className="mb-4 bg-amber-50 border border-amber-200 rounded-lg p-4">
+                      <div className="text-sm font-semibold text-amber-900">
+                        Timing / sanity warnings
+                      </div>
+                      <ul className="mt-2 text-sm text-amber-800 list-disc pl-5 space-y-1">
+                        {rfp.dateWarnings.slice(0, 10).map((w, idx) => (
+                          <li key={idx}>{w}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                {typeof (rfp as any)?.fitScore === 'number' && (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold text-slate-900">
+                        Buyer Profiles fit score
+                      </div>
+                      <div className="text-sm font-semibold text-slate-900">
+                        {(rfp as any).fitScore}
+                      </div>
+                    </div>
+                    {Array.isArray((rfp as any)?.fitReasons) &&
+                      (rfp as any).fitReasons.length > 0 && (
+                        <ul className="mt-2 text-sm text-slate-700 list-disc pl-5 space-y-1">
+                          {(rfp as any).fitReasons
+                            .slice(0, 12)
+                            .map((w: any, idx: any) => (
+                              <li key={idx}>{w}</li>
+                            ))}
+                        </ul>
+                      )}
+                  </div>
+                )}
+
+                {(rfp as any)?.rawText ? (
+                  <div className="mt-4 text-xs text-gray-500">
+                    Extracted text length:{' '}
+                    <span className="font-semibold">
+                      {String((rfp as any).rawText || '').length}
+                    </span>
+                    {typeof (rfp as any)?._analysis?.usedAi === 'boolean' ? (
+                      <>
+                        {' '}
+                        • AI:{' '}
+                        <span className="font-semibold">
+                          {(rfp as any)?._analysis?.usedAi ? 'on' : 'off'}
+                        </span>
+                      </>
+                    ) : null}
+                    {(rfp as any)?._analysis?.model ? (
+                      <>
+                        {' '}
+                        • Model:{' '}
+                        <span className="font-semibold">
+                          {(rfp as any)?._analysis?.model}
+                        </span>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+              </Section>
+
+              <Section sid="overview" title="Overview">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                    <div className="p-4">
+                      <div className="flex items-center">
+                        <CurrencyDollarIcon className="h-5 w-5 text-green-500" />
+                        <div className="ml-3">
+                          <div className="text-xs text-gray-500">
+                            Budget Range
+                          </div>
+                          <div className="text-sm font-semibold text-gray-900">
+                            {rfp.budgetRange || 'Not specified'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                    <div className="p-4">
+                      <div className="flex items-center">
+                        <CalendarDaysIcon className="h-5 w-5 text-red-500" />
+                        <div className="ml-3">
+                          <div className="text-xs text-gray-500">
+                            Submission deadline
+                          </div>
+                          <div className="text-sm font-semibold text-gray-900">
+                            {rfp.submissionDeadline
+                              ? new Date(
+                                  rfp.submissionDeadline,
+                                ).toLocaleDateString('en-US')
+                              : 'Not specified'}
+                          </div>
+                          {rfp.submissionDeadline &&
+                            isDatePassed(rfp.submissionDeadline) && (
+                              <div className="text-xs font-medium text-red-600 mt-1">
+                                Deadline passed
+                              </div>
+                            )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                    <div className="p-4">
+                      <div className="flex items-center">
+                        <ClockIcon className="h-5 w-5 text-yellow-500" />
+                        <div className="ml-3">
+                          <div className="text-xs text-gray-500">Timeline</div>
+                          <div className="text-sm font-semibold text-gray-900">
+                            {rfp.timeline || 'To be determined'}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+                    <div className="p-4">
+                      <div className="flex items-center">
+                        <DocumentTextIcon className="h-5 w-5 text-primary-500" />
+                        <div className="ml-3">
+                          <div className="text-xs text-gray-500">
+                            Questions deadline
+                          </div>
+                          <div className="text-sm font-semibold text-gray-900">
+                            {rfp.questionsDeadline
+                              ? new Date(
+                                  rfp.questionsDeadline,
+                                ).toLocaleDateString('en-US')
+                              : 'Not specified'}
+                          </div>
+                          {rfp.questionsDeadline &&
+                            isDatePassed(rfp.questionsDeadline) && (
+                              <div className="text-xs font-medium text-red-600 mt-1">
+                                Deadline passed
+                              </div>
+                            )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Section>
+
+              <Section
+                sid="requirements"
+                title="Key requirements"
+                rightMeta={
+                  Array.isArray(rfp.keyRequirements)
+                    ? `${rfp.keyRequirements.length} items`
+                    : undefined
+                }
+              >
+                {rfp.keyRequirements && rfp.keyRequirements.length > 0 ? (
+                  <div>
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
+                      <div className="text-sm text-gray-600">
+                        Assess each requirement for suitability, then copy a
+                        compliance matrix for proposal work.
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={copyComplianceMatrix}
+                          className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                        >
+                          Copy compliance matrix
+                        </button>
+                        <button
+                          type="button"
+                          onClick={downloadComplianceCsv}
+                          className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                        >
+                          Download CSV
+                        </button>
+                        <button
+                          type="button"
+                          onClick={saveRequirements}
+                          disabled={reqSaving}
+                          className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                        >
+                          {reqSaving ? 'Saving…' : 'Save'}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mb-4 rounded-lg border border-gray-200 bg-white p-4">
+                      <div className="text-sm font-semibold text-gray-900">
+                        Auto-seed mapped proposal sections
+                      </div>
+                      <div className="mt-2 text-sm text-gray-600">
+                        Picks 1–2 likely proposal sections per requirement using
+                        a template’s section titles (only fills empty mappings).
+                      </div>
+                      <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2">
+                        <select
+                          value={seedTemplateId}
+                          onChange={(e) => setSeedTemplateId(e.target.value)}
+                          className="flex-1 border border-gray-300 rounded-md px-3 py-2 bg-white text-sm"
+                        >
+                          <option value="">
+                            {templates?.length
+                              ? 'Choose template (optional)'
+                              : 'Templates not loaded yet'}
+                          </option>
+                          {(templates || []).map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name} ({t.projectType})
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          onClick={autoseedMappedSections}
+                          disabled={seedingReqs}
+                          className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                        >
+                          {seedingReqs ? 'Seeding…' : 'Auto-seed'}
+                        </button>
+                        {!templates?.length ? (
+                          <button
+                            type="button"
+                            onClick={() => void ensureTemplatesLoaded()}
+                            className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                          >
+                            Load templates
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {rfp.keyRequirements.slice(0, 40).map((req, idx) => {
+                        const text = String(req || '').trim()
+                        const a = reqAssessments[text] || {
+                          text,
+                          status: 'unknown' as ReqStatus,
+                          notes: '',
+                          mappedSections: [],
+                        }
+                        return (
+                          <div
+                            key={`${idx}-${text}`}
+                            className="rounded-lg border border-gray-200 bg-white p-4"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                <div className="mt-2 h-2 w-2 rounded-full bg-primary-600" />
+                                <div className="text-sm font-semibold text-gray-900">
+                                  {text}
+                                </div>
+                              </div>
+                              <select
+                                value={a.status}
+                                onChange={(e) =>
+                                  setReq(text, {
+                                    status: e.target.value as ReqStatus,
+                                  })
+                                }
+                                className="border border-gray-300 rounded-md px-2 py-1 text-sm bg-white"
+                                aria-label="Requirement assessment"
+                              >
+                                <option value="unknown">Unknown</option>
+                                <option value="ok">OK</option>
+                                <option value="risk">Risk</option>
+                                <option value="gap">Gap</option>
+                              </select>
+                            </div>
+
+                            <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+                              <div>
+                                <label className="block text-xs font-semibold text-gray-700">
+                                  Notes
+                                </label>
+                                <textarea
+                                  value={a.notes}
+                                  onChange={(e) =>
+                                    setReq(text, { notes: e.target.value })
+                                  }
+                                  rows={3}
+                                  className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                                  placeholder="Why OK/risk/gap? What’s needed?"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-semibold text-gray-700">
+                                  Proposal sections (comma-separated)
+                                </label>
+                                <input
+                                  value={(a.mappedSections || []).join(', ')}
+                                  onChange={(e) =>
+                                    setReq(text, {
+                                      mappedSections: String(
+                                        e.target.value || '',
+                                      )
+                                        .split(',')
+                                        .map((x) => x.trim())
+                                        .filter(Boolean)
+                                        .slice(0, 20),
+                                    })
+                                  }
+                                  className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                                  placeholder="e.g. Approach, Experience, Timeline"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-500">
+                    No specific requirements identified.
+                  </div>
+                )}
+              </Section>
+
+              <Section sid="deliverables" title="Deliverables & criteria">
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">
+                      Expected deliverables
+                    </div>
+                    <div className="mt-2">
+                      {rfp.deliverables && rfp.deliverables.length > 0 ? (
+                        <ul className="space-y-2">
+                          {rfp.deliverables
+                            .slice(0, 12)
+                            .map((deliverable, idx) => (
+                              <li key={idx} className="flex items-start gap-3">
+                                <div className="mt-2 h-2 w-2 rounded-full bg-green-600" />
+                                <div className="text-sm text-gray-800">
+                                  {deliverable}
+                                </div>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          No specific deliverables identified.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">
+                      Evaluation criteria
+                    </div>
+                    <div className="mt-2">
+                      {(rfp as any).evaluationCriteria &&
+                      (rfp as any).evaluationCriteria.length > 0 ? (
+                        <ul className="space-y-2">
+                          {(rfp as any).evaluationCriteria
+                            .slice(0, 12)
+                            .map((criteria: any, idx: number) => (
+                              <li key={idx} className="flex items-start gap-3">
+                                <div className="mt-2 h-2 w-2 rounded-full bg-yellow-600" />
+                                <div className="text-sm text-gray-800">
+                                  {typeof criteria === 'string'
+                                    ? criteria
+                                    : criteria?.criteria ||
+                                      'Evaluation criterion'}
+                                </div>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          No evaluation criteria specified.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="lg:col-span-2">
+                    <div className="text-sm font-semibold text-gray-900">
+                      Critical information
+                    </div>
+                    <div className="mt-2">
+                      {rfp.criticalInformation &&
+                      rfp.criticalInformation.length > 0 ? (
+                        <ul className="space-y-2">
+                          {rfp.criticalInformation
+                            .slice(0, 12)
+                            .map((info, idx) => (
+                              <li key={idx} className="flex items-start gap-3">
+                                <div className="mt-2 h-2 w-2 rounded-full bg-red-600" />
+                                <div className="text-sm text-gray-800">
+                                  {info}
+                                </div>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          No critical information identified.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="lg:col-span-2">
+                    <div className="text-sm font-semibold text-gray-900">
+                      Clarification questions
+                    </div>
+                    <div className="mt-2">
+                      {rfp.clarificationQuestions &&
+                      rfp.clarificationQuestions.length > 0 ? (
+                        <div className="space-y-2">
+                          {rfp.clarificationQuestions
+                            .slice(0, 25)
+                            .map((question, index) => (
+                              <div
+                                key={index}
+                                className="flex items-start py-3 px-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
+                              >
+                                <span className="flex-shrink-0 inline-flex items-center justify-center h-6 w-6 rounded-full bg-primary-100 text-primary-600 text-xs font-medium mr-3 mt-0.5">
+                                  {index + 1}
+                                </span>
+                                <p className="text-sm text-gray-700 leading-relaxed flex-1">
+                                  {question}
+                                </p>
+                              </div>
+                            ))}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-gray-500">
+                          No clarification questions identified.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </Section>
+
+              <Section
+                sid="attachments"
+                title="Attachments"
+                rightMeta={
+                  Array.isArray((rfp as any)?.attachments)
+                    ? `${(rfp as any).attachments.length} files`
+                    : undefined
+                }
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm text-gray-600">
+                    Upload and manage files related to this RFP.
+                  </div>
+                  <button
+                    onClick={() => setShowAttachmentModal(true)}
+                    className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-primary-600 hover:bg-primary-700"
+                  >
+                    <PaperClipIcon className="h-5 w-5 mr-2" />
+                    Add attachments
+                  </button>
+                </div>
+
+                <div className="mt-4">
+                  {rfp?.attachments?.length ? (
+                    <ul role="list" className="divide-y divide-gray-200">
+                      {rfp.attachments.map((file) => (
+                        <li
+                          key={file.fileName}
+                          className="py-4 flex items-center justify-between"
+                        >
+                          <div className="flex items-center space-x-3">
+                            <PaperClipIcon className="h-5 w-5 text-gray-400" />
+                            <div>
+                              <p className="text-sm font-medium text-gray-900">
+                                {file.originalName}
+                              </p>
+                              <p className="text-xs text-gray-500">
+                                {(file.fileSize / 1024).toFixed(1)} KB •{' '}
+                                {file.fileType.toUpperCase()}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() =>
+                              handleDeleteAttachment(
+                                file._id,
+                                file.originalName,
+                              )
+                            }
+                            className="inline-flex items-center p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-md transition-colors"
+                            title="Delete attachment"
+                          >
+                            <XMarkIcon className="h-5 w-5" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-sm text-gray-500">
+                      No attachments uploaded yet.
+                    </p>
+                  )}
+                </div>
+              </Section>
+
+              <Section
+                sid="buyers"
+                title="Buyers"
+                rightMeta={
+                  Array.isArray((rfp as any)?.buyerProfiles)
+                    ? `${(rfp as any).buyerProfiles.length} saved`
+                    : undefined
+                }
+              >
+                {Array.isArray((rfp as any)?.buyerProfiles) &&
+                (rfp as any).buyerProfiles.length > 0 ? (
+                  <div>
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-semibold text-gray-900">
+                          Saved buyer profiles
+                        </div>
+                        <div className="mt-1 text-xs text-gray-600">
+                          Selected:{' '}
+                          <span className="font-semibold">
+                            {buyerSelectedList.length}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={copySavedBuyers}
+                          className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                        >
+                          Copy
+                        </button>
+                        <button
+                          type="button"
+                          onClick={removeSelectedBuyers}
+                          disabled={
+                            buyerRemoving || buyerSelectedList.length === 0
+                          }
+                          className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                        >
+                          {buyerRemoving ? 'Working…' : 'Remove selected'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearAllBuyers}
+                          disabled={buyerRemoving}
+                          className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-red-300 text-red-700 bg-white hover:bg-red-50 disabled:opacity-50"
+                        >
+                          Clear all
+                        </button>
+                        <Link
+                          href={`/linkedin-finder?rfpId=${encodeURIComponent(
+                            rfp._id,
+                          )}`}
+                          className="text-xs text-primary-600 hover:text-primary-800"
+                        >
+                          Update via Buyer Profiles →
+                        </Link>
+                      </div>
+                    </div>
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="min-w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-xs uppercase tracking-wider text-gray-500">
+                            <th className="py-2 pr-4">
+                              <input
+                                ref={buyerHeaderCheckboxRef}
+                                type="checkbox"
+                                onChange={() => {
+                                  const total = visibleSavedTokens.length
+                                  if (total === 0) return
+                                  if (selectedVisibleSavedCount === total) {
+                                    setBuyerSelected((prev) => {
+                                      const next = { ...prev }
+                                      visibleSavedTokens.forEach((tok) => {
+                                        delete next[tok]
+                                      })
+                                      return next
+                                    })
+                                  } else {
+                                    const next: Record<string, boolean> = {}
+                                    visibleSavedTokens.forEach((tok) => {
+                                      next[tok] = true
+                                    })
+                                    setBuyerSelected((prev) => ({
+                                      ...prev,
+                                      ...next,
+                                    }))
+                                  }
+                                }}
+                              />
+                            </th>
+                            <th className="py-2 pr-4">Score</th>
+                            <th className="py-2 pr-4">Name</th>
+                            <th className="py-2 pr-4">Title</th>
+                            <th className="py-2 pr-4">Profile</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-200">
+                          {(rfp as any).buyerProfiles
+                            .slice(0, 25)
+                            .map((p: any) => (
+                              <tr
+                                key={p?.profileId || p?.profileUrl}
+                                className="align-top"
+                              >
+                                <td className="py-3 pr-4">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(
+                                      buyerSelected[buyerToken(p)] || false,
+                                    )}
+                                    onChange={() => {
+                                      const tok = buyerToken(p)
+                                      if (!tok) return
+                                      setBuyerSelected((prev) => ({
+                                        ...prev,
+                                        [tok]: !prev[tok],
+                                      }))
+                                    }}
+                                  />
+                                </td>
+                                <td className="py-3 pr-4 font-semibold text-gray-900">
+                                  {p?.buyerScore ?? 0}
+                                </td>
+                                <td className="py-3 pr-4 text-gray-900">
+                                  <div>{p?.name || '—'}</div>
+                                  {p?.ai?.personaSummary && (
+                                    <div className="mt-1 text-xs text-gray-700 max-w-xl">
+                                      {p.ai.personaSummary}
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="py-3 pr-4 text-gray-900">
+                                  {p?.title || '—'}
+                                </td>
+                                <td className="py-3 pr-4">
+                                  {p?.profileUrl ? (
+                                    <a
+                                      href={p.profileUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="text-primary-600 hover:text-primary-800"
+                                    >
+                                      Open →
+                                    </a>
+                                  ) : (
+                                    '—'
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-500">
+                    No saved buyer profiles yet.
+                  </div>
+                )}
+              </Section>
+
+              <Section sid="generate" title="Generate proposal">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors">
+                    <div className="flex items-center mb-3">
+                      <div className="w-10 h-10 bg-gradient-to-br from-purple-100 to-pink-100 rounded-lg flex items-center justify-center mr-3">
+                        <PlusIcon className="h-5 w-5 text-purple-600" />
+                      </div>
+                      <div>
+                        <h4 className="font-medium text-gray-900">
+                          AI Template
+                        </h4>
+                        <p className="text-sm text-gray-500">
+                          Generate a first-pass proposal
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setShowAIPreviewModal(true)}
+                      className="w-full inline-flex items-center justify-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                    >
+                      Preview
+                    </button>
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <div className="text-sm font-semibold text-gray-900">
+                    Templates
+                  </div>
+                  <div className="mt-2">
+                    {companies.length > 0 && (
+                      <div className="mb-4">
+                        <label className="block text-sm font-medium text-gray-900 mb-2">
+                          Proposal Company / Branding
+                        </label>
+                        <select
+                          value={selectedCompanyId || ''}
+                          onChange={(e) =>
+                            setSelectedCompanyId(e.target.value || null)
+                          }
+                          className="w-full sm:w-96 border border-gray-300 rounded-md px-3 py-2 bg-gray-100 text-gray-900"
+                        >
+                          {companies.map((c) => (
+                            <option key={c.companyId} value={c.companyId}>
+                              {c.name}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="mt-1 text-xs text-gray-500">
+                          Controls Title/Cover Letter/Experience content and
+                          exports.
+                        </p>
+                      </div>
+                    )}
+
+                    {templatesLoading || companiesLoading ? (
+                      <p className="text-sm text-gray-500">
+                        Loading templates/companies…
+                      </p>
+                    ) : templates.length > 0 ? (
+                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        {templates.map((template) => (
+                          <div
+                            key={template.id}
+                            className="border border-gray-200 rounded-lg p-4 hover:border-primary-300 transition-colors"
+                          >
+                            <h4 className="font-medium text-gray-900">
+                              {template.name}
+                            </h4>
+                            <p className="text-sm text-gray-500 mt-1">
+                              {template.sectionCount} sections
+                            </p>
+                            <p className="text-xs text-gray-400 mt-2">
+                              {template.projectType.replace('_', ' ')}
+                            </p>
+                            <button
+                              onClick={() => generateProposal(template.id)}
+                              disabled={generatingTemplate !== null}
+                              className="mt-3 w-full inline-flex items-center justify-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {generatingTemplate === template.id ? (
+                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                              ) : (
+                                <>
+                                  <PlusIcon className="h-4 w-4 mr-1" />
+                                  Generate
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm text-gray-500">
+                          No templates loaded yet.
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void ensureTemplatesLoaded()
+                            void ensureCompaniesLoaded()
+                          }}
+                          className="inline-flex items-center px-3 py-2 text-sm font-medium rounded-md border border-gray-300 text-gray-800 bg-white hover:bg-gray-50"
+                        >
+                          Load templates
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Section>
+
+              <Section sid="proposals" title="Proposals">
+                {proposalsLoading ? (
+                  <p className="text-sm text-gray-500">Loading proposals…</p>
+                ) : rfpProposals.length === 0 ? (
+                  <p className="text-sm text-gray-500">
+                    No proposals yet for this RFP.
+                  </p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Proposal
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Score
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Status
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Updated
+                          </th>
+                          <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Decision
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white divide-y divide-gray-200">
+                        {[...rfpProposals]
+                          .sort((a, b) => {
+                            const as = a?.review?.score
+                            const bs = b?.review?.score
+                            const an = typeof as === 'number' ? as : -1
+                            const bn = typeof bs === 'number' ? bs : -1
+                            if (bn !== an) return bn - an
+                            return (
+                              new Date(b.updatedAt).getTime() -
+                              new Date(a.updatedAt).getTime()
+                            )
+                          })
+                          .map((p) => (
+                            <tr key={p._id} className="hover:bg-gray-50">
+                              <td className="px-4 py-3 text-sm text-gray-900">
+                                <Link
+                                  href={`/proposals/${p._id}`}
+                                  className="text-primary-600 hover:text-primary-800 font-medium"
+                                >
+                                  {p.title}
+                                </Link>
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-900">
+                                {typeof p?.review?.score === 'number'
+                                  ? p.review.score
+                                  : '—'}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-900">
+                                {p.status}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-600">
+                                {p.updatedAt
+                                  ? new Date(p.updatedAt).toLocaleDateString(
+                                      'en-US',
+                                    )
+                                  : '—'}
+                              </td>
+                              <td className="px-4 py-3 text-sm text-gray-900">
+                                <div className="flex items-center space-x-2">
+                                  <button
+                                    onClick={() =>
+                                      setProposalDecision(
+                                        p._id,
+                                        p?.review?.decision === 'shortlist'
+                                          ? ''
+                                          : 'shortlist',
+                                      )
+                                    }
+                                    disabled={updatingDecisionId === p._id}
+                                    className={`px-2 py-1 text-xs font-medium rounded ${
+                                      p?.review?.decision === 'shortlist'
+                                        ? 'bg-green-100 text-green-800'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                    } disabled:opacity-50`}
+                                    title="Toggle shortlist"
+                                  >
+                                    Shortlist
+                                  </button>
+                                  <button
+                                    onClick={() =>
+                                      setProposalDecision(
+                                        p._id,
+                                        p?.review?.decision === 'reject'
+                                          ? ''
+                                          : 'reject',
+                                      )
+                                    }
+                                    disabled={updatingDecisionId === p._id}
+                                    className={`px-2 py-1 text-xs font-medium rounded ${
+                                      p?.review?.decision === 'reject'
+                                        ? 'bg-red-100 text-red-800'
+                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                                    } disabled:opacity-50`}
+                                    title="Toggle reject"
+                                  >
+                                    Reject
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </Section>
+
+              <Section sid="raw" title="Raw / extracted text">
+                <div className="text-xs text-gray-600">
+                  This is what the system extracted from the PDF / AI workflow.
+                </div>
+                <div className="mt-3">
+                  <pre className="whitespace-pre-wrap text-xs bg-gray-50 border border-gray-200 rounded-lg p-3 max-h-[420px] overflow-auto">
+                    {String((rfp as any)?.rawText || '').slice(0, 200000) ||
+                      '(No raw text available)'}
+                  </pre>
+                </div>
+                {(rfp as any)?._analysis ? (
+                  <div className="mt-3 text-xs text-gray-500">
+                    <div className="font-semibold text-gray-700">
+                      Analysis meta
+                    </div>
+                    <pre className="mt-1 whitespace-pre-wrap bg-gray-50 border border-gray-200 rounded-lg p-3 overflow-auto">
+                      {JSON.stringify((rfp as any)._analysis, null, 2)}
+                    </pre>
+                  </div>
+                ) : null}
+              </Section>
+            </main>
+          </div>
+        </>
+      ) : null}
 
       {/* AI Preview Modal */}
       <AIPreviewModal

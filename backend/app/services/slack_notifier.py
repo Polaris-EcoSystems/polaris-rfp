@@ -13,20 +13,38 @@ def _proposal_url(proposal_id: str) -> str:
     return f"{base}/proposals/{proposal_id}"
 
 
-def notify_rfp_upload_job_completed(*, job_id: str, rfp_id: str, file_name: str | None = None) -> None:
+def notify_rfp_upload_job_completed(
+    *,
+    job_id: str,
+    rfp_id: str,
+    file_name: str | None = None,
+    channel: str | None = None,
+) -> None:
     rid = str(rfp_id or "").strip()
     link = f"<{_rfp_url(rid)}|Open RFP>" if rid else "(no rfpId)"
     name = str(file_name or "").strip() or "upload.pdf"
+    ch = str(channel or settings.slack_rfp_machine_channel or "").strip() or None
     post_message(
         text=f"RFP upload completed: {link} (job `{job_id}`, file `{name}`)",
+        channel=ch,
         unfurl_links=False,
     )
 
 
-def notify_rfp_upload_job_failed(*, job_id: str, error: str, file_name: str | None = None) -> None:
+def notify_rfp_upload_job_failed(
+    *,
+    job_id: str,
+    error: str,
+    file_name: str | None = None,
+    channel: str | None = None,
+) -> None:
     name = str(file_name or "").strip() or "upload.pdf"
     err = str(error or "").strip() or "Unknown error"
-    post_message(text=f"RFP upload failed (job `{job_id}`, file `{name}`): {err}")
+    ch = str(channel or settings.slack_rfp_machine_channel or "").strip() or None
+    post_message(
+        text=f"RFP upload failed (job `{job_id}`, file `{name}`): {err}",
+        channel=ch,
+    )
 
 
 def notify_finder_run_done(

@@ -139,6 +139,8 @@ export interface RFP {
   dateMeta?: any
   fitScore?: number
   fitReasons?: string[]
+  sourceS3Key?: string
+  sourceS3Uri?: string
   review?: {
     decision?: '' | 'bid' | 'no_bid' | 'maybe'
     notes?: string
@@ -281,7 +283,6 @@ export const rfpApi = {
 
     // Poll until the backend finishes analysis (or fails).
     // Keep returning an AxiosResponse-compatible Promise at the end (like before).
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       if (Date.now() - start > maxMs) {
         throw new Error('RFP analysis timed out')
@@ -324,6 +325,8 @@ export const rfpApi = {
       },
     }),
   get: (id: string) => api.get<RFP>(proxyUrl(`/api/rfp/${cleanPathToken(id)}`)),
+  presignSourcePdf: (id: string) =>
+    api.get(proxyUrl(`/api/rfp/${cleanPathToken(id)}/source-pdf/presign`)),
   update: (id: string, data: any) =>
     api.put<RFP>(proxyUrl(`/api/rfp/${cleanPathToken(id)}`), data),
   updateReview: (
@@ -351,6 +354,12 @@ export const rfpApi = {
     api.post<{ titles: string[] }>(
       proxyUrl(`/api/rfp/${cleanPathToken(id)}/ai-section-titles`),
     ),
+  reanalyze: (id: string) =>
+    api.post<RFP>(proxyUrl(`/api/rfp/${cleanPathToken(id)}/ai-reanalyze`)),
+  aiRefreshStreamUrl: (id: string) =>
+    proxyUrl(`/api/rfp/${cleanPathToken(id)}/ai-refresh/stream`),
+  aiSummaryStreamUrl: (id: string) =>
+    proxyUrl(`/api/rfp/${cleanPathToken(id)}/ai-summary/stream`),
   getProposals: (id: string) =>
     api.get<{ data: Proposal[] }>(
       proxyUrl(`/api/rfp/${cleanPathToken(id)}/proposals`),

@@ -24,6 +24,34 @@ class RfpAnalysisAI(BaseModel):
     clarificationQuestions: list[str] = Field(default_factory=list)
 
 
+# --- RFP analysis (split) ---
+# These are intentionally small so we can call the model for each "bucket" and
+# merge results server-side (fewer schema failures; easy to parallelize).
+class RfpMetaAI(BaseModel):
+    title: str = ""
+    clientName: str = ""
+    budgetRange: str = ""
+    projectType: str = ""
+    location: str = ""
+    contactInformation: str = ""
+
+
+class RfpDatesAI(BaseModel):
+    submissionDeadline: str = "Not available"
+    questionsDeadline: str = "Not available"
+    bidMeetingDate: str = "Not available"
+    bidRegistrationDate: str = "Not available"
+    projectDeadline: str = "Not available"
+
+
+class RfpListsAI(BaseModel):
+    keyRequirements: list[str] = Field(default_factory=list)
+    deliverables: list[str] = Field(default_factory=list)
+    criticalInformation: list[str] = Field(default_factory=list)
+    timeline: list[str] = Field(default_factory=list)
+    clarificationQuestions: list[str] = Field(default_factory=list)
+
+
 class SectionTitlesAI(BaseModel):
     titles: list[str] = Field(default_factory=list)
 
