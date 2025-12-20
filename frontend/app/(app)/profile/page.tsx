@@ -35,6 +35,7 @@ export default function ProfilePage() {
   const [profile, setProfile] = useState<CognitoProfileResponse | null>(null)
   const [polarisProfile, setPolarisProfile] = useState<UserProfile | null>(null)
   const [polarisSaving, setPolarisSaving] = useState(false)
+  const [onboardingSaving, setOnboardingSaving] = useState(false)
   const [sessions, setSessions] = useState<UserSession[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
 
@@ -400,6 +401,191 @@ export default function ProfilePage() {
               }}
             >
               {polarisSaving ? 'Saving…' : 'Save Polaris profile'}
+            </Button>
+          </div>
+        </CardFooter>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <div className="text-sm font-semibold text-gray-900">
+            Onboarding information
+          </div>
+          <div className="text-xs text-gray-600">
+            Profile details from your onboarding. You can edit these here or via
+            the onboarding flow.
+          </div>
+        </CardHeader>
+        <CardBody>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-500">
+                Full name
+              </label>
+              <input
+                value={String(polarisProfile?.fullName ?? '')}
+                onChange={(e) =>
+                  setPolarisProfile((p) => ({
+                    ...(p || ({} as any)),
+                    fullName: e.target.value,
+                  }))
+                }
+                className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                placeholder="Jane Doe"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500">
+                Job title(s)
+              </label>
+              <textarea
+                value={
+                  Array.isArray(polarisProfile?.jobTitles)
+                    ? polarisProfile.jobTitles.join('\n')
+                    : ''
+                }
+                onChange={(e) => {
+                  const lines = e.target.value
+                    .split('\n')
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+                  setPolarisProfile((p) => ({
+                    ...(p || ({} as any)),
+                    jobTitles: lines,
+                  }))
+                }}
+                className="mt-1 w-full min-h-[100px] rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                placeholder="Senior Engineer\nProject Manager"
+              />
+              <div className="mt-1 text-[11px] text-gray-500">
+                One per line. We'll use the first one as your default title.
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500">
+                Certifications
+              </label>
+              <textarea
+                value={
+                  Array.isArray(polarisProfile?.certifications)
+                    ? polarisProfile.certifications.join('\n')
+                    : ''
+                }
+                onChange={(e) => {
+                  const lines = e.target.value
+                    .split('\n')
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+                  setPolarisProfile((p) => ({
+                    ...(p || ({} as any)),
+                    certifications: lines,
+                  }))
+                }}
+                className="mt-1 w-full min-h-[100px] rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                placeholder="PE\nPMP\nLEED AP"
+              />
+              <div className="mt-1 text-[11px] text-gray-500">
+                One per line.
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500">
+                Resumes
+              </label>
+              {Array.isArray(polarisProfile?.resumeAssets) &&
+              polarisProfile.resumeAssets.length > 0 ? (
+                <div className="mt-1 space-y-2">
+                  {polarisProfile.resumeAssets.map((asset) => (
+                    <div
+                      key={asset.assetId}
+                      className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2"
+                    >
+                      <div className="text-sm font-medium text-gray-900">
+                        {asset.fileName || asset.assetId}
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        {asset.contentType || '—'}
+                        {asset.uploadedAt
+                          ? ` • uploaded ${new Date(
+                              asset.uploadedAt,
+                            ).toLocaleDateString()}`
+                          : ''}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-1 text-sm text-gray-600">
+                  No resumes uploaded.
+                </div>
+              )}
+              <div className="mt-2 text-[11px] text-gray-500">
+                To upload or manage resumes, visit the{' '}
+                <a
+                  href="/onboarding"
+                  className="text-blue-600 hover:text-blue-700 underline"
+                >
+                  onboarding page
+                </a>
+                .
+              </div>
+            </div>
+          </div>
+        </CardBody>
+        <CardFooter>
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={onboardingSaving}
+              onClick={async () => {
+                try {
+                  // Reset to original values from server
+                  const resp = await userProfileApi.get()
+                  const p = resp?.data?.profile ?? null
+                  setPolarisProfile(p)
+                  toast.info('Changes reset')
+                } catch {
+                  toast.error('Failed to reload profile')
+                }
+              }}
+            >
+              Reset
+            </Button>
+            <Button
+              disabled={onboardingSaving}
+              onClick={async () => {
+                try {
+                  setOnboardingSaving(true)
+                  const payload: Partial<UserProfile> = {
+                    fullName:
+                      String(polarisProfile?.fullName ?? '').trim() || null,
+                    jobTitles: Array.isArray(polarisProfile?.jobTitles)
+                      ? polarisProfile.jobTitles
+                      : [],
+                    certifications: Array.isArray(
+                      polarisProfile?.certifications,
+                    )
+                      ? polarisProfile.certifications
+                      : [],
+                    // Note: resumeAssets are managed via onboarding page
+                  }
+                  const resp = await userProfileApi.update(payload)
+                  const p = (resp as any)?.data?.profile ?? (resp as any)?.data
+                  if (p && typeof p === 'object') setPolarisProfile(p)
+                  toast.success('Onboarding information saved')
+                } catch (e: any) {
+                  toast.error(
+                    e?.message
+                      ? `Failed to save: ${e.message}`
+                      : 'Failed to save onboarding information',
+                  )
+                } finally {
+                  setOnboardingSaving(false)
+                }
+              }}
+            >
+              {onboardingSaving ? 'Saving…' : 'Save changes'}
             </Button>
           </div>
         </CardFooter>

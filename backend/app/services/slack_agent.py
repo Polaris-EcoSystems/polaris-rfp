@@ -39,6 +39,20 @@ def _is_whats_my_name(q: str) -> bool:
     )
 
 
+def _is_whats_my_preferences(q: str) -> bool:
+    s = str(q or "").strip().lower()
+    if not s:
+        return False
+    # Keep this conservative to avoid false positives.
+    return bool(
+        re.search(r"\bwhat('?s| are)\s+my\s+preferences\b", s)
+        or re.search(r"\bwhat\s+do\s+you\s+know\s+about\s+my\s+preferences\b", s)
+        or re.search(r"\bdo\s+you\s+have\s+.*\s+preferences\b", s)
+        or re.search(r"\bshow\s+my\s+preferences\b", s)
+        or re.search(r"\blist\s+my\s+preferences\b", s)
+    )
+
+
 def _frontend_url(path: str) -> str:
     base = str(settings.frontend_base_url or "").rstrip("/")
     p = str(path or "").strip()
@@ -461,6 +475,41 @@ def run_slack_agent_question(
             src = "profile" if (preferred or full) else "Slack"
             return SlackAgentAnswer(text=f"Your name is *{name}* (from {src}).")
         return SlackAgentAnswer(text="I don’t know your name yet. Set it in your profile and I’ll remember it.")
+
+    # Deterministic handler for preference questions.
+    if _is_whats_my_preferences(q):
+        prof = user_profile if isinstance(user_profile, dict) else {}
+        prefs = prof.get("aiPreferences") if isinstance(prof.get("aiPreferences"), dict) else {}
+        user_sub = str(prof.get("_id") or prof.get("userSub") or "").strip()
+        
+        if isinstance(prefs, dict) and prefs:
+            try:
+                # Format preferences nicely for display
+                prefs_str = json.dumps(prefs, ensure_ascii=False, indent=2)
+                return SlackAgentAnswer(
+                    text=f"Here are your saved preferences:\n\n```\n{prefs_str}\n```"
+                )
+            except Exception:
+                # Fallback to simple format if JSON serialization fails
+                pref_lines = []
+                for k, v in prefs.items():
+                    if isinstance(v, str):
+                        pref_lines.append(f"• {k}: {v}")
+                    else:
+                        pref_lines.append(f"• {k}: {json.dumps(v, ensure_ascii=False)}")
+                return SlackAgentAnswer(
+                    text="Here are your saved preferences:\n\n" + "\n".join(pref_lines) if pref_lines else "No preferences found."
+                )
+        
+        # No preferences found
+        if user_sub:
+            return SlackAgentAnswer(
+                text=f"I don't currently have any saved preferences for you (user_sub: `{user_sub}`).\n\nIf you tell me what you want saved (e.g., default proposal tone, preferred section owners, turnaround times, notification cadence, naming conventions), I can store it for next time."
+            )
+        return SlackAgentAnswer(
+            text="I don't currently have any saved preferences for you.\n\nIf you tell me what you want saved (e.g., default proposal tone, preferred section owners, turnaround times, notification cadence, naming conventions), I can store it for next time."
+        )
+
 
     if not settings.openai_api_key:
         raise AiNotConfigured("OPENAI_API_KEY not configured")
