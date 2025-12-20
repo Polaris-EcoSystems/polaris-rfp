@@ -11,7 +11,6 @@ from ..ai.schemas import (
     AiGenerateContentResponse,
 )
 from ..observability.logging import get_logger
-from ..settings import settings
 
 router = APIRouter(tags=["ai"])
 log = get_logger("api.ai")

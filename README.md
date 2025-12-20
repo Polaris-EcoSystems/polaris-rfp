@@ -87,6 +87,29 @@ API_BASE_URL=http://localhost:8080 npm run dev
 - **Frontend tests**: `cd frontend && npm test`
 - **Frontend lint**: `cd frontend && npm run lint`
 
+## Git hooks (pre-commit / pre-push)
+
+This repo includes a `.pre-commit-config.yaml` that mirrors the **non-deploy** CI checks:
+
+- **pre-commit**: backend `ruff` (fast sanity checks)
+- **pre-push**: backend `ruff + mypy + pytest`, frontend `lint + test + build`, and `cfn-lint`
+
+Install once:
+
+```bash
+brew install pre-commit
+# or: pipx install pre-commit
+pre-commit install
+pre-commit install --hook-type pre-push
+```
+
+Run manually (optional):
+
+```bash
+pre-commit run --all-files
+pre-commit run --hook-stage pre-push --all-files
+```
+
 ## Slack integration (commands + agent)
 
 The backend exposes Slack endpoints under:

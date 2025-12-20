@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from ..ai.client import AiError, AiNotConfigured, call_json
+from ..ai.client import call_json
 from ..ai.schemas import CapabilitiesStatementAI
 
 from ..settings import settings

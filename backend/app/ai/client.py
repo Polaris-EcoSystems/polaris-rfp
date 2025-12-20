@@ -5,7 +5,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Generic, TypeVar, cast
+from typing import Any, Callable, TypeVar
 
 from pydantic import BaseModel
 

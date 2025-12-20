@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable
 
 
 def clip_text(text: str, *, max_chars: int) -> str:

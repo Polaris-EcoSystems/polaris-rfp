@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Request
 import base64
 import os
@@ -14,7 +16,6 @@ from ..services.magic_links_repo import (
     delete_magic_session,
     delete_magic_session_for_email,
     get_magic_session,
-    get_latest_magic_session_for_email,
     get_recent_magic_sessions_for_email,
     put_magic_session,
     put_magic_session_for_email,
@@ -665,7 +666,7 @@ def refresh_session(request: Request):
 
         # Unknown ClientError: treat as transient to avoid logging users out.
         raise HTTPException(status_code=503, detail="Auth refresh temporarily unavailable")
-    except Exception as e:
+    except Exception:
         # Unknown failures: do not delete session; return 503 to avoid surprise logouts.
         if acquired_lock:
             try:

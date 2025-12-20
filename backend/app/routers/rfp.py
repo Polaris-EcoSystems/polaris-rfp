@@ -45,7 +45,7 @@ from ..services.slack_notifier import (
 )
 from ..observability.logging import get_logger
 from ..settings import settings
-from ..ai.client import call_text, stream_text, AiNotConfigured, AiError, AiUpstreamError
+from ..ai.client import call_text, AiNotConfigured, AiError, AiUpstreamError
 from ..ai.context import clip_text
 from ..ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI
 
@@ -212,6 +212,7 @@ def presign_upload(body: dict = Body(...)):
     return {
         "ok": True,
         "duplicate": False,
+        "fileName": file_name,
         "bucket": put["bucket"],
         "key": key,
         "s3Uri": to_s3_uri(bucket=put["bucket"], key=key),
@@ -820,7 +821,7 @@ def ai_refresh_stream(id: str):
                         parsed, meta = fut.result()
                         updates = parsed.model_dump()
 
-                        updated = update_rfp(id, updates) or {}
+                        update_rfp(id, updates)
                         fields_meta.append(
                             {
                                 "purpose": meta.purpose,

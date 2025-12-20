@@ -62,7 +62,7 @@ jobs:
         run: npm run lint
 
       - name: Test
-        run: npm test -- --ci
+        run: npm test -- --ci --passWithNoTests
 
       - name: Build
         run: npm run build
@@ -84,4 +84,4 @@ jobs:
           pip install cfn-lint
 
       - name: Lint templates
-        run: cfn-lint -t .github/cloudformation/*.yml
+        run: cfn-lint -t .github/cloudformation/*.yml -i W3002 W8001

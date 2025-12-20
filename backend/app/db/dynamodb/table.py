@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
 from boto3.dynamodb.types import TypeSerializer
-from botocore.exceptions import ClientError
 
 from .client import dynamodb_client, table_resource
 from .errors import DdbInternal, DdbNotFound

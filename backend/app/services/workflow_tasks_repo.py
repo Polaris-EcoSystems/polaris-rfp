@@ -237,7 +237,6 @@ def complete_task(*, task_id: str, completed_by_user_sub: str | None) -> dict[st
     now = now_iso()
     # We need the existing record to recompute gsi1sk for status change.
     raw = get_main_table().get_required(key=task_key(tid), message="Task not found")
-    rid = str(raw.get("rfpId") or "").strip()
     due_at = str(raw.get("dueAt") or "").strip() or None
 
     updated = get_main_table().update_item(

@@ -210,7 +210,7 @@ def presign_resume_upload(request: Request, body: ResumePresignRequest):
 def complete_profile(request: Request, body: dict = Body(default_factory=dict)):
     sub, email, username = _current_user(request)
     # Ensure profile exists
-    prof = get_user_profile(user_sub=sub) or upsert_user_profile(user_sub=sub, email=email, updates={})
+    get_user_profile(user_sub=sub) or upsert_user_profile(user_sub=sub, email=email, updates={})
     saved = mark_profile_complete(user_sub=sub, onboarding_version=1)
 
     # Sync to Team Member and persist link

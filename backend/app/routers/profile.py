@@ -46,7 +46,7 @@ def _get_profile_payload(request: Request) -> dict[str, Any]:
         user_resp = cognito_idp.admin_get_user(
             user_pool_id=settings.cognito_user_pool_id, username=username
         )
-    except Exception as e:
+    except Exception:
         # Don't leak AWS internals; treat as not found / misconfigured
         raise HTTPException(status_code=404, detail="User not found")
 

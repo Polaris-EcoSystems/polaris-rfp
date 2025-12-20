@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from ..services import content_repo
 from ..services.company_capabilities import regenerate_company_capabilities

@@ -139,7 +139,6 @@ Conditions:
   UseProvidedCanvaClientSecret: !Not [!Equals [!Ref CanvaClientSecret, '']]
   UseProvidedCanvaRedirectUri: !Not [!Equals [!Ref CanvaRedirectUri, '']]
   UseProvidedCanvaTokenEncKey: !Not [!Equals [!Ref CanvaTokenEncKey, '']]
-  UseProvidedDdbTableName: !Not [!Equals [!Ref DdbTableName, '']]
   UseProvidedJwtSecret: !Not [!Equals [!Ref JwtSecret, '']]
 
 Resources:

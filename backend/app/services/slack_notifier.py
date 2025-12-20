@@ -10,6 +10,7 @@ from .slack_web import (
     chat_post_message_result,
     lookup_user_id_by_email,
     open_dm_channel,
+    post_message,
     post_message_result,
 )
 from ..observability.logging import get_logger

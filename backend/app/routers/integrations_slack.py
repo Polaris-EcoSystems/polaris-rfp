@@ -28,7 +28,6 @@ from ..services.slack_web import (
     get_bot_token,
     is_slack_configured,
     list_recent_channel_pdfs,
-    post_message,
     post_message_result,
     chat_post_message_result,
 )
@@ -884,14 +883,6 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
 
         r = hits[0]
         rid = str(r.get("_id") or "").strip()
-        title = str(r.get("title") or "RFP").strip()
-        client = str(r.get("clientName") or "").strip()
-        ptype = str(r.get("projectType") or "").strip()
-        due = str(r.get("submissionDeadline") or "").strip()
-        du = _days_until_submission(r)
-        fit = r.get("fitScore")
-        review = r.get("review") if isinstance(r.get("review"), dict) else {}
-        decision = str((review or {}).get("decision") or "").strip() or "unreviewed"
         warnings = r.get("dateWarnings") if isinstance(r.get("dateWarnings"), list) else []
         reqs = r.get("keyRequirements") if isinstance(r.get("keyRequirements"), list) else []
 
