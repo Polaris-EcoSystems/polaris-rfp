@@ -947,7 +947,7 @@ def run_slack_operator_for_mention(
             user_ctx_lines.append(f"- linked_team_member_id: {linked_team_member_id}")
             # Fetch and include team member details
             try:
-                from .. import content_repo
+                from . import content_repo
                 team_member = content_repo.get_team_member_by_id(str(linked_team_member_id).strip())
                 if team_member and isinstance(team_member, dict):
                     tm_name = str(team_member.get("nameWithCredentials") or team_member.get("name") or "").strip()
