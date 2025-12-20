@@ -88,6 +88,48 @@ STAGE_TASK_TEMPLATES: dict[PipelineStage, list[StageTaskTemplate]] = {
             "description": "Submit to the client and record submission confirmation.",
         },
     ],
+    "Contracting": [
+        {
+            "templateId": "contracting_create_case",
+            "title": "Start contracting",
+            "description": "Confirm win, assign an owner, and capture initial contracting notes.",
+        },
+        {
+            "templateId": "contracting_generate_contract",
+            "title": "Generate contract draft",
+            "description": "Generate the initial contract draft from approved templates and proposal data.",
+        },
+        {
+            "templateId": "contracting_legal_review",
+            "title": "Legal review / risk mitigations",
+            "description": "Review legal language, assumptions, and risk mitigations; document changes.",
+        },
+        {
+            "templateId": "contracting_finalize_budget",
+            "title": "Finalize project budget (internal)",
+            "description": "Finalize budget model and generate the internal Excel workbook.",
+        },
+        {
+            "templateId": "contracting_collect_supporting_docs",
+            "title": "Collect required supporting documents",
+            "description": "Upload insurance certificates, certifications, and any required client forms.",
+        },
+        {
+            "templateId": "contracting_publish_package",
+            "title": "Publish client package",
+            "description": "Assemble contract + budget + supporting docs into a client portal package and publish a link.",
+        },
+        {
+            "templateId": "contracting_esign_send",
+            "title": "Send for signature",
+            "description": "Send the contract for signature (provider stub for now) and track status.",
+        },
+        {
+            "templateId": "contracting_archive",
+            "title": "Archive contracting artifacts",
+            "description": "Record countersignature, store final versions, and archive the package.",
+        },
+    ],
     "Submitted": [],
     "NoBid": [],
     "Disqualified": [],

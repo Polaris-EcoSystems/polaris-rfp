@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import httpx
@@ -10,6 +11,9 @@ from .slack_secrets import get_secret_str
 
 
 log = get_logger("slack")
+
+_USER_INFO_CACHE_TTL_S = 300
+_user_info_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def get_bot_token() -> str | None:
@@ -114,6 +118,58 @@ def lookup_user_id_by_email(email: str) -> str | None:
         return None
     uid = str(user.get("id") or "").strip()
     return uid or None
+
+
+def get_user_info(*, user_id: str, force_refresh: bool = False) -> dict[str, Any] | None:
+    """
+    Fetch Slack user info (users.info) for a Slack user id.
+
+    Requires scope: users:read (email additionally needs users:read.email).
+
+    Returns the 'user' dict if present, else None.
+    """
+    uid = str(user_id or "").strip()
+    if not uid:
+        return None
+
+    now = time.time()
+    if not force_refresh:
+        cached = _user_info_cache.get(uid)
+        if cached:
+            ts, payload = cached
+            if (now - float(ts)) < float(_USER_INFO_CACHE_TTL_S):
+                return payload
+
+    resp = slack_api_get(method="users.info", params={"user": uid})
+    if not bool(resp.get("ok")):
+        return None
+    user = resp.get("user")
+    if not isinstance(user, dict):
+        return None
+    out = dict(user)
+    _user_info_cache[uid] = (now, out)
+    return out
+
+
+def slack_user_display_name(user: dict[str, Any] | None) -> str | None:
+    """
+    Best-effort: choose a friendly display name from Slack's user/profile shape.
+    """
+    if not isinstance(user, dict):
+        return None
+    prof = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+    candidates = [
+        str(prof.get("display_name_normalized") or "").strip(),
+        str(prof.get("display_name") or "").strip(),
+        str(prof.get("real_name_normalized") or "").strip(),
+        str(prof.get("real_name") or "").strip(),
+        str(user.get("real_name") or "").strip(),
+        str(user.get("name") or "").strip(),
+    ]
+    for c in candidates:
+        if c:
+            return c
+    return None
 
 
 def open_dm_channel(*, user_id: str) -> str | None:

@@ -19,6 +19,8 @@ pypdf==5.1.0
 python-docx==1.1.2
 reportlab==4.2.5
 docx2txt==0.8
+docxtpl==0.20.2
+openpyxl==3.1.2
 opentelemetry-api
 opentelemetry-sdk
 opentelemetry-exporter-otlp

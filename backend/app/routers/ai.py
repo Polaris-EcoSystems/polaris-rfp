@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
 from ..ai.client import AiNotConfigured, AiUpstreamError, call_text
+from ..ai.user_context import load_user_profile_from_request, user_context_block
 from ..ai.schemas import (
     AiEditTextRequest,
     AiEditTextResponse,
@@ -17,7 +18,7 @@ log = get_logger("api.ai")
 
 
 @router.post("/edit-text")
-def edit_text(body: dict):
+def edit_text(body: dict, request: Request):
     try:
         req = AiEditTextRequest.model_validate(body or {})
     except ValidationError as e:
@@ -32,6 +33,7 @@ def edit_text(body: dict):
 
     text_to_process = str(req.selectedText or req.text or "")
 
+    user_ctx = user_context_block(user_profile=load_user_profile_from_request(request))
     system_prompt = (
         "You are an expert proposal writer and editor. Your PRIMARY GOAL is to "
         "FOLLOW THE USER'S INSTRUCTION EXACTLY and make changes that directly "
@@ -51,6 +53,8 @@ def edit_text(body: dict):
         "ask for, deliver it with clear, substantial changes. Don't be subtle - make "
         "bold transformations that match their request."
     )
+    if user_ctx:
+        system_prompt += f"\n\nUSER_CONTEXT:\n{user_ctx}"
 
     user_prompt = (
         f'USER\'S SPECIFIC INSTRUCTION: "{prompt}"\n\n'
@@ -101,7 +105,7 @@ def edit_text(body: dict):
 
 
 @router.post("/generate-content")
-def generate_content(body: dict):
+def generate_content(body: dict, request: Request):
     try:
         req = AiGenerateContentRequest.model_validate(body or {})
     except ValidationError as e:
@@ -114,6 +118,7 @@ def generate_content(body: dict):
     context = req.context
     content_type = str(req.contentType or "general")
 
+    user_ctx = user_context_block(user_profile=load_user_profile_from_request(request))
     system_prompt = (
         "You are an expert proposal writer and business content specialist. Your "
         "PRIMARY GOAL is to generate content that EXACTLY matches what the user is asking for.\n\n"
@@ -136,6 +141,8 @@ def generate_content(body: dict):
 
     if context:
         system_prompt += f"\n\nADDITIONAL CONTEXT TO INCORPORATE:\n{context}"
+    if user_ctx:
+        system_prompt += f"\n\nUSER_CONTEXT:\n{user_ctx}"
 
     user_prompt = (
         f"USER'S REQUEST: {prompt}\n\n"

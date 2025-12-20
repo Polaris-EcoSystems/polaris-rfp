@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -23,6 +24,18 @@ class SlackAgentAnswer:
     text: str
     blocks: list[dict[str, Any]] | None = None
     meta: dict[str, Any] | None = None
+
+
+def _is_whats_my_name(q: str) -> bool:
+    s = str(q or "").strip().lower()
+    if not s:
+        return False
+    # Keep this conservative to avoid false positives.
+    return bool(
+        re.search(r"\bwhat('?s| is)\s+my\s+name\b", s)
+        or re.search(r"\bwho\s+am\s+i\b", s)
+        or re.search(r"\bdo\s+you\s+know\s+my\s+name\b", s)
+    )
 
 
 def _frontend_url(path: str) -> str:
@@ -466,7 +479,16 @@ def _propose_action_tool_def() -> dict[str, Any]:
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["seed_tasks_for_rfp", "assign_task", "complete_task"],
+                    "enum": [
+                        "seed_tasks_for_rfp",
+                        "assign_task",
+                        "complete_task",
+                        "update_user_profile",
+                        # Self-modifying pipeline (approval-gated)
+                        "self_modify_open_pr",
+                        "self_modify_check_pr",
+                        "self_modify_verify_ecs",
+                    ],
                 },
                 "args": {"type": "object"},
                 "summary": {"type": "string", "maxLength": 400},
@@ -507,6 +529,9 @@ def run_slack_agent_question(
     *,
     question: str,
     user_id: str | None,
+    user_display_name: str | None = None,
+    user_email: str | None = None,
+    user_profile: dict[str, Any] | None = None,
     channel_id: str | None,
     thread_ts: str | None = None,
     max_steps: int = 6,
@@ -520,6 +545,17 @@ def run_slack_agent_question(
             text="Ask a question like: `What RFPs are due this week?` or `Summarize the latest RFP.`"
         )
 
+    # Deterministic personalization for common identity questions.
+    if _is_whats_my_name(q):
+        prof = user_profile if isinstance(user_profile, dict) else {}
+        preferred = str(prof.get("preferredName") or "").strip() if isinstance(prof, dict) else ""
+        full = str(prof.get("fullName") or "").strip() if isinstance(prof, dict) else ""
+        name = preferred or full or str(user_display_name or "").strip()
+        if name:
+            src = "profile" if (preferred or full) else "Slack"
+            return SlackAgentAnswer(text=f"- Your name is *{name}* (from {src}).")
+        return SlackAgentAnswer(text="- I don’t know your name yet. Set it in your profile and I’ll remember it.")
+
     if not settings.openai_api_key:
         raise AiNotConfigured("OPENAI_API_KEY not configured")
 
@@ -532,12 +568,39 @@ def run_slack_agent_question(
     tool_names = [tpl["name"] for tpl in tools if isinstance(tpl, dict) and tpl.get("name")]
     chat_tools = [_to_chat_tool(tpl) for tpl in tools if isinstance(tpl, dict)]
 
+    # User memory/preferences injected into system prompt (bounded).
+    prof = user_profile if isinstance(user_profile, dict) else {}
+    preferred = str(prof.get("preferredName") or "").strip()
+    full = str(prof.get("fullName") or "").strip()
+    effective_name = preferred or full or (str(user_display_name or "").strip() if user_display_name else "")
+    prefs = prof.get("aiPreferences") if isinstance(prof.get("aiPreferences"), dict) else {}
+    mem = str(prof.get("aiMemorySummary") or "").strip()
+    user_ctx_lines: list[str] = []
+    if effective_name:
+        user_ctx_lines.append(f"- name: {effective_name}")
+    if user_email:
+        user_ctx_lines.append(f"- email: {str(user_email).strip().lower()}")
+    if user_id:
+        user_ctx_lines.append(f"- slack_user_id: {str(user_id).strip()}")
+    if isinstance(prefs, dict) and prefs:
+        # Keep this compact.
+        try:
+            user_ctx_lines.append(f"- preferences_json: {clip_text(json.dumps(prefs, ensure_ascii=False), max_chars=1200)}")
+        except Exception:
+            pass
+    if mem:
+        user_ctx_lines.append(f"- memory_summary: {clip_text(mem, max_chars=1200)}")
+    user_ctx = "\n".join(user_ctx_lines).strip()
+
     system = "\n".join(
         [
             "You are Polaris, a Slack assistant for an RFP/proposal workflow platform.",
             "You can answer questions by calling tools to fetch current platform data.",
-            "If the user asks you to perform an action (seed tasks, assign/complete a task), call `propose_action` with a concise summary and the minimal args needed.",
+            "If the user asks you to perform an action (seed tasks, assign/complete a task, or update their saved preferences/memory), call `propose_action` with a concise summary and the minimal args needed.",
             "Never execute actions yourself; always propose then wait for confirmation.",
+            "",
+            "User context (authoritative; do not guess beyond this):",
+            user_ctx or "- (none provided)",
             "",
             "Output rules:",
             "- Be concise: 3–7 bullets maximum.",

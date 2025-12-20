@@ -23,6 +23,7 @@ type PipelineStage =
   | 'Rework'
   | 'ReadyToSubmit'
   | 'Submitted'
+  | 'Contracting'
   | 'NoBid'
   | 'Disqualified'
 
@@ -62,6 +63,11 @@ const STAGE_DEFS: {
     helpKey: 'pipeline.stages.Submitted.help',
   },
   {
+    id: 'Contracting',
+    labelKey: 'pipeline.stages.Contracting.label',
+    helpKey: 'pipeline.stages.Contracting.help',
+  },
+  {
     id: 'NoBid',
     labelKey: 'pipeline.stages.NoBid.label',
     helpKey: 'pipeline.stages.NoBid.help',
@@ -92,6 +98,7 @@ function getStage(rfp: RFP, proposals: Proposal[]): PipelineStage {
     .trim()
     .toLowerCase()
 
+  if (status === 'won') return 'Contracting'
   if (status === 'submitted') return 'Submitted'
   if (status === 'ready_to_submit') return 'ReadyToSubmit'
   if (status === 'rework' || status === 'needs_changes') return 'Rework'
@@ -316,6 +323,7 @@ export default function PipelinePage() {
     if (stage === 'Rework') return t('pipeline.hints.rework')
     if (stage === 'ReadyToSubmit') return t('pipeline.hints.readyToSubmit')
     if (stage === 'Submitted') return t('pipeline.hints.submitted')
+    if (stage === 'Contracting') return t('pipeline.hints.contracting')
     return t('pipeline.hints.bidDecision')
   }
 

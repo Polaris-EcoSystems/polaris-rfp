@@ -34,6 +34,10 @@ def is_public_path(path: str) -> bool:
     if path.startswith("/api/integrations/slack/"):
         return True
 
+    # Client portal endpoints are authenticated via opaque portal tokens.
+    if path.startswith("/api/client/portal/"):
+        return True
+
     return False
 
 

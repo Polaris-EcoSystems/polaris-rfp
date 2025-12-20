@@ -121,6 +121,17 @@ def head_object(*, key: str) -> dict[str, Any]:
     return _s3_client().head_object(Bucket=bucket, Key=str(key))
 
 
+def put_object_bytes(*, key: str, data: bytes, content_type: str | None = None) -> dict[str, Any]:
+    """
+    Upload bytes to S3 (assets bucket).
+    """
+    bucket = get_assets_bucket_name()
+    kwargs: dict[str, Any] = {"Bucket": bucket, "Key": str(key), "Body": data or b""}
+    if content_type:
+        kwargs["ContentType"] = str(content_type)
+    return _s3_client().put_object(**kwargs)
+
+
 def get_object_bytes(*, key: str, max_bytes: int = 60 * 1024 * 1024) -> bytes:
     """
     Download an object into memory, with a safety max to prevent OOM.

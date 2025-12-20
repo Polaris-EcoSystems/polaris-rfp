@@ -27,6 +27,8 @@ function isPublicPath(pathname: string): boolean {
   if (p === '/magic') return true
   if (p === '/reset-password') return true
   if (p.startsWith('/reset-password/')) return true
+  if (p === '/client-portal') return true
+  if (p.startsWith('/client-portal/')) return true
   return false
 }
 

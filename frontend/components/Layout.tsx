@@ -37,8 +37,8 @@ import {
 } from 'react'
 import api, { extractList, proxyUrl, rfpApi, type RFP } from '../lib/api'
 import { useAuth } from '../lib/auth'
-import GlobalSearch from './GlobalSearch'
 import AuthRefreshStatus from './AuthRefreshStatus'
+import GlobalSearch from './GlobalSearch'
 import Modal from './ui/Modal'
 
 interface LayoutProps {
@@ -242,6 +242,13 @@ export default function Layout({ children }: LayoutProps) {
         href: '/templates',
         icon: CogIcon,
         current: pathname.startsWith('/templates'),
+      },
+      {
+        id: 'contract-templates',
+        label: t('nav.contractTemplates'),
+        href: '/contract-templates',
+        icon: CogIcon,
+        current: pathname.startsWith('/contract-templates'),
       },
       {
         id: 'content',

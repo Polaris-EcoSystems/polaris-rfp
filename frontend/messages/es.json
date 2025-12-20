@@ -11,6 +11,7 @@
     "rfps": "RFPs",
     "proposals": "Propuestas",
     "templates": "Plantillas",
+    "contractTemplates": "Plantillas de contrato",
     "contentLibrary": "Biblioteca de contenido",
     "rfpFinder": "Buscador de RFP",
     "buyerProfiles": "Perfiles de compradores",
@@ -74,7 +75,8 @@
       "reviewRebuttal": "Revisa requisitos; agrega acciones y respuestas.",
       "rework": "Resuelve elementos de revisión y actualiza el borrador.",
       "readyToSubmit": "Finaliza la lista y exporta.",
-      "submitted": "Registra el resultado y adjunta los archivos finales."
+      "submitted": "Registra el resultado y adjunta los archivos finales.",
+      "contracting": "Genera el contrato, finaliza el presupuesto y publica el paquete para el cliente."
     },
     "stages": {
       "BidDecision": {
@@ -100,6 +102,10 @@
       "Submitted": {
         "label": "Enviado",
         "help": "Registra el resultado y conserva artefactos."
+      },
+      "Contracting": {
+        "label": "Contratación",
+        "help": "Genera el paquete contractual y gestiona el flujo de firmas."
       },
       "NoBid": {
         "label": "No ofertar",

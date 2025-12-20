@@ -1,18 +1,16 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
 import Button from '@/components/ui/Button'
-import Card, {
-  CardBody,
-  CardFooter,
-  CardHeader,
-} from '@/components/ui/Card'
+import Card, { CardBody, CardFooter, CardHeader } from '@/components/ui/Card'
 import { useToast } from '@/components/ui/Toast'
 import {
   CognitoProfileAttribute,
   CognitoProfileResponse,
   profileApi,
+  userProfileApi,
+  type UserProfile,
 } from '@/lib/api'
+import { useEffect, useMemo, useState } from 'react'
 
 type UserSession = {
   sid: string
@@ -35,6 +33,8 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [profile, setProfile] = useState<CognitoProfileResponse | null>(null)
+  const [polarisProfile, setPolarisProfile] = useState<UserProfile | null>(null)
+  const [polarisSaving, setPolarisSaving] = useState(false)
   const [sessions, setSessions] = useState<UserSession[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
 
@@ -62,6 +62,13 @@ export default function ProfilePage() {
         if (!mounted) return
         setProfile(resp.data)
         setValues(toAttrMap(resp.data.attributes))
+        try {
+          const up = await userProfileApi.get()
+          if (!mounted) return
+          setPolarisProfile(up?.data?.profile ?? null)
+        } catch {
+          // non-fatal
+        }
       } catch (_e) {
         toast.error('Failed to load profile')
       } finally {
@@ -250,6 +257,156 @@ export default function ProfilePage() {
 
       <Card>
         <CardHeader>
+          <div className="text-sm font-semibold text-gray-900">
+            Polaris profile
+          </div>
+          <div className="text-xs text-gray-600">
+            Used for Slack linking + AI personalization (preferences/memory).
+          </div>
+        </CardHeader>
+        <CardBody>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-500">
+                Preferred name
+              </label>
+              <input
+                value={String(polarisProfile?.preferredName ?? '')}
+                onChange={(e) =>
+                  setPolarisProfile((p) => ({
+                    ...(p || ({} as any)),
+                    preferredName: e.target.value,
+                  }))
+                }
+                className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                placeholder="Wes"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500">
+                Slack user id
+              </label>
+              <input
+                value={String(polarisProfile?.slackUserId ?? '')}
+                onChange={(e) =>
+                  setPolarisProfile((p) => ({
+                    ...(p || ({} as any)),
+                    slackUserId: e.target.value,
+                  }))
+                }
+                className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-mono"
+                placeholder="U123ABC…"
+              />
+              <div className="mt-1 text-[11px] text-gray-500">
+                Get this from Slack via{' '}
+                <span className="font-mono">/polaris link</span>
+              </div>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-gray-500">
+                AI memory summary
+              </label>
+              <textarea
+                value={String(polarisProfile?.aiMemorySummary ?? '')}
+                onChange={(e) =>
+                  setPolarisProfile((p) => ({
+                    ...(p || ({} as any)),
+                    aiMemorySummary: e.target.value,
+                  }))
+                }
+                className="mt-1 w-full min-h-[120px] rounded-md border border-gray-300 bg-white px-3 py-2 text-sm"
+                placeholder="- Call me Wes\n- Prefer concise bullet points\n- We use AWS + FastAPI + Next.js"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-gray-500">
+                AI preferences (JSON)
+              </label>
+              <textarea
+                value={(() => {
+                  try {
+                    const v = polarisProfile?.aiPreferences ?? {}
+                    return JSON.stringify(v, null, 2)
+                  } catch {
+                    return '{}'
+                  }
+                })()}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  try {
+                    const obj = JSON.parse(raw || '{}')
+                    setPolarisProfile((p) => ({
+                      ...(p || ({} as any)),
+                      aiPreferences: obj,
+                    }))
+                  } catch {
+                    // don't toast on every keystroke
+                    setPolarisProfile((p) => ({
+                      ...(p || ({} as any)),
+                      aiPreferences: raw as any,
+                    }))
+                  }
+                }}
+                className="mt-1 w-full min-h-[140px] rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-mono"
+                placeholder={
+                  '{\n  "tone": "concise",\n  "format": "bullets"\n}'
+                }
+              />
+              <div className="mt-1 text-[11px] text-gray-500">
+                If this isn’t valid JSON, Save will fail.
+              </div>
+            </div>
+          </div>
+        </CardBody>
+        <CardFooter>
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              disabled={polarisSaving}
+              onClick={async () => {
+                try {
+                  setPolarisSaving(true)
+                  const payload: Partial<UserProfile> = {
+                    preferredName:
+                      String(polarisProfile?.preferredName ?? '').trim() ||
+                      null,
+                    slackUserId:
+                      String(polarisProfile?.slackUserId ?? '').trim() || null,
+                    aiMemorySummary:
+                      String(polarisProfile?.aiMemorySummary ?? '').trim() ||
+                      null,
+                    aiPreferences:
+                      polarisProfile?.aiPreferences &&
+                      typeof polarisProfile.aiPreferences === 'object' &&
+                      !Array.isArray(polarisProfile.aiPreferences)
+                        ? polarisProfile.aiPreferences
+                        : (() => {
+                            // If user managed to get invalid JSON stored in state, error out.
+                            throw new Error('Invalid JSON for aiPreferences')
+                          })(),
+                  }
+                  const resp = await userProfileApi.update(payload)
+                  const p = (resp as any)?.data?.profile ?? (resp as any)?.data
+                  if (p && typeof p === 'object') setPolarisProfile(p)
+                  toast.success('Polaris profile saved')
+                } catch (e: any) {
+                  toast.error(
+                    e?.message
+                      ? `Failed to save Polaris profile: ${e.message}`
+                      : 'Failed to save Polaris profile',
+                  )
+                } finally {
+                  setPolarisSaving(false)
+                }
+              }}
+            >
+              {polarisSaving ? 'Saving…' : 'Save Polaris profile'}
+            </Button>
+          </div>
+        </CardFooter>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-sm font-semibold text-gray-900">
@@ -395,7 +552,9 @@ export default function ProfilePage() {
                         {s.sessionKind === 'remember' ? 'Remembered' : 'Normal'}
                       </span>
                       {s.isCurrent ? (
-                        <span className="text-xs text-gray-600">(This device)</span>
+                        <span className="text-xs text-gray-600">
+                          (This device)
+                        </span>
                       ) : null}
                     </div>
                     <div className="mt-1 text-xs text-gray-600 space-y-0.5">
@@ -483,6 +642,3 @@ export default function ProfilePage() {
     </div>
   )
 }
-
-
-

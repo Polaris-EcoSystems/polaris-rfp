@@ -11,6 +11,7 @@
     "rfps": "RFPs",
     "proposals": "Proposals",
     "templates": "Templates",
+    "contractTemplates": "Contract templates",
     "contentLibrary": "Content Library",
     "rfpFinder": "RFP Finder",
     "buyerProfiles": "Buyer Profiles",
@@ -74,7 +75,8 @@
       "reviewRebuttal": "Review requirements; add rebuttals/actions.",
       "rework": "Resolve review items and update draft.",
       "readyToSubmit": "Finalize checklist and export.",
-      "submitted": "Record outcome and attach final artifacts."
+      "submitted": "Record outcome and attach final artifacts.",
+      "contracting": "Generate the contract, finalize budget, and publish the client package."
     },
     "stages": {
       "BidDecision": {
@@ -100,6 +102,10 @@
       "Submitted": {
         "label": "Submitted",
         "help": "Record outcome and keep artifacts."
+      },
+      "Contracting": {
+        "label": "Contracting",
+        "help": "Generate the contract package and manage signature workflow."
       },
       "NoBid": {
         "label": "No-bid",

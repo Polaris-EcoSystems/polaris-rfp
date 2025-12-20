@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from boto3.dynamodb.conditions import Key
+
 from ..db.dynamodb.table import get_main_table
 
 
@@ -33,6 +35,27 @@ def get_user_profile(*, user_sub: str) -> dict[str, Any] | None:
     return normalize_user_profile_for_api(it)
 
 
+def get_user_profile_by_slack_user_id(*, slack_user_id: str) -> dict[str, Any] | None:
+    """
+    Lookup a user profile by Slack user id using GSI1.
+
+    Note: this relies on `upsert_user_profile()` writing:
+      gsi1pk = "SLACK_USER#{slackUserId}"
+    """
+    uid = str(slack_user_id or "").strip()
+    if not uid:
+        return None
+    pg = get_main_table().query_page(
+        index_name="GSI1",
+        key_condition_expression=Key("gsi1pk").eq(f"SLACK_USER#{uid}"),
+        scan_index_forward=False,
+        limit=1,
+        next_token=None,
+    )
+    it = (pg.items or [None])[0] if pg.items else None
+    return normalize_user_profile_for_api(it) if isinstance(it, dict) else None
+
+
 def upsert_user_profile(*, user_sub: str, email: str | None, updates: dict[str, Any]) -> dict[str, Any]:
     """
     Upsert an app-level UserProfile. `user_sub` and `email` are authoritative from auth,
@@ -55,12 +78,16 @@ def upsert_user_profile(*, user_sub: str, email: str | None, updates: dict[str, 
         "updatedAt": now,
         # Defaults
         "fullName": None,
+        "preferredName": None,
         "jobTitles": [],
         "certifications": [],
         "resumeAssets": [],
         "profileCompletedAt": None,
         "onboardingVersion": 1,
         "linkedTeamMemberId": None,
+        # AI agent personalization (bounded; stored per user)
+        "aiPreferences": {},
+        "aiMemorySummary": None,
     }
 
     # Merge existing fields first, then apply updates.
@@ -84,6 +111,16 @@ def upsert_user_profile(*, user_sub: str, email: str | None, updates: dict[str, 
     item["userSub"] = sub
     item["updatedAt"] = now
     item["email"] = str(email or "").strip().lower() or item.get("email") or None
+
+    # Optional GSI1 mapping: Slack user id → user profile
+    suid = str(item.get("slackUserId") or "").strip()
+    if suid:
+        item["gsi1pk"] = f"SLACK_USER#{suid}"
+        item["gsi1sk"] = f"USER#{sub}"
+    else:
+        # User profiles don't otherwise use GSI1; keep index clean.
+        item.pop("gsi1pk", None)
+        item.pop("gsi1sk", None)
 
     get_main_table().put_item(item=item)
     return normalize_user_profile_for_api(item) or {}

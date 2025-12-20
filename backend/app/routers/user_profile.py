@@ -62,6 +62,9 @@ class PutUserProfileRequest(BaseModel):
     certifications: list[str] = Field(default_factory=list)
     resumeAssets: list[dict[str, Any]] = Field(default_factory=list)
     slackUserId: str | None = None
+    preferredName: str | None = None
+    aiPreferences: dict[str, Any] = Field(default_factory=dict)
+    aiMemorySummary: str | None = None
 
 
 @router.get("/user-profile")
@@ -89,6 +92,9 @@ def put_profile(request: Request, body: PutUserProfileRequest):
     if body.fullName is not None:
         nm = _clean_string(body.fullName, max_len=200) or None
         updates["fullName"] = nm
+    if body.preferredName is not None:
+        pn = _clean_string(body.preferredName, max_len=120) or None
+        updates["preferredName"] = pn
     if body.jobTitles is not None:
         updates["jobTitles"] = _clean_string_list(body.jobTitles, max_items=20, max_len=200)
     if body.certifications is not None:
@@ -127,6 +133,28 @@ def put_profile(request: Request, body: PutUserProfileRequest):
         if suid and not re.fullmatch(r"[UW][A-Z0-9]{6,}", suid):
             suid = None
         updates["slackUserId"] = suid
+
+    # AI prefs/memory (bounded + safe)
+    if body.aiPreferences is not None:
+        prefs = body.aiPreferences if isinstance(body.aiPreferences, dict) else {}
+        # Keep small and JSON-serializable-ish; store only shallow keys.
+        slim: dict[str, Any] = {}
+        for k, v in list(prefs.items())[:50]:
+            kk = _clean_string(k, max_len=60)
+            if not kk:
+                continue
+            # Bound individual values; allow primitives + small strings.
+            if isinstance(v, (int, float, bool)) or v is None:
+                slim[kk] = v
+            elif isinstance(v, str):
+                slim[kk] = _clean_string(v, max_len=500)
+            else:
+                # Drop complex nested objects for now to keep the prompt injection safe.
+                slim[kk] = _clean_string(str(v), max_len=500)
+        updates["aiPreferences"] = slim
+    if body.aiMemorySummary is not None:
+        ms = _clean_string(body.aiMemorySummary, max_len=4000) or None
+        updates["aiMemorySummary"] = ms
 
     saved = upsert_user_profile(user_sub=sub, email=email, updates=updates)
 

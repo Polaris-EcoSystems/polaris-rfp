@@ -9,10 +9,12 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ..ai.client import AiError, call_text
+from ..ai.user_context import load_user_profile_from_request, user_context_block
 from ..settings import settings
 from ..services import content_repo, templates_repo
 from ..services.ai_jobs_repo import create_job as create_ai_job
 from ..services.ai_jobs_repo import update_job as update_ai_job
+from ..services.contracting_repo import create_case, get_case_by_proposal_id
 from ..services.proposals_repo import (
     create_proposal,
     delete_proposal,
@@ -62,6 +64,7 @@ def _generate_text_section(
     company: dict[str, Any] | None,
     team_member_ids: list[str] | None = None,
     reference_ids: list[str] | None = None,
+    user_ctx: str | None = None,
 ) -> str:
     if not settings.openai_api_key:
         return f"{title}\n\n(This section will be completed in the proposal editor.)"
@@ -85,7 +88,8 @@ def _generate_text_section(
 
     prompt = (
         "Write a high-quality proposal section. Preserve markdown.\n\n"
-        f"SECTION_TITLE: {title}\n"
+        + (f"USER_CONTEXT:\n{user_ctx}\n\n" if user_ctx else "")
+        + f"SECTION_TITLE: {title}\n"
         f"RFP_TITLE: {rfp.get('title') or ''}\n"
         f"CLIENT: {rfp.get('clientName') or ''}\n"
         f"PROJECT_TYPE: {rfp.get('projectType') or ''}\n"
@@ -187,6 +191,7 @@ def _section_content_from_title(
     company: dict[str, Any] | None,
     team_member_ids: list[str] | None = None,
     reference_ids: list[str] | None = None,
+    user_ctx: str | None = None,
 ) -> Any:
     st = (section_title or "").lower().strip()
 
@@ -226,6 +231,7 @@ def _section_content_from_title(
         company,
         team_member_ids=team_member_ids,
         reference_ids=reference_ids,
+        user_ctx=user_ctx,
     )
 
 
@@ -359,7 +365,7 @@ def _render_docx(proposal: dict[str, Any], company: dict[str, Any] | None) -> by
 
 
 @router.post("/generate", status_code=201)
-def generate(body: dict, background_tasks: BackgroundTasks):
+def generate(body: dict, background_tasks: BackgroundTasks, request: Request = None):  # type: ignore[assignment]
     rfp_id = (body or {}).get("rfpId")
     template_id = (body or {}).get("templateId")
     title = (body or {}).get("title")
@@ -401,6 +407,12 @@ def generate(body: dict, background_tasks: BackgroundTasks):
 
     titles = _template_section_titles(str(template_id), rfp)
     sections: dict[str, Any] = {}
+    user_ctx = ""
+    try:
+        if request is not None:
+            user_ctx = user_context_block(user_profile=load_user_profile_from_request(request))
+    except Exception:
+        user_ctx = ""
 
     if async_flag:
         sections = _placeholder_sections(titles)
@@ -414,6 +426,7 @@ def generate(body: dict, background_tasks: BackgroundTasks):
                     company,
                     team_member_ids=team_member_ids,
                     reference_ids=reference_ids,
+                    user_ctx=user_ctx or None,
                 ),
                 "type": "ai",
                 "lastModified": _now_iso(),
@@ -475,6 +488,7 @@ def generate(body: dict, background_tasks: BackgroundTasks):
                             comp,
                             team_member_ids=team_member_ids,
                             reference_ids=reference_ids,
+                            user_ctx=user_ctx or None,
                         ),
                         "type": "ai",
                         "lastModified": _now_iso(),
@@ -534,7 +548,7 @@ def generate(body: dict, background_tasks: BackgroundTasks):
 
 
 @router.post("/{id}/generate-sections")
-def generate_sections(id: str):
+def generate_sections(id: str, request: Request):
     proposal = get_proposal_by_id(id, include_sections=True)
     if not proposal:
         raise HTTPException(status_code=404, detail="Proposal not found")
@@ -555,11 +569,12 @@ def generate_sections(id: str):
 
     sections = proposal.get("sections") or {}
     next_sections: dict[str, Any] = {}
+    user_ctx = user_context_block(user_profile=load_user_profile_from_request(request))
 
     for name in sections.keys():
         nm = str(name)
         next_sections[nm] = {
-            "content": _section_content_from_title(nm, rfp, company),
+            "content": _section_content_from_title(nm, rfp, company, user_ctx=user_ctx or None),
             "type": "ai",
             "lastModified": _now_iso(),
         }
@@ -601,6 +616,7 @@ def generate_sections_async(id: str, background_tasks: BackgroundTasks, request:
 
     user = getattr(getattr(request, "state", None), "user", None)
     user_sub = getattr(user, "sub", None) if user else None
+    user_ctx = user_context_block(user_profile=load_user_profile_from_request(request))
 
     job = create_ai_job(
         user_sub=str(user_sub) if user_sub else None,
@@ -646,7 +662,7 @@ def generate_sections_async(id: str, background_tasks: BackgroundTasks, request:
             for name in sections.keys():
                 nm = str(name)
                 next_sections[nm] = {
-                    "content": _section_content_from_title(nm, rfp, company),
+                    "content": _section_content_from_title(nm, rfp, company, user_ctx=user_ctx or None),
                     "type": "ai",
                     "lastModified": _now_iso(),
                 }
@@ -717,10 +733,42 @@ def get_one(id: str):
 
 
 @router.put("/{id}")
-def update_one(id: str, body: dict):
+def update_one(id: str, request: Request, body: dict):
+    before = get_proposal_by_id(id, include_sections=False) or {}
+    before_status = str(before.get("status") or "").strip().lower()
+
     updated = update_proposal(id, {**(body or {}), "lastModifiedBy": "system"})
     if not updated:
         raise HTTPException(status_code=404, detail="Proposal not found")
+
+    # If a proposal is marked as won, create/ensure a contracting case exists.
+    try:
+        after_status = str((updated or {}).get("status") or "").strip().lower()
+        if after_status == "won" and before_status != "won":
+            user = getattr(getattr(request, "state", None), "user", None)
+            actor_sub = str(getattr(user, "sub", "") or "").strip() if user else ""
+            case = get_case_by_proposal_id(str(id)) or None
+            if not case:
+                case = create_case(
+                    proposal_id=str(id),
+                    rfp_id=str((updated or {}).get("rfpId") or ""),
+                    company_id=str((updated or {}).get("companyId") or "").strip() or None,
+                    created_by_user_sub=actor_sub or None,
+                )
+            # Best-effort attach pointer to proposal for fast lookup.
+            if case and case.get("_id") and not str((updated or {}).get("contractingCaseId") or "").strip():
+                updated = (
+                    update_proposal(
+                        id,
+                        {
+                            "contractingCaseId": str(case.get("_id")),
+                            "lastModifiedBy": "system",
+                        },
+                    )
+                    or updated
+                )
+    except Exception:
+        pass
 
     # Best-effort: seed tasks on status transitions (stage is computed from latest proposal state).
     try:

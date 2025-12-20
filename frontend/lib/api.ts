@@ -330,6 +330,7 @@ export interface Proposal {
   templateId: string
   title: string
   status: string
+  contractingCaseId?: string | null
   sections: Record<string, any>
   generationStatus?: 'queued' | 'running' | 'complete' | 'error'
   generationError?: string | null
@@ -374,6 +375,121 @@ export interface Template {
   sectionCount: number
 }
 
+// ---- Contracting types ----
+export type ContractingCaseStatus =
+  | 'draft'
+  | 'in_review'
+  | 'ready'
+  | 'sent'
+  | 'signed'
+  | 'archived'
+
+export interface ContractingCase {
+  _id: string
+  proposalId: string
+  rfpId: string
+  companyId?: string | null
+  status: ContractingCaseStatus
+  keyTerms?: Record<string, any>
+  keyTermsRawJson?: any
+  owners?: Record<string, any>
+  notes?: string
+  audit?: any[]
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface ContractTemplate {
+  _id: string
+  templateId?: string
+  name: string
+  kind: 'msa' | 'sow' | 'combined' | string
+  currentVersionId?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface ContractTemplateVersion {
+  _id: string
+  templateId: string
+  versionId: string
+  s3Key: string
+  sha256?: string | null
+  variablesSchema?: Record<string, any>
+  changelog?: string
+  createdAt?: string
+}
+
+export interface ContractDocumentVersion {
+  _id: string
+  caseId: string
+  versionId: string
+  sourceTemplateId?: string | null
+  sourceTemplateVersionId?: string | null
+  renderInputs?: Record<string, any>
+  docxS3Key: string
+  pdfS3Key?: string | null
+  status?: string
+  createdAt?: string
+}
+
+export interface BudgetVersion {
+  _id: string
+  caseId: string
+  versionId: string
+  budgetModel?: Record<string, any>
+  xlsxS3Key: string
+  createdAt?: string
+}
+
+export interface SupportingDoc {
+  _id: string
+  caseId: string
+  docId: string
+  kind: string
+  required: boolean
+  status: string
+  fileName: string
+  contentType: string
+  s3Key: string
+  expiresAt?: string | null
+  uploadedAt?: string | null
+}
+
+export interface ClientPackage {
+  _id: string
+  caseId: string
+  packageId: string
+  name: string
+  selectedFiles: Array<{
+    id: string
+    kind: string
+    label: string
+    fileName?: string
+    contentType?: string
+    s3Key?: string
+  }>
+  publishedAt?: string | null
+  revokedAt?: string | null
+  portalTokenExpiresAt?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface ESignEnvelope {
+  _id: string
+  caseId: string
+  envelopeId: string
+  provider: string
+  status: string
+  recipients?: any[]
+  files?: any[]
+  createdAt?: string
+  updatedAt?: string
+  sentAt?: string | null
+  completedAt?: string | null
+}
+
 export interface CognitoProfileAttribute {
   name: string
   value: string
@@ -398,6 +514,7 @@ export interface UserProfile {
   userSub: string
   email?: string | null
   fullName?: string | null
+  preferredName?: string | null
   jobTitles?: string[]
   certifications?: string[]
   resumeAssets?: {
@@ -412,6 +529,8 @@ export interface UserProfile {
   onboardingVersion?: number
   linkedTeamMemberId?: string | null
   slackUserId?: string | null
+  aiPreferences?: Record<string, any>
+  aiMemorySummary?: string | null
   createdAt?: string
   updatedAt?: string
 }
@@ -672,6 +791,309 @@ export const tasksApi = {
     api.post<{ ok: boolean; task: WorkflowTask }>(
       proxyUrl(`/api/tasks/${cleanPathToken(taskId)}/reopen`),
       null,
+    ),
+}
+
+// ---- Contracting API calls (authenticated; proxied) ----
+export const contractingApi = {
+  getByProposal: (proposalId: string) =>
+    api.get<{ ok: boolean; case: ContractingCase }>(
+      proxyUrl(`/api/contracting/by-proposal/${cleanPathToken(proposalId)}`),
+    ),
+  get: (caseId: string) =>
+    api.get<{ ok: boolean; case: ContractingCase }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}`),
+    ),
+  update: (caseId: string, data: Partial<ContractingCase>) =>
+    api.put<{ ok: boolean; case: ContractingCase }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}`),
+      data,
+    ),
+  listContractVersions: (caseId: string) =>
+    api.get<{ ok: boolean; data: ContractDocumentVersion[] }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}/contract/versions`),
+    ),
+  presignContractVersion: (caseId: string, versionId: string) =>
+    api.get<{ ok: boolean; url: string; expiresIn: number }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(
+          caseId,
+        )}/contract/versions/${cleanPathToken(versionId)}/presign`,
+      ),
+    ),
+  generateContract: (
+    caseId: string,
+    data: {
+      templateId: string
+      templateVersionId?: string | null
+      renderInputs?: Record<string, any>
+      idempotencyKey: string
+    },
+  ) =>
+    api.post<{
+      ok: boolean
+      job: any
+    }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}/contract/generate`),
+      data,
+    ),
+  listBudgetVersions: (caseId: string) =>
+    api.get<{ ok: boolean; data: BudgetVersion[] }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}/budget/versions`),
+    ),
+  presignBudgetVersion: (caseId: string, versionId: string) =>
+    api.get<{ ok: boolean; url: string; expiresIn: number }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(
+          caseId,
+        )}/budget/versions/${cleanPathToken(versionId)}/presign`,
+      ),
+    ),
+  generateBudgetXlsx: (
+    caseId: string,
+    data: { budgetModel?: Record<string, any>; idempotencyKey: string },
+  ) =>
+    api.post<{
+      ok: boolean
+      job: any
+    }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(caseId)}/budget/generate-xlsx`,
+      ),
+      data,
+    ),
+  getJob: (jobId: string) =>
+    api.get<{ ok: boolean; job: any }>(
+      proxyUrl(`/api/contracting/jobs/${cleanPathToken(jobId)}`),
+    ),
+  listJobsForCase: (caseId: string, params?: CursorListParams) =>
+    api.get<{ ok: boolean; data: any[]; nextToken?: string | null }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}/jobs`),
+      {
+        params: {
+          limit: params?.limit,
+          nextToken: params?.nextToken,
+        },
+      },
+    ),
+  listSupportingDocs: (caseId: string) =>
+    api.get<{ ok: boolean; data: SupportingDoc[] }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}/supporting-docs`),
+    ),
+  presignSupportingDoc: (
+    caseId: string,
+    data: {
+      fileName: string
+      contentType: string
+      kind: string
+      required?: boolean
+      expiresAt?: string | null
+    },
+  ) =>
+    api.post<{
+      ok: boolean
+      docId: string
+      key: string
+      putUrl: string
+      kind: string
+      required: boolean
+      expiresAt?: string | null
+      fileName: string
+      contentType: string
+    }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(caseId)}/supporting-docs/presign`,
+      ),
+      data,
+    ),
+  commitSupportingDoc: (
+    caseId: string,
+    data: {
+      docId: string
+      key: string
+      kind: string
+      required?: boolean
+      fileName: string
+      contentType: string
+      expiresAt?: string | null
+    },
+  ) =>
+    api.post<{ ok: boolean; doc: SupportingDoc }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(caseId)}/supporting-docs/commit`,
+      ),
+      data,
+    ),
+  listPackages: (caseId: string) =>
+    api.get<{ ok: boolean; data: ClientPackage[] }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}/packages`),
+    ),
+  createPackage: (
+    caseId: string,
+    data: { name?: string | null; selectedFiles?: any[] },
+  ) =>
+    api.post<{ ok: boolean; package: ClientPackage }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}/packages`),
+      data,
+    ),
+  publishPackage: (
+    caseId: string,
+    packageId: string,
+    data?: { ttlDays?: number },
+  ) =>
+    api.post<{ ok: boolean; package: ClientPackage; portalToken: string }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(caseId)}/packages/${cleanPathToken(
+          packageId,
+        )}/publish`,
+      ),
+      data || {},
+    ),
+  rotatePackage: (
+    caseId: string,
+    packageId: string,
+    data?: { ttlDays?: number },
+  ) =>
+    api.post<{ ok: boolean; package: ClientPackage; portalToken: string }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(caseId)}/packages/${cleanPathToken(
+          packageId,
+        )}/rotate`,
+      ),
+      data || {},
+    ),
+  revokePackage: (caseId: string, packageId: string) =>
+    api.post<{ ok: boolean; package: ClientPackage }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(caseId)}/packages/${cleanPathToken(
+          packageId,
+        )}/revoke`,
+      ),
+      null,
+    ),
+  createPackageZipJob: (
+    caseId: string,
+    packageId: string,
+    data: { idempotencyKey: string },
+  ) =>
+    api.post<{ ok: boolean; job: any }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(caseId)}/packages/${cleanPathToken(
+          packageId,
+        )}/zip`,
+      ),
+      data,
+    ),
+  presignZipResult: (jobId: string) =>
+    api.get<{ ok: boolean; url: string; expiresIn: number }>(
+      proxyUrl(`/api/contracting/jobs/${cleanPathToken(jobId)}/zip/presign`),
+    ),
+  listEnvelopes: (caseId: string) =>
+    api.get<{ ok: boolean; data: ESignEnvelope[] }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}/esign/envelopes`),
+    ),
+  createEnvelope: (
+    caseId: string,
+    data: { provider?: string; recipients?: any[]; files?: any[] },
+  ) =>
+    api.post<{ ok: boolean; envelope: ESignEnvelope }>(
+      proxyUrl(`/api/contracting/${cleanPathToken(caseId)}/esign/envelopes`),
+      data,
+    ),
+  sendEnvelope: (caseId: string, envelopeId: string) =>
+    api.post<{ ok: boolean; envelope: ESignEnvelope }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(
+          caseId,
+        )}/esign/envelopes/${cleanPathToken(envelopeId)}/send`,
+      ),
+      null,
+    ),
+  markEnvelopeSigned: (caseId: string, envelopeId: string) =>
+    api.post<{ ok: boolean; envelope: ESignEnvelope }>(
+      proxyUrl(
+        `/api/contracting/${cleanPathToken(
+          caseId,
+        )}/esign/envelopes/${cleanPathToken(envelopeId)}/mark-signed`,
+      ),
+      null,
+    ),
+}
+
+export const contractTemplatesApi = {
+  list: (params?: CursorListParams) =>
+    api.get<{ data: ContractTemplate[]; nextToken?: string | null }>(
+      proxyUrl('/api/contract-templates/'),
+      {
+        params: { limit: params?.limit, nextToken: params?.nextToken },
+      },
+    ),
+  create: (data: { name: string; kind: 'msa' | 'sow' | 'combined' }) =>
+    api.post<{ _id: string } & ContractTemplate>(
+      proxyUrl('/api/contract-templates/'),
+      data,
+    ),
+  get: (templateId: string) =>
+    api.get<ContractTemplate>(
+      proxyUrl(`/api/contract-templates/${cleanPathToken(templateId)}`),
+    ),
+  update: (templateId: string, data: { currentVersionId: string }) =>
+    api.put<{ ok: boolean; template: ContractTemplate }>(
+      proxyUrl(`/api/contract-templates/${cleanPathToken(templateId)}`),
+      data,
+    ),
+  listVersions: (templateId: string) =>
+    api.get<{ ok: boolean; data: ContractTemplateVersion[] }>(
+      proxyUrl(
+        `/api/contract-templates/${cleanPathToken(templateId)}/versions`,
+      ),
+    ),
+  presignVersionUpload: (
+    templateId: string,
+    data: { fileName: string; contentType: string },
+  ) =>
+    api.post<{
+      ok: boolean
+      templateId: string
+      versionId: string
+      key: string
+      putUrl: string
+    }>(
+      proxyUrl(
+        `/api/contract-templates/${cleanPathToken(
+          templateId,
+        )}/versions/presign`,
+      ),
+      data,
+    ),
+  commitVersion: (
+    templateId: string,
+    data: {
+      versionId: string
+      key: string
+      sha256?: string
+      changelog?: string
+      variablesSchema?: any
+    },
+  ) =>
+    api.post<{ ok: boolean; version: ContractTemplateVersion }>(
+      proxyUrl(
+        `/api/contract-templates/${cleanPathToken(templateId)}/versions/commit`,
+      ),
+      data,
+    ),
+  previewVersion: (
+    templateId: string,
+    versionId: string,
+    data: { keyTerms?: any; renderInputs?: any },
+  ) =>
+    api.post<{ ok: boolean; key: string; url: string; expiresIn: number }>(
+      proxyUrl(
+        `/api/contract-templates/${cleanPathToken(
+          templateId,
+        )}/versions/${cleanPathToken(versionId)}/preview`,
+      ),
+      data,
     ),
 }
 

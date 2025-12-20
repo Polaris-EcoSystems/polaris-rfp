@@ -10,6 +10,7 @@ from starlette.responses import Response
 from .middleware.access_log import AccessLogMiddleware
 from .middleware.auth import AuthMiddleware
 from .middleware.cors import build_allowed_origin_regex, build_allowed_origins
+from .middleware.portal_rate_limit import PortalRateLimitMiddleware
 from .middleware.request_context import RequestContextMiddleware
 from .observability.logging import configure_logging, get_logger
 from .observability.otel import configure_otel, instrument_app
@@ -33,10 +34,14 @@ from .routers.ai import router as ai_router
 from .routers.ai_jobs import router as ai_jobs_router
 from .routers.integrations_canva import router as canva_router
 from .routers.integrations_slack import router as slack_router
+from .routers.northstar_audit import router as northstar_audit_router
 from .routers.profile import router as profile_router
 from .routers.finder import router as finder_router
 from .routers.tasks import router as tasks_router
 from .routers.user_profile import router as user_profile_router
+from .routers.contracting import router as contracting_router
+from .routers.contract_templates import router as contract_templates_router
+from .routers.client_portal import router as client_portal_router
 from .settings import settings
 
 
@@ -68,6 +73,8 @@ def create_app() -> FastAPI:
     # Middlewares (order matters; last added is outermost)
     # Auth runs inside CORS so auth failures still get CORS headers.
     app.add_middleware(AuthMiddleware)
+    # Best-effort throttling for public portal endpoints.
+    app.add_middleware(PortalRateLimitMiddleware)
     # Access logs (structured JSON)
     app.add_middleware(AccessLogMiddleware, exclude_paths={"/"})
     # Use CORSMiddleware with both explicit allowlist AND wildcard regex support.
@@ -102,10 +109,14 @@ def create_app() -> FastAPI:
     app.include_router(ai_jobs_router, prefix="/api/ai")
     app.include_router(canva_router, prefix="/api/integrations/canva")
     app.include_router(slack_router, prefix="/api/integrations")
+    app.include_router(northstar_audit_router, prefix="/api")
     app.include_router(profile_router, prefix="/api/profile")
     app.include_router(user_profile_router, prefix="/api")
     app.include_router(finder_router, prefix="/api/finder")
     app.include_router(tasks_router, prefix="/api")
+    app.include_router(contracting_router, prefix="/api")
+    app.include_router(contract_templates_router, prefix="/api")
+    app.include_router(client_portal_router, prefix="/api")
 
     # Instrument after routers/middleware are attached.
     instrument_app(app)

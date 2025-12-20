@@ -27,6 +27,23 @@ class Settings(BaseSettings):
         default=None, validation_alias="ASSETS_BUCKET_NAME"
     )
 
+    # Contracting async jobs (SQS + worker)
+    contracting_jobs_queue_url: str | None = Field(
+        default=None, validation_alias="CONTRACTING_JOBS_QUEUE_URL"
+    )
+    contracting_jobs_max_receives: int = Field(
+        default=6, validation_alias="CONTRACTING_JOBS_MAX_RECEIVES"
+    )
+    contracting_jobs_poll_wait_seconds: int = Field(
+        default=10, validation_alias="CONTRACTING_JOBS_POLL_WAIT_SECONDS"
+    )
+    contracting_jobs_poll_max_messages: int = Field(
+        default=5, validation_alias="CONTRACTING_JOBS_POLL_MAX_MESSAGES"
+    )
+
+    # Public portal hardening
+    portal_rate_limit_rpm: int = Field(default=120, validation_alias="PORTAL_RATE_LIMIT_RPM")
+
     # Auth (Cognito)
     cognito_user_pool_id: str | None = Field(
         default=None, validation_alias="COGNITO_USER_POOL_ID"
@@ -100,11 +117,33 @@ class Settings(BaseSettings):
     # Prefer injecting a single Secrets Manager ARN and resolving keys at runtime.
     slack_secret_arn: str | None = Field(default=None, validation_alias="SLACK_SECRET_ARN")
 
+    # North Star: scheduled daily report destination (Slack channel ID).
+    northstar_daily_report_channel: str | None = Field(
+        default=None, validation_alias="NORTHSTAR_DAILY_REPORT_CHANNEL"
+    )
+
     # Slack agent (LLM-powered Q&A)
     slack_agent_enabled: bool = Field(default=True, validation_alias="SLACK_AGENT_ENABLED")
     slack_agent_actions_enabled: bool = Field(
         default=True, validation_alias="SLACK_AGENT_ACTIONS_ENABLED"
     )
+
+    # Self-modifying pipeline (PR creation + CI verification + ECS verification)
+    self_modify_enabled: bool = Field(default=False, validation_alias="SELF_MODIFY_ENABLED")
+    # Comma-separated Slack user IDs allowed to trigger self-modifying actions (U…).
+    self_modify_allowed_slack_user_ids: str | None = Field(
+        default=None, validation_alias="SELF_MODIFY_ALLOWED_SLACK_USER_IDS"
+    )
+    # GitHub: Secrets Manager ARN containing credentials for gh/GitHub API.
+    github_secret_arn: str | None = Field(default=None, validation_alias="GITHUB_SECRET_ARN")
+    # Repo + deploy targets
+    github_repo: str | None = Field(default=None, validation_alias="GITHUB_REPO")  # e.g. org/repo
+    github_base_branch: str = Field(default="main", validation_alias="GITHUB_BASE_BRANCH")
+    # Path to a checked-out repo inside the container for git operations.
+    self_modify_repo_path: str | None = Field(default=None, validation_alias="SELF_MODIFY_REPO_PATH")
+    # ECS verification target (optional)
+    ecs_cluster: str | None = Field(default=None, validation_alias="ECS_CLUSTER")
+    ecs_service: str | None = Field(default=None, validation_alias="ECS_SERVICE")
 
     # Canva Connect (integration)
     canva_client_id: str | None = Field(default=None, validation_alias="CANVA_CLIENT_ID")
@@ -185,6 +224,13 @@ class Settings(BaseSettings):
                 if not self.slack_default_channel:
                     missing.append("SLACK_DEFAULT_CHANNEL (or SLACK_SECRET_ARN)")
 
+        # Self-modify (optional) - but if enabled, require repo + secrets.
+        if bool(self.self_modify_enabled):
+            if not (self.github_repo and str(self.github_repo).strip()):
+                missing.append("GITHUB_REPO")
+            if not (self.github_secret_arn and str(self.github_secret_arn).strip()):
+                missing.append("GITHUB_SECRET_ARN")
+
         if missing:
             raise RuntimeError(
                 "Missing required production environment variables: "
@@ -237,6 +283,14 @@ class Settings(BaseSettings):
                 "slack_signing_secret_configured": _has(self.slack_signing_secret),
                 "slack_default_channel": self.slack_default_channel if _has(self.slack_default_channel) else None,
                 "slack_secret_arn_configured": _has(self.slack_secret_arn),
+                "northstar_daily_report_channel": self.northstar_daily_report_channel
+                if _has(self.northstar_daily_report_channel)
+                else None,
+                "self_modify_enabled": bool(self.self_modify_enabled),
+                "github_secret_arn_configured": _has(self.github_secret_arn),
+                "github_repo": self.github_repo if _has(self.github_repo) else None,
+                "ecs_cluster": self.ecs_cluster if _has(self.ecs_cluster) else None,
+                "ecs_service": self.ecs_service if _has(self.ecs_service) else None,
             },
         }
 

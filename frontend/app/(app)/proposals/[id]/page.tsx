@@ -946,6 +946,16 @@ export default function ProposalDetailPage() {
               )}
             </div>
             <div className="mt-6 flex flex-wrap gap-3 md:mt-0 md:ml-4">
+              {String(proposal.status || '')
+                .trim()
+                .toLowerCase() === 'won' ? (
+                <Link
+                  href={`/proposals/${proposal._id}/contracting`}
+                  className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700"
+                >
+                  Contracting
+                </Link>
+              ) : null}
               {companies.length > 0 && (
                 <div className="flex items-center gap-2 flex-wrap">
                   <select

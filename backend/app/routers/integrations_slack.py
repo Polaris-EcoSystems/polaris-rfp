@@ -17,8 +17,10 @@ from ..services.proposals_repo import list_proposals
 from ..services.rfp_upload_jobs_repo import get_job
 from ..services.rfps_repo import create_rfp_from_analysis, get_rfp_by_id, list_rfps
 from ..services.slack_agent import run_slack_agent_question
+from ..services.slack_operator_agent import run_slack_operator_for_mention
 from ..services.slack_action_executor import execute_action
 from ..services.slack_actions_repo import get_action, mark_action_done
+from ..services.slack_actions_repo import create_action
 from ..services.slack_events_repo import mark_seen as slack_event_mark_seen
 from ..services.slack_rate_limiter import allow as slack_allow
 from ..services.slack_response_url import respond as respond_via_response_url
@@ -30,7 +32,13 @@ from ..services.slack_web import (
     list_recent_channel_pdfs,
     post_message_result,
     chat_post_message_result,
+    get_user_info,
+    slack_user_display_name,
 )
+from ..services.slack_reply_tools import ack_reaction
+from ..services.slack_pending_thread_links_repo import create_pending_link, get_pending_link, consume_pending_link
+from ..services.slack_thread_bindings_repo import set_binding
+from ..services.user_profiles_repo import get_user_profile_by_slack_user_id
 
 
 router = APIRouter(tags=["integrations"])
@@ -40,7 +48,7 @@ def _command_response_type(subcommand: str) -> str:
     # Per request: make all commands public except `job` which can contain
     # operational details and is typically user-specific.
     sub = str(subcommand or "").strip().lower()
-    if sub in ("job", "upload", "ingest", "channel", "chan", "whereami"):
+    if sub in ("job", "upload", "ingest", "channel", "chan", "whereami", "link-thread", "linkthread", "where"):
         return "ephemeral"
     return "in_channel"
 
@@ -75,6 +83,9 @@ def _content_url() -> str:
 
 def _templates_url() -> str:
     return str(settings.frontend_base_url or "").rstrip("/") + "/templates"
+
+def _profile_url() -> str:
+    return str(settings.frontend_base_url or "").rstrip("/") + "/profile"
 
 
 def _upload_url() -> str:
@@ -408,9 +419,19 @@ def _slack_agent_answer_task(
     or via chat.postMessage (app mention).
     """
     try:
+        # Best-effort identity enrichment + memory injection.
+        slack_user = get_user_info(user_id=user_id or "") if user_id else None
+        display_name = slack_user_display_name(slack_user) if slack_user else None
+        prof = (slack_user.get("profile") if isinstance(slack_user, dict) else {}) or {}
+        email = str(prof.get("email") or "").strip().lower() or None
+        user_profile = get_user_profile_by_slack_user_id(slack_user_id=user_id or "") if user_id else None
+
         ans = run_slack_agent_question(
             question=question,
             user_id=user_id,
+            user_display_name=display_name,
+            user_email=email,
+            user_profile=user_profile,
             channel_id=channel_id,
             thread_ts=thread_ts,
         )
@@ -458,6 +479,54 @@ def _slack_agent_answer_task(
                 pass
 
 
+def _slack_operator_mention_task(
+    *,
+    question: str,
+    channel_id: str | None,
+    user_id: str | None,
+    thread_ts: str | None,
+    correlation_id: str | None = None,
+) -> None:
+    """
+    Background: operator-style agent for app mentions.
+
+    This agent prefers tool-based replies and durable state updates.
+    """
+    ch = str(channel_id or "").strip() or None
+    th = str(thread_ts or "").strip() or None
+    if not ch or not th:
+        return
+    # If the user recently ran `/polaris link-thread <rfpId>`, bind that RFP to this thread.
+    try:
+        uid = str(user_id or "").strip() or None
+        if uid:
+            pend = consume_pending_link(channel_id=ch, slack_user_id=uid)
+            if isinstance(pend, dict) and str(pend.get("rfpId") or "").strip():
+                rid = str(pend.get("rfpId") or "").strip()
+                set_binding(channel_id=ch, thread_ts=th, rfp_id=rid, bound_by_slack_user_id=uid)
+    except Exception:
+        pass
+    try:
+        run_slack_operator_for_mention(
+            question=question,
+            channel_id=ch,
+            thread_ts=th,
+            user_id=user_id,
+            correlation_id=correlation_id,
+            max_steps=8,
+        )
+    except Exception:
+        # Best-effort fallback message (keep terse).
+        try:
+            chat_post_message_result(
+                text="Sorry — I hit an error while working on that.",
+                channel=ch,
+                thread_ts=th,
+                unfurl_links=False,
+            )
+        except Exception:
+            pass
+
 @router.post("/slack/events")
 async def slack_events(request: Request, background_tasks: BackgroundTasks):
     await _require_slack_request(request)
@@ -495,14 +564,16 @@ async def slack_events(request: Request, background_tasks: BackgroundTasks):
                 return {"ok": True}
             if channel and not slack_allow(key=f"slack_agent_channel:{channel}", limit=25, per_seconds=60):
                 return {"ok": True}
-            # Ack quickly; respond async in thread.
+            # Ack quickly (reaction); then respond async in thread.
+            if channel and thread_ts:
+                background_tasks.add_task(ack_reaction, channel=channel, timestamp=thread_ts, emoji="eyes")
             background_tasks.add_task(
-                _slack_agent_answer_task,
+                _slack_operator_mention_task,
                 question=text,
-                response_url=None,
                 channel_id=channel,
                 user_id=user_id,
                 thread_ts=thread_ts,
+                correlation_id=ev_id or thread_ts,
             )
 
         log.info("slack_event_received", event_type=ev_type or None)
@@ -537,6 +608,11 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
                     "*Polaris RFP Slack commands*",
                     "- `/polaris help`",
                     "- `/polaris ask <question>` (ask Polaris about RFPs/proposals/tasks/content)",
+                    "- `/polaris link` (link your Slack user to your Polaris profile)",
+                    "- `/polaris link-thread <rfpId>` (next @mention in a thread will bind that thread to the RFP)",
+                    "- `/polaris where` (thread binding help)",
+                    "- `/polaris remember <note>` (save a personal note/preferences; asks for confirmation)",
+                    "- `/polaris forget memory` (clear saved memory; asks for confirmation)",
                     "- `/polaris recent [n]` (list latest RFPs)",
                     "- `/polaris search <keywords>` (search title/client/type)",
                     "- `/polaris upload [n]` (upload latest PDFs from this channel; default 1)",
@@ -554,6 +630,163 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
                 ]
             ),
         }
+
+    if sub in ("link-thread", "linkthread"):
+        if not user_id or not channel_id:
+            return {"response_type": "ephemeral", "text": "Missing Slack user/channel context."}
+        if not args:
+            return {"response_type": "ephemeral", "text": "Usage: `/polaris link-thread <rfpId>`"}
+        rid = str(args[0] or "").strip()
+        if not rid.startswith("rfp_"):
+            return {"response_type": "ephemeral", "text": "Usage: `/polaris link-thread <rfpId>` (example: `rfp_abc12345`)"} 
+        create_pending_link(channel_id=channel_id, slack_user_id=user_id, rfp_id=rid, ttl_seconds=10 * 60)
+        return {
+            "response_type": "ephemeral",
+            "text": (
+                f"Got it. Next time you mention Polaris *in the target thread* in this channel, "
+                f"I’ll bind that thread to `{rid}`.\n\n"
+                "Tip: you can also do it directly in-thread with: `@polaris link <rfpId>`"
+            ),
+        }
+
+    if sub == "where":
+        if not user_id or not channel_id:
+            return {"response_type": "ephemeral", "text": "Missing Slack user/channel context."}
+        pend = get_pending_link(channel_id=channel_id, slack_user_id=user_id) or {}
+        pend_rid = str((pend or {}).get("rfpId") or "").strip() or None
+        lines = [
+            "*Thread → RFP binding*",
+            "- To bind a thread: in the thread, say `@polaris link rfp_...`",
+            "- Or: run `/polaris link-thread rfp_...`, then @mention Polaris in the target thread within 10 minutes.",
+        ]
+        if pend_rid:
+            lines.append(f"- Pending link for your next thread mention: `{pend_rid}`")
+        return {"response_type": "ephemeral", "text": "\n".join(lines)}
+
+    if sub == "link":
+        if not user_id:
+            return {"response_type": "ephemeral", "text": "Missing Slack user context."}
+        txt = "\n".join(
+            [
+                "*Link Slack → Polaris*",
+                f"- Your Slack user id: `{user_id}`",
+                "",
+                "To enable personalized memory/preferences, paste this into Polaris:",
+                f"- Open: <{_profile_url()}|Profile>",
+                "- Find the “Polaris profile” section",
+                "- Paste the Slack user id and Save",
+            ]
+        )
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": txt}},
+            {
+                "type": "actions",
+                "elements": [
+                    {"type": "button", "text": {"type": "plain_text", "text": "Open Profile"}, "url": _profile_url()},
+                ],
+            },
+        ]
+        return {"response_type": "ephemeral", "text": f"Your Slack user id is `{user_id}`", "blocks": blocks}
+
+    if sub in ("remember", "memory"):
+        if not args:
+            return {"response_type": "ephemeral", "text": "Usage: `/polaris remember <note>`"}
+        if not user_id:
+            return {"response_type": "ephemeral", "text": "Missing Slack user context."}
+        note = " ".join(args).strip()
+        if len(note) > 600:
+            note = note[:600] + "…"
+        saved = create_action(
+            kind="update_user_profile",
+            payload={
+                "action": "update_user_profile",
+                "args": {"aiMemoryAppend": note},
+                "requestedBySlackUserId": user_id,
+                "channelId": channel_id,
+                "threadTs": None,
+                "question": text,
+            },
+            ttl_seconds=900,
+        )
+        aid = str(saved.get("actionId") or "").strip()
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": "*Save to memory?*\n"
+                    f"- note: `{note}`\n\n"
+                    "This will be used to personalize future responses.\n\nConfirm?",
+                },
+            },
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Confirm"},
+                        "style": "primary",
+                        "action_id": "polaris_confirm_action",
+                        "value": aid,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Cancel"},
+                        "action_id": "polaris_cancel_action",
+                        "value": aid,
+                    },
+                ],
+            },
+        ]
+        return {
+            "response_type": "ephemeral",
+            "text": f"Proposed memory update: `{note}`",
+            "blocks": blocks,
+        }
+
+    if sub == "forget":
+        if not args:
+            return {"response_type": "ephemeral", "text": "Usage: `/polaris forget memory`"}
+        if not user_id:
+            return {"response_type": "ephemeral", "text": "Missing Slack user context."}
+        target = str(args[0] or "").strip().lower()
+        if target not in ("memory", "mem"):
+            return {"response_type": "ephemeral", "text": "Supported: `/polaris forget memory`"}
+        saved = create_action(
+            kind="update_user_profile",
+            payload={
+                "action": "update_user_profile",
+                "args": {"clearMemory": True},
+                "requestedBySlackUserId": user_id,
+                "channelId": channel_id,
+                "threadTs": None,
+                "question": text,
+            },
+            ttl_seconds=900,
+        )
+        aid = str(saved.get("actionId") or "").strip()
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": "*Clear saved memory?*\nConfirm?"}},
+            {
+                "type": "actions",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Confirm"},
+                        "style": "danger",
+                        "action_id": "polaris_confirm_action",
+                        "value": aid,
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "Cancel"},
+                        "action_id": "polaris_cancel_action",
+                        "value": aid,
+                    },
+                ],
+            },
+        ]
+        return {"response_type": "ephemeral", "text": "Proposed: clear memory", "blocks": blocks}
 
     if sub in ("ask", "q"):
         if not bool(settings.slack_agent_enabled):
@@ -1052,6 +1285,23 @@ async def slack_interactions(request: Request):
             payload2 = stored.get("payload") if isinstance(stored.get("payload"), dict) else {}
             args2 = payload2.get("args") if isinstance(payload2, dict) else {}
             args2 = args2 if isinstance(args2, dict) else {}
+            # Inject actor + original requester to prevent action hijacking.
+            if user_id:
+                args2["_actorSlackUserId"] = user_id
+            req_by = str(payload2.get("requestedBySlackUserId") or "").strip() if isinstance(payload2, dict) else ""
+            if req_by:
+                args2["_requestedBySlackUserId"] = req_by
+            # Inject Slack context for downstream tools (useful for follow-up posts).
+            if isinstance(payload2, dict):
+                ch2 = str(payload2.get("channelId") or "").strip()
+                th2 = str(payload2.get("threadTs") or "").strip()
+                q2 = str(payload2.get("question") or "").strip()
+                if ch2 and "channelId" not in args2:
+                    args2["channelId"] = ch2
+                if th2 and "threadTs" not in args2:
+                    args2["threadTs"] = th2
+                if q2 and "question" not in args2:
+                    args2["question"] = q2
 
             try:
                 result = execute_action(action_id=aid, kind=kind, args=args2)

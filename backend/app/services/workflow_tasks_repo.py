@@ -327,6 +327,8 @@ def compute_pipeline_stage(*, rfp: dict[str, Any], proposals_for_rfp: Iterable[d
 
         p = sorted(ps, key=lambda x: str(x.get("updatedAt") or ""), reverse=True)[0]
         status = str(p.get("status") or "").strip().lower()
+        if status == "won":
+            return "Contracting"
         if status == "submitted":
             return "Submitted"
         if status == "ready_to_submit":

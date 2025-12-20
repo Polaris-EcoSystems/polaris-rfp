@@ -95,6 +95,43 @@ jobs:
             echo "AMPLIFY_GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}" >> $GITHUB_ENV
           fi
 
+      - name: Choose North Star daily report channel
+        run: |
+          # Prefer an explicit channel id; otherwise default to rfp-machine channel in CFN template.
+          if [ -n "${{ secrets.NORTHSTAR_DAILY_REPORT_CHANNEL }}" ]; then
+            echo "NORTHSTAR_DAILY_REPORT_CHANNEL=${{ secrets.NORTHSTAR_DAILY_REPORT_CHANNEL }}" >> $GITHUB_ENV
+          else
+            echo "NORTHSTAR_DAILY_REPORT_CHANNEL=" >> $GITHUB_ENV
+          fi
+
+      - name: Choose North Star self-mod settings
+        run: |
+          if [ -n "${{ secrets.NORTHSTAR_SELF_MODIFY_ENABLED }}" ]; then
+            echo "NORTHSTAR_SELF_MODIFY_ENABLED=${{ secrets.NORTHSTAR_SELF_MODIFY_ENABLED }}" >> $GITHUB_ENV
+          else
+            echo "NORTHSTAR_SELF_MODIFY_ENABLED=false" >> $GITHUB_ENV
+          fi
+          if [ -n "${{ secrets.NORTHSTAR_SELF_MODIFY_ALLOWED_SLACK_USER_IDS }}" ]; then
+            echo "NORTHSTAR_SELF_MODIFY_ALLOWED_SLACK_USER_IDS=${{ secrets.NORTHSTAR_SELF_MODIFY_ALLOWED_SLACK_USER_IDS }}" >> $GITHUB_ENV
+          else
+            echo "NORTHSTAR_SELF_MODIFY_ALLOWED_SLACK_USER_IDS=" >> $GITHUB_ENV
+          fi
+          if [ -n "${{ secrets.NORTHSTAR_GITHUB_SECRET_ARN }}" ]; then
+            echo "NORTHSTAR_GITHUB_SECRET_ARN=${{ secrets.NORTHSTAR_GITHUB_SECRET_ARN }}" >> $GITHUB_ENV
+          else
+            echo "NORTHSTAR_GITHUB_SECRET_ARN=" >> $GITHUB_ENV
+          fi
+          if [ -n "${{ secrets.NORTHSTAR_GITHUB_REPO }}" ]; then
+            echo "NORTHSTAR_GITHUB_REPO=${{ secrets.NORTHSTAR_GITHUB_REPO }}" >> $GITHUB_ENV
+          else
+            echo "NORTHSTAR_GITHUB_REPO=" >> $GITHUB_ENV
+          fi
+          if [ -n "${{ secrets.NORTHSTAR_GITHUB_BASE_BRANCH }}" ]; then
+            echo "NORTHSTAR_GITHUB_BASE_BRANCH=${{ secrets.NORTHSTAR_GITHUB_BASE_BRANCH }}" >> $GITHUB_ENV
+          else
+            echo "NORTHSTAR_GITHUB_BASE_BRANCH=main" >> $GITHUB_ENV
+          fi
+
       - name: "Deploy Root Stack (Nested: Backend + Frontend)"
         run: |
           echo "Deploying root stack..."
@@ -121,6 +158,12 @@ jobs:
               JwtSecret=${{ secrets.JWT_SECRET }} \
               OpenAiApiKeySecretArn=arn:aws:secretsmanager:us-east-1:211125621822:secret:openai-TbIvAk \
               OpenAiApiKeySecretJsonKey=openai_api_key \
+              NorthStarDailyReportChannel=$NORTHSTAR_DAILY_REPORT_CHANNEL \
+              SelfModifyEnabled=$NORTHSTAR_SELF_MODIFY_ENABLED \
+              SelfModifyAllowedSlackUserIds=$NORTHSTAR_SELF_MODIFY_ALLOWED_SLACK_USER_IDS \
+              GitHubSecretArn=$NORTHSTAR_GITHUB_SECRET_ARN \
+              GitHubRepo=$NORTHSTAR_GITHUB_REPO \
+              GitHubBaseBranch=$NORTHSTAR_GITHUB_BASE_BRANCH \
             --region ${{ env.AWS_REGION }}
 
       - name: Get Amplify App ID

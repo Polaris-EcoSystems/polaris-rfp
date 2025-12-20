@@ -1,0 +1,623 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'North Star scheduled agent tasks (ambient tick, job runner, daily report) on ECS RunTask via EventBridge Scheduler'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: ['development', 'staging', 'production']
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for ECS RunTask (no public IP)
+
+  EcsClusterName:
+    Type: String
+    Description: ECS cluster name (from backend stack outputs)
+
+  ImageUri:
+    Type: String
+    Description: ECR image URI for backend (including tag) - reused for scheduled tasks
+
+  # Core app config
+  DdbTableName:
+    Type: String
+  AssetsBucketName:
+    Type: String
+  CognitoUserPoolId:
+    Type: String
+    Default: ''
+  CognitoClientId:
+    Type: String
+    Default: ''
+  CognitoRegion:
+    Type: String
+    Default: 'us-east-1'
+  MagicLinkSessionsTableName:
+    Type: String
+    Default: ''
+
+  # Secrets
+  JwtSecretArn:
+    Type: String
+    Default: ''
+  OpenAiApiKeySecretArn:
+    Type: String
+    Default: ''
+  OpenAiApiKeySecretJsonKey:
+    Type: String
+    Default: ''
+  OpenAiModel:
+    Type: String
+    Default: 'gpt-5.2'
+  OpenAiProjectId:
+    Type: String
+    Default: ''
+  OpenAiOrganizationId:
+    Type: String
+    Default: ''
+
+  SlackSecretArn:
+    Type: String
+    Default: ''
+  SlackRfpMachineChannel:
+    Type: String
+    Default: ''
+  NorthStarDailyReportChannel:
+    Type: String
+    Description: Slack channel ID for daily 8am America/Chicago report
+    Default: ''
+
+  # Self-mod settings (used by job runner)
+  SelfModifyEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  SelfModifyAllowedSlackUserIds:
+    Type: String
+    Default: ''
+  GitHubSecretArn:
+    Type: String
+    Default: ''
+  GitHubRepo:
+    Type: String
+    Default: ''
+  GitHubBaseBranch:
+    Type: String
+    Default: 'main'
+  EcsServiceName:
+    Type: String
+    Default: ''
+
+  # Schedule tuning
+  AmbientTickRateMinutes:
+    Type: Number
+    Default: 15
+  JobRunnerRateMinutes:
+    Type: Number
+    Default: 2
+
+Conditions:
+  UseJwtSecretArn: !Not [!Equals [!Ref JwtSecretArn, '']]
+  UseOpenAiApiKeySecretArn: !Not [!Equals [!Ref OpenAiApiKeySecretArn, '']]
+  UseOpenAiApiKeySecretJsonKey:
+    !Not [!Equals [!Ref OpenAiApiKeySecretJsonKey, '']]
+  UseOpenAiProjectId: !Not [!Equals [!Ref OpenAiProjectId, '']]
+  UseOpenAiOrganizationId: !Not [!Equals [!Ref OpenAiOrganizationId, '']]
+  UseSlackSecretArn: !Not [!Equals [!Ref SlackSecretArn, '']]
+  UseNorthStarDailyReportChannel:
+    !Not [!Equals [!Ref NorthStarDailyReportChannel, '']]
+  SelfModifyOn: !Equals [!Ref SelfModifyEnabled, 'true']
+  UseGitHubSecretArn: !Not [!Equals [!Ref GitHubSecretArn, '']]
+
+Resources:
+  NorthStarLogGroupAmbient:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/northstar-ambient-${Environment}'
+      RetentionInDays: 14
+
+  NorthStarLogGroupJobRunner:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/northstar-job-runner-${Environment}'
+      RetentionInDays: 14
+
+  NorthStarLogGroupDailyReport:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/northstar-daily-report-${Environment}'
+      RetentionInDays: 14
+
+  NorthStarSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'northstar-scheduled-tasks-${Environment}'
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  NorthStarTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'northstar-ecs-exec-${Environment}-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  NorthStarTaskExecutionRoleJwtSecretPolicy:
+    Type: AWS::IAM::Policy
+    Condition: UseJwtSecretArn
+    Properties:
+      PolicyName: !Sub 'northstar-ecs-exec-jwt-secret-${Environment}-${AWS::Region}'
+      Roles: [!Ref NorthStarTaskExecutionRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadJwtSecret
+            Effect: Allow
+            Action: [secretsmanager:GetSecretValue]
+            Resource: !Ref JwtSecretArn
+
+  NorthStarTaskExecutionRoleOpenAiSecretPolicy:
+    Type: AWS::IAM::Policy
+    Condition: UseOpenAiApiKeySecretArn
+    Properties:
+      PolicyName: !Sub 'northstar-ecs-exec-openai-secret-${Environment}-${AWS::Region}'
+      Roles: [!Ref NorthStarTaskExecutionRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadOpenAiApiKeySecret
+            Effect: Allow
+            Action: [secretsmanager:GetSecretValue]
+            Resource: !Ref OpenAiApiKeySecretArn
+
+  NorthStarTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'northstar-ecs-task-${Environment}-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: NorthStarDataAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DynamoDBAccess
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:BatchGetItem
+                Resource:
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DdbTableName}'
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DdbTableName}/index/*'
+              - Sid: AssetsBucketList
+                Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: [!Sub 'arn:aws:s3:::${AssetsBucketName}']
+              - Sid: AssetsObjectRW
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: [!Sub 'arn:aws:s3:::${AssetsBucketName}/*']
+              - Sid: DescribeEcsService
+                Effect: Allow
+                Action: [ecs:DescribeServices]
+                Resource: '*'
+
+  NorthStarTaskRoleSlackSecretPolicy:
+    Type: AWS::IAM::Policy
+    Condition: UseSlackSecretArn
+    Properties:
+      PolicyName: !Sub 'northstar-task-slack-secret-${Environment}-${AWS::Region}'
+      Roles: [!Ref NorthStarTaskRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadSlackSecret
+            Effect: Allow
+            Action: [secretsmanager:GetSecretValue]
+            Resource: !Ref SlackSecretArn
+
+  NorthStarTaskRoleGitHubSecretPolicy:
+    Type: AWS::IAM::Policy
+    Condition: UseGitHubSecretArn
+    Properties:
+      PolicyName: !Sub 'northstar-task-github-secret-${Environment}-${AWS::Region}'
+      Roles: [!Ref NorthStarTaskRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ReadGitHubSecret
+            Effect: Allow
+            Action: [secretsmanager:GetSecretValue]
+            Resource: !Ref GitHubSecretArn
+
+  NorthStarAmbientTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'northstar-ambient-${Environment}'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: ['FARGATE']
+      Cpu: '512'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt NorthStarTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt NorthStarTaskRole.Arn
+      ContainerDefinitions:
+        - Name: northstar-ambient
+          Image: !Ref ImageUri
+          Essential: true
+          Command: ['python', '-m', 'app.workers.ambient_tick_worker']
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: TMPDIR
+              Value: /tmp
+            - Name: DDB_TABLE_NAME
+              Value: !Ref DdbTableName
+            - Name: ASSETS_BUCKET_NAME
+              Value: !Ref AssetsBucketName
+            - Name: COGNITO_USER_POOL_ID
+              Value: !Ref CognitoUserPoolId
+            - Name: COGNITO_CLIENT_ID
+              Value: !Ref CognitoClientId
+            - Name: COGNITO_REGION
+              Value: !Ref CognitoRegion
+            - Name: MAGIC_LINK_TABLE_NAME
+              Value: !Ref MagicLinkSessionsTableName
+            - Name: OPENAI_MODEL
+              Value: !Ref OpenAiModel
+            - Name: SLACK_ENABLED
+              Value: !If [UseSlackSecretArn, 'true', 'false']
+            - Name: SLACK_RFP_MACHINE_CHANNEL
+              Value: !Ref SlackRfpMachineChannel
+            - !If
+              - UseSlackSecretArn
+              - Name: SLACK_SECRET_ARN
+                Value: !Ref SlackSecretArn
+              - !Ref AWS::NoValue
+            - Name: SELF_MODIFY_ENABLED
+              Value: !Ref SelfModifyEnabled
+            - Name: SELF_MODIFY_ALLOWED_SLACK_USER_IDS
+              Value: !Ref SelfModifyAllowedSlackUserIds
+            - Name: GITHUB_SECRET_ARN
+              Value: !Ref GitHubSecretArn
+            - Name: GITHUB_REPO
+              Value: !Ref GitHubRepo
+            - Name: GITHUB_BASE_BRANCH
+              Value: !Ref GitHubBaseBranch
+            - Name: ECS_CLUSTER
+              Value: !Ref EcsClusterName
+            - Name: ECS_SERVICE
+              Value: !Ref EcsServiceName
+            - !If
+              - UseOpenAiProjectId
+              - Name: OPENAI_PROJECT_ID
+                Value: !Ref OpenAiProjectId
+              - !Ref AWS::NoValue
+            - !If
+              - UseOpenAiOrganizationId
+              - Name: OPENAI_ORG_ID
+                Value: !Ref OpenAiOrganizationId
+              - !Ref AWS::NoValue
+          Secrets: !If
+            - UseJwtSecretArn
+            - - Name: JWT_SECRET
+                ValueFrom: !Ref JwtSecretArn
+              - !If
+                - UseOpenAiApiKeySecretArn
+                - Name: OPENAI_API_KEY
+                  ValueFrom: !If
+                    - UseOpenAiApiKeySecretJsonKey
+                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
+                    - !Ref OpenAiApiKeySecretArn
+                - !Ref AWS::NoValue
+            - - !If
+                - UseOpenAiApiKeySecretArn
+                - Name: OPENAI_API_KEY
+                  ValueFrom: !If
+                    - UseOpenAiApiKeySecretJsonKey
+                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
+                    - !Ref OpenAiApiKeySecretArn
+                - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref NorthStarLogGroupAmbient
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  NorthStarJobRunnerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'northstar-job-runner-${Environment}'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: ['FARGATE']
+      Cpu: '1024'
+      Memory: '2048'
+      ExecutionRoleArn: !GetAtt NorthStarTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt NorthStarTaskRole.Arn
+      ContainerDefinitions:
+        - Name: northstar-job-runner
+          Image: !Ref ImageUri
+          Essential: true
+          Command: ['python', '-m', 'app.workers.agent_job_runner']
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: TMPDIR
+              Value: /tmp
+            - Name: DDB_TABLE_NAME
+              Value: !Ref DdbTableName
+            - Name: ASSETS_BUCKET_NAME
+              Value: !Ref AssetsBucketName
+            - Name: COGNITO_USER_POOL_ID
+              Value: !Ref CognitoUserPoolId
+            - Name: COGNITO_CLIENT_ID
+              Value: !Ref CognitoClientId
+            - Name: COGNITO_REGION
+              Value: !Ref CognitoRegion
+            - Name: MAGIC_LINK_TABLE_NAME
+              Value: !Ref MagicLinkSessionsTableName
+            - Name: OPENAI_MODEL
+              Value: !Ref OpenAiModel
+            - Name: SLACK_ENABLED
+              Value: !If [UseSlackSecretArn, 'true', 'false']
+            - Name: SLACK_RFP_MACHINE_CHANNEL
+              Value: !Ref SlackRfpMachineChannel
+            - !If
+              - UseSlackSecretArn
+              - Name: SLACK_SECRET_ARN
+                Value: !Ref SlackSecretArn
+              - !Ref AWS::NoValue
+            - Name: NORTHSTAR_DAILY_REPORT_CHANNEL
+              Value: !Ref NorthStarDailyReportChannel
+            - Name: SELF_MODIFY_ENABLED
+              Value: !Ref SelfModifyEnabled
+            - Name: SELF_MODIFY_ALLOWED_SLACK_USER_IDS
+              Value: !Ref SelfModifyAllowedSlackUserIds
+            - Name: GITHUB_SECRET_ARN
+              Value: !Ref GitHubSecretArn
+            - Name: GITHUB_REPO
+              Value: !Ref GitHubRepo
+            - Name: GITHUB_BASE_BRANCH
+              Value: !Ref GitHubBaseBranch
+            - Name: ECS_CLUSTER
+              Value: !Ref EcsClusterName
+            - Name: ECS_SERVICE
+              Value: !Ref EcsServiceName
+            - !If
+              - UseOpenAiProjectId
+              - Name: OPENAI_PROJECT_ID
+                Value: !Ref OpenAiProjectId
+              - !Ref AWS::NoValue
+            - !If
+              - UseOpenAiOrganizationId
+              - Name: OPENAI_ORG_ID
+                Value: !Ref OpenAiOrganizationId
+              - !Ref AWS::NoValue
+          Secrets: !If
+            - UseJwtSecretArn
+            - - Name: JWT_SECRET
+                ValueFrom: !Ref JwtSecretArn
+              - !If
+                - UseOpenAiApiKeySecretArn
+                - Name: OPENAI_API_KEY
+                  ValueFrom: !If
+                    - UseOpenAiApiKeySecretJsonKey
+                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
+                    - !Ref OpenAiApiKeySecretArn
+                - !Ref AWS::NoValue
+            - - !If
+                - UseOpenAiApiKeySecretArn
+                - Name: OPENAI_API_KEY
+                  ValueFrom: !If
+                    - UseOpenAiApiKeySecretJsonKey
+                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
+                    - !Ref OpenAiApiKeySecretArn
+                - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref NorthStarLogGroupJobRunner
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  NorthStarDailyReportTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'northstar-daily-report-${Environment}'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: ['FARGATE']
+      Cpu: '512'
+      Memory: '1024'
+      ExecutionRoleArn: !GetAtt NorthStarTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt NorthStarTaskRole.Arn
+      ContainerDefinitions:
+        - Name: northstar-daily-report
+          Image: !Ref ImageUri
+          Essential: true
+          Command: ['python', '-m', 'app.workers.daily_report_worker']
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: TMPDIR
+              Value: /tmp
+            - Name: DDB_TABLE_NAME
+              Value: !Ref DdbTableName
+            - Name: ASSETS_BUCKET_NAME
+              Value: !Ref AssetsBucketName
+            - Name: COGNITO_USER_POOL_ID
+              Value: !Ref CognitoUserPoolId
+            - Name: COGNITO_CLIENT_ID
+              Value: !Ref CognitoClientId
+            - Name: COGNITO_REGION
+              Value: !Ref CognitoRegion
+            - Name: MAGIC_LINK_TABLE_NAME
+              Value: !Ref MagicLinkSessionsTableName
+            - Name: OPENAI_MODEL
+              Value: !Ref OpenAiModel
+            - Name: SLACK_ENABLED
+              Value: !If [UseSlackSecretArn, 'true', 'false']
+            - Name: SLACK_RFP_MACHINE_CHANNEL
+              Value: !Ref SlackRfpMachineChannel
+            - !If
+              - UseSlackSecretArn
+              - Name: SLACK_SECRET_ARN
+                Value: !Ref SlackSecretArn
+              - !Ref AWS::NoValue
+            - Name: NORTHSTAR_DAILY_REPORT_CHANNEL
+              Value: !Ref NorthStarDailyReportChannel
+            - !If
+              - UseOpenAiProjectId
+              - Name: OPENAI_PROJECT_ID
+                Value: !Ref OpenAiProjectId
+              - !Ref AWS::NoValue
+            - !If
+              - UseOpenAiOrganizationId
+              - Name: OPENAI_ORG_ID
+                Value: !Ref OpenAiOrganizationId
+              - !Ref AWS::NoValue
+          Secrets: !If
+            - UseJwtSecretArn
+            - - Name: JWT_SECRET
+                ValueFrom: !Ref JwtSecretArn
+              - !If
+                - UseOpenAiApiKeySecretArn
+                - Name: OPENAI_API_KEY
+                  ValueFrom: !If
+                    - UseOpenAiApiKeySecretJsonKey
+                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
+                    - !Ref OpenAiApiKeySecretArn
+                - !Ref AWS::NoValue
+            - - !If
+                - UseOpenAiApiKeySecretArn
+                - Name: OPENAI_API_KEY
+                  ValueFrom: !If
+                    - UseOpenAiApiKeySecretJsonKey
+                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
+                    - !Ref OpenAiApiKeySecretArn
+                - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref NorthStarLogGroupDailyReport
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'northstar-scheduler-${Environment}-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: scheduler.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SchedulerRunTask
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: RunTask
+                Effect: Allow
+                Action: [ecs:RunTask]
+                Resource: '*'
+              - Sid: PassRoles
+                Effect: Allow
+                Action: [iam:PassRole]
+                Resource:
+                  - !GetAtt NorthStarTaskExecutionRole.Arn
+                  - !GetAtt NorthStarTaskRole.Arn
+
+  AmbientTickSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub 'northstar-ambient-${Environment}'
+      FlexibleTimeWindow:
+        Mode: OFF
+      ScheduleExpression: !Sub 'rate(${AmbientTickRateMinutes} minutes)'
+      Target:
+        Arn: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${EcsClusterName}'
+        RoleArn: !GetAtt SchedulerRole.Arn
+        EcsParameters:
+          TaskDefinitionArn: !Ref NorthStarAmbientTaskDefinition
+          TaskCount: 1
+          LaunchType: FARGATE
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: DISABLED
+              Subnets: !Ref PrivateSubnetIds
+              SecurityGroups: [!Ref NorthStarSecurityGroup]
+
+  JobRunnerSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub 'northstar-job-runner-${Environment}'
+      FlexibleTimeWindow:
+        Mode: OFF
+      ScheduleExpression: !Sub 'rate(${JobRunnerRateMinutes} minutes)'
+      Target:
+        Arn: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${EcsClusterName}'
+        RoleArn: !GetAtt SchedulerRole.Arn
+        EcsParameters:
+          TaskDefinitionArn: !Ref NorthStarJobRunnerTaskDefinition
+          TaskCount: 1
+          LaunchType: FARGATE
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: DISABLED
+              Subnets: !Ref PrivateSubnetIds
+              SecurityGroups: [!Ref NorthStarSecurityGroup]
+
+  DailyReportSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub 'northstar-daily-report-${Environment}'
+      FlexibleTimeWindow:
+        Mode: OFF
+      ScheduleExpression: 'cron(0 8 * * ? *)'
+      ScheduleExpressionTimezone: 'America/Chicago'
+      Target:
+        Arn: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${EcsClusterName}'
+        RoleArn: !GetAtt SchedulerRole.Arn
+        EcsParameters:
+          TaskDefinitionArn: !Ref NorthStarDailyReportTaskDefinition
+          TaskCount: 1
+          LaunchType: FARGATE
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: DISABLED
+              Subnets: !Ref PrivateSubnetIds
+              SecurityGroups: [!Ref NorthStarSecurityGroup]
+
+Outputs:
+  NorthStarAmbientTaskDefinitionArn:
+    Value: !Ref NorthStarAmbientTaskDefinition
+  NorthStarJobRunnerTaskDefinitionArn:
+    Value: !Ref NorthStarJobRunnerTaskDefinition
+  NorthStarDailyReportTaskDefinitionArn:
+    Value: !Ref NorthStarDailyReportTaskDefinition
