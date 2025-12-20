@@ -48,6 +48,9 @@ class Settings(BaseSettings):
 
     # Misc integrations
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    # Optional: force OpenAI project/org for requests (prevents “wrong project” surprises).
+    openai_project_id: str | None = Field(default=None, validation_alias="OPENAI_PROJECT_ID")
+    openai_organization_id: str | None = Field(default=None, validation_alias="OPENAI_ORG_ID")
     openai_model: str = Field(default="gpt-4o-mini", validation_alias="OPENAI_MODEL")
     openai_model_rfp_analysis: str | None = Field(default=None, validation_alias="OPENAI_MODEL_RFP_ANALYSIS")
     openai_model_section_titles: str | None = Field(default=None, validation_alias="OPENAI_MODEL_SECTION_TITLES")
@@ -172,6 +175,8 @@ class Settings(BaseSettings):
             },
             "integrations": {
                 "openai_api_key_configured": _has(self.openai_api_key),
+                "openai_project_id_configured": _has(self.openai_project_id),
+                "openai_organization_id_configured": _has(self.openai_organization_id),
                 "openai_model": self.openai_model,
                 "canva_client_id": self.canva_client_id,
                 "canva_redirect_uri": self.canva_redirect_uri,

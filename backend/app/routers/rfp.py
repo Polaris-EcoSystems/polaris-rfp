@@ -591,6 +591,7 @@ def ai_refresh_stream(id: str):
             return parsed, meta
 
         fields_meta: list[dict[str, Any]] = []
+        buckets_ok = 0
 
         try:
             with ThreadPoolExecutor(max_workers=3) as ex:
@@ -604,16 +605,6 @@ def ai_refresh_stream(id: str):
                         parsed, meta = fut.result()
                         updates = parsed.model_dump()
 
-                        # Always preserve stored rawText and keep analysis meta updated.
-                        updates["_analysis"] = {
-                            "version": 2,
-                            "usedAi": True,
-                            "model": meta.model,
-                            "sourceName": source_name,
-                            "extractedChars": len(raw_text),
-                            "ts": int(time.time()),
-                        }
-
                         updated = update_rfp(id, updates) or {}
                         fields_meta.append(
                             {
@@ -623,12 +614,19 @@ def ai_refresh_stream(id: str):
                                 "responseFormat": meta.used_response_format,
                             }
                         )
+                        buckets_ok += 1
                         yield sse(
                             bucket,
                             {
                                 "ok": True,
                                 "bucket": bucket,
                                 "updates": updates,
+                                "meta": {
+                                    "purpose": meta.purpose,
+                                    "model": meta.model,
+                                    "attempts": meta.attempts,
+                                    "responseFormat": meta.used_response_format,
+                                },
                             },
                         )
                     except Exception as e:
@@ -642,6 +640,27 @@ def ai_refresh_stream(id: str):
                             },
                         )
 
+            # If nothing succeeded, fall back to heuristic analysis (keeps UX usable).
+            if buckets_ok == 0:
+                try:
+                    analysis = analyze_rfp(raw_text, source_name)
+                    update_rfp(id, analysis)
+                    yield sse(
+                        "warning",
+                        {
+                            "ok": True,
+                            "warning": "AI unavailable; used heuristic extraction instead.",
+                        },
+                    )
+                except Exception as e:
+                    yield sse(
+                        "error",
+                        {
+                            "ok": False,
+                            "error": str(e) or "fallback_failed",
+                        },
+                    )
+
             # Attach bucket execution metadata (best-effort)
             try:
                 update_rfp(
@@ -649,7 +668,7 @@ def ai_refresh_stream(id: str):
                     {
                         "_analysis": {
                             "version": 2,
-                            "usedAi": True,
+                            "usedAi": bool(buckets_ok > 0),
                             "model": settings.openai_model_for("rfp_analysis"),
                             "sourceName": source_name,
                             "extractedChars": len(raw_text),
@@ -664,6 +683,12 @@ def ai_refresh_stream(id: str):
             final = get_rfp_by_id(id) or {}
             yield sse("done", {"ok": True, "rfp": final})
         except AiNotConfigured as e:
+            # Keep the UI responsive and avoid leaving it hanging.
+            try:
+                analysis = analyze_rfp(raw_text, source_name)
+                update_rfp(id, analysis)
+            except Exception:
+                pass
             yield sse("error", {"ok": False, "error": str(e)})
         except AiError as e:
             yield sse("error", {"ok": False, "error": str(e) or "ai_failed"})

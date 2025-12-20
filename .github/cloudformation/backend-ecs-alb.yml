@@ -10,6 +10,8 @@ Conditions:
   UseOpenAiApiKeySecretArn: !Not [!Equals [!Ref OpenAiApiKeySecretArn, '']]
   UseOpenAiApiKeySecretJsonKey:
     !Not [!Equals [!Ref OpenAiApiKeySecretJsonKey, '']]
+  UseOpenAiProjectId: !Not [!Equals [!Ref OpenAiProjectId, '']]
+  UseOpenAiOrganizationId: !Not [!Equals [!Ref OpenAiOrganizationId, '']]
   UseSlackSecretArn: !Not [!Equals [!Ref SlackSecretArn, '']]
   SlackTokenRotationEnabled: !Equals [!Ref EnableSlackTokenRotation, 'true']
   UseSlackSecretArnAndRotation: !And
@@ -120,6 +122,16 @@ Parameters:
     Type: String
     Description: OpenAI model to use by default (e.g. gpt-5.2)
     Default: 'gpt-5.2'
+
+  OpenAiProjectId:
+    Type: String
+    Description: Optional OpenAI project id to force for all API calls (OpenAI-Project header)
+    Default: ''
+
+  OpenAiOrganizationId:
+    Type: String
+    Description: Optional OpenAI organization id to force for all API calls (OpenAI-Organization header)
+    Default: ''
 
   SlackSecretArn:
     Type: String
@@ -457,6 +469,16 @@ Resources:
               Value: !Ref MagicLinkSessionsTableName
             - Name: OPENAI_MODEL
               Value: !Ref OpenAiModel
+            - !If
+              - UseOpenAiProjectId
+              - Name: OPENAI_PROJECT_ID
+                Value: !Ref OpenAiProjectId
+              - !Ref AWS::NoValue
+            - !If
+              - UseOpenAiOrganizationId
+              - Name: OPENAI_ORG_ID
+                Value: !Ref OpenAiOrganizationId
+              - !Ref AWS::NoValue
             - !If
               - UseJwtSecretPlaintext
               - Name: JWT_SECRET

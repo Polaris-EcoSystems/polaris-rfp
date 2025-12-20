@@ -104,6 +104,16 @@ Parameters:
     Description: OpenAI model to use by default (e.g. gpt-5.2)
     Default: 'gpt-5.2'
 
+  OpenAiProjectId:
+    Type: String
+    Description: Optional OpenAI project id to force for all API calls (OpenAI-Project header)
+    Default: ''
+
+  OpenAiOrganizationId:
+    Type: String
+    Description: Optional OpenAI organization id to force for all API calls (OpenAI-Organization header)
+    Default: ''
+
   SlackSecretArn:
     Type: String
     Description: Optional Secrets Manager secret ARN containing Slack credentials/config (JSON)
@@ -268,6 +278,8 @@ Resources:
         OpenAiApiKeySecretArn: !Ref OpenAiApiKeySecretArn
         OpenAiApiKeySecretJsonKey: !Ref OpenAiApiKeySecretJsonKey
         OpenAiModel: !Ref OpenAiModel
+        OpenAiProjectId: !Ref OpenAiProjectId
+        OpenAiOrganizationId: !Ref OpenAiOrganizationId
         SlackSecretArn: !Ref SlackSecretArn
         EnableSlackTokenRotation: !Ref EnableSlackTokenRotation
 
