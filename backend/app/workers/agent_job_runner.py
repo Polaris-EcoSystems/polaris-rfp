@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..observability.logging import configure_logging, get_logger
@@ -8,7 +9,9 @@ from ..services.agent_events_repo import append_event
 from ..services.agent_jobs_repo import (
     claim_due_jobs,
     complete_job,
+    create_job,
     fail_job,
+    mark_checkpointed,
     try_mark_running,
 )
 from ..services.opportunity_state_repo import ensure_state_exists, patch_state, seed_from_platform
@@ -115,7 +118,29 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
             jid = str(job.get("jobId") or job.get("_id") or "").strip()
             if not jid:
                 continue
-            locked = try_mark_running(job_id=jid)
+            # Check if job has dependencies that aren't completed
+            depends_on = job.get("dependsOn")
+            if isinstance(depends_on, list) and depends_on:
+                from ..services.agent_jobs_repo import get_job as get_job_by_id
+                all_deps_complete = True
+                for dep_job_id in depends_on:
+                    dep_job = get_job_by_id(job_id=str(dep_job_id).strip())
+                    if not dep_job:
+                        all_deps_complete = False
+                        break
+                    dep_status = str(dep_job.get("status") or "").strip().lower()
+                    if dep_status not in ("completed",):
+                        all_deps_complete = False
+                        break
+                if not all_deps_complete:
+                    # Dependencies not met, skip this job
+                    continue
+            
+            # Check if resuming from checkpoint
+            checkpoint_id = str(job.get("checkpointId") or "").strip() or None
+            from_checkpoint = bool(checkpoint_id)
+            
+            locked = try_mark_running(job_id=jid, from_checkpoint=from_checkpoint)
             if not locked:
                 continue
             ran += 1
@@ -300,6 +325,82 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     )
                     complete_job(job_id=jid, result={"ok": True, "text": ans.text, "blocks": ans.blocks, "meta": ans.meta})
                     completed += 1
+                    continue
+
+                if job_type == "ai_agent_analyze_rfps":
+                    # Long-running: Analyze multiple RFPs
+                    from ..services.agent_long_running import create_analysis_orchestrator
+                    from ..services.agent_checkpoint import get_latest_checkpoint
+                    
+                    rfp_ids_raw = payload.get("rfpIds")
+                    rfp_ids = [str(r).strip() for r in rfp_ids_raw] if isinstance(rfp_ids_raw, list) else []
+                    if not rfp_ids:
+                        raise RuntimeError("missing_rfpIds_in_payload")
+                    
+                    # Check if resuming from checkpoint
+                    checkpoint_id = str(job.get("checkpointId") or "").strip() or None
+                    resume = bool(checkpoint_id)
+                    
+                    orchestrator = create_analysis_orchestrator(
+                        rfp_id=rid or "rfp_agent_analysis",
+                        job_id=jid,
+                        rfp_ids=rfp_ids,
+                    )
+                    
+                    # Execute with timeout handling
+                    job_start_time = time.time()
+                    max_duration = 25 * 60  # 25 minutes (safety margin for ECS task)
+                    
+                    try:
+                        result = orchestrator.execute(
+                            context={"jobId": jid, "rfpIds": rfp_ids},
+                            max_steps=100,
+                            resume=resume,
+                        )
+                        
+                        # Check if we're approaching timeout
+                        elapsed = time.time() - job_start_time
+                        if elapsed > (max_duration - 60):  # 1 minute before timeout
+                            # Save checkpoint and mark job as checkpointed
+                            orchestrator.checkpoint({"jobId": jid, "rfpIds": rfp_ids})
+                            latest_checkpoint = get_latest_checkpoint(rfp_id=rid or "rfp_agent_analysis", job_id=jid)
+                            checkpoint_id = str(latest_checkpoint.get("eventId") or "").strip() if latest_checkpoint else None
+                            mark_checkpointed(job_id=jid, checkpoint_id=checkpoint_id)
+                            # Reschedule job for next run
+                            next_due = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+                            create_job(
+                                job_type="ai_agent_analyze_rfps",
+                                scope=job.get("scope", {}),
+                                due_at=next_due,
+                                payload=payload,
+                            )
+                            completed += 1
+                            continue
+                        
+                        if result.success:
+                            complete_job(job_id=jid, result={"ok": True, "result": result.final_result})
+                        else:
+                            fail_job(job_id=jid, error=result.error or "orchestration_failed")
+                        completed += 1
+                    except Exception as e:
+                        # On error, try to checkpoint if possible
+                        try:
+                            orchestrator.checkpoint({"jobId": jid, "rfpIds": rfp_ids})
+                            latest_checkpoint = get_latest_checkpoint(rfp_id=rid or "rfp_agent_analysis", job_id=jid)
+                            checkpoint_id = str(latest_checkpoint.get("eventId") or "").strip() if latest_checkpoint else None
+                            mark_checkpointed(job_id=jid, checkpoint_id=checkpoint_id)
+                            # Reschedule for retry
+                            next_due = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+                            create_job(
+                                job_type="ai_agent_analyze_rfps",
+                                scope=job.get("scope", {}),
+                                due_at=next_due,
+                                payload=payload,
+                            )
+                            completed += 1
+                        except Exception:
+                            fail_job(job_id=jid, error=str(e) or "analysis_failed")
+                            failed += 1
                     continue
 
                 if job_type == "ai_agent_analyze":

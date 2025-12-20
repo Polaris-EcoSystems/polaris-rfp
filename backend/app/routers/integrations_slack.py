@@ -1202,6 +1202,55 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
         if not args:
             return {"response_type": "ephemeral", "text": "Usage: `/polaris job <jobId>`"}
         job_id = str(args[0]).strip()
+        
+        # Try agent job first
+        from ..services.agent_jobs_repo import get_job as get_agent_job
+        agent_job = get_agent_job(job_id=job_id)
+        
+        if agent_job and isinstance(agent_job, dict):
+            status = str(agent_job.get("status") or "").strip() or "unknown"
+            job_type = str(agent_job.get("jobType") or "").strip()
+            scope_raw = agent_job.get("scope")
+            scope = scope_raw if isinstance(scope_raw, dict) else {}
+            rfp_id = str(scope.get("rfpId") or "").strip() if scope else ""
+            
+            lines = [
+                f"*Agent Job:* `{job_id}`",
+                f"- Status: *{status}*",
+                f"- Type: `{job_type}`",
+            ]
+            
+            if rfp_id:
+                url = str(settings.frontend_base_url or "").rstrip("/") + f"/rfps/{rfp_id}"
+                lines.append(f"- RFP: <{url}|{rfp_id}>")
+            
+            due_at = str(agent_job.get("dueAt") or "").strip()
+            if due_at:
+                lines.append(f"- Due: {due_at}")
+            
+            started_at = str(agent_job.get("startedAt") or "").strip()
+            if started_at:
+                lines.append(f"- Started: {started_at}")
+            
+            finished_at = str(agent_job.get("finishedAt") or "").strip()
+            if finished_at:
+                lines.append(f"- Finished: {finished_at}")
+            
+            result = agent_job.get("result")
+            if isinstance(result, dict) and result.get("ok"):
+                lines.append("- Result: ✅ Success")
+            
+            err = str(agent_job.get("error") or "").strip()
+            if err:
+                lines.append(f"- Error: `{err}`")
+            
+            checkpoint_id = str(agent_job.get("checkpointId") or "").strip()
+            if checkpoint_id:
+                lines.append(f"- Checkpoint: `{checkpoint_id}` (resumable)")
+            
+            return {"response_type": "ephemeral", "text": "\n".join(lines)}
+        
+        # Fall back to RFP upload job
         job = get_job(job_id)
         if not job:
             return {"response_type": "ephemeral", "text": f"Job not found: `{job_id}`"}

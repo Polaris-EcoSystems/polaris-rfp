@@ -10,7 +10,7 @@ from ..db.dynamodb.errors import DdbConflict
 from ..db.dynamodb.table import get_main_table
 
 
-JobStatus = Literal["queued", "running", "completed", "failed", "cancelled"]
+JobStatus = Literal["queued", "running", "checkpointed", "completed", "failed", "cancelled"]
 
 
 def _now_iso() -> str:
@@ -48,6 +48,7 @@ def create_job(
     due_at: str,
     payload: dict[str, Any] | None = None,
     requested_by_user_sub: str | None = None,
+    depends_on: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Create a scheduled job.
@@ -75,6 +76,8 @@ def create_job(
         "createdAt": now,
         "updatedAt": now,
         "requestedByUserSub": str(requested_by_user_sub).strip() if requested_by_user_sub else None,
+        "dependsOn": [str(d).strip() for d in (depends_on or []) if str(d).strip()][:20],  # List of job IDs this job depends on (max 20)
+        "checkpointId": None,  # ID of latest checkpoint if resuming
         **_due_index(due_at=due, job_id=jid),
     }
     item = {k: v for k, v in item.items() if v is not None}
@@ -122,20 +125,60 @@ def claim_due_jobs(*, now_iso: str | None = None, limit: int = 25) -> list[dict[
     return out
 
 
-def try_mark_running(*, job_id: str) -> dict[str, Any] | None:
+def try_mark_running(*, job_id: str, from_checkpoint: bool = False) -> dict[str, Any] | None:
+    """
+    Mark a job as running.
+    
+    Args:
+        job_id: Job ID
+        from_checkpoint: Whether resuming from checkpoint (allows checkpointed -> running)
+    """
+    jid = str(job_id or "").strip()
+    if not jid:
+        raise ValueError("job_id is required")
+    now = _now_iso()
+    
+    if from_checkpoint:
+        # Allow checkpointed -> running transition
+        updated = get_main_table().update_item(
+            key=job_key(job_id=jid),
+            update_expression="SET #s = :r, startedAt = :st, updatedAt = :u",
+            expression_attribute_names={"#s": "status"},
+            expression_attribute_values={":r": "running", ":st": now, ":u": now, ":q": "queued", ":c": "checkpointed"},
+            condition_expression="#s IN (:q, :c)",
+            return_values="ALL_NEW",
+        )
+    else:
+        # Only allow queued -> running
+        updated = get_main_table().update_item(
+            key=job_key(job_id=jid),
+            update_expression="SET #s = :r, startedAt = :st, updatedAt = :u",
+            expression_attribute_names={"#s": "status"},
+            expression_attribute_values={":r": "running", ":st": now, ":u": now, ":q": "queued"},
+            condition_expression="#s = :q",
+            return_values="ALL_NEW",
+        )
+    return normalize_job(updated) if updated else None
+
+
+def mark_checkpointed(*, job_id: str, checkpoint_id: str | None = None) -> dict[str, Any] | None:
+    """Mark a job as checkpointed (paused, can resume)."""
     jid = str(job_id or "").strip()
     if not jid:
         raise ValueError("job_id is required")
     now = _now_iso()
     updated = get_main_table().update_item(
         key=job_key(job_id=jid),
-        update_expression="SET #s = :r, startedAt = :st, updatedAt = :u",
+        update_expression="SET #s = :c, updatedAt = :u, checkpointId = :cid",
         expression_attribute_names={"#s": "status"},
-        expression_attribute_values={":r": "running", ":st": now, ":u": now, ":q": "queued"},
-        condition_expression="#s = :q",
+        expression_attribute_values={
+            ":c": "checkpointed",
+            ":u": now,
+            ":cid": str(checkpoint_id).strip() if checkpoint_id else None,
+        },
         return_values="ALL_NEW",
     )
-    return normalize_job(updated) if updated else None
+    return normalize_job(updated)
 
 
 def complete_job(*, job_id: str, result: dict[str, Any] | None = None) -> dict[str, Any] | None:

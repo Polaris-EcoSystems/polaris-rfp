@@ -81,6 +81,56 @@ def _escalate_effort(base: str, *, attempt: int, prev_err: Exception | None) -> 
     return "high"
 
 
+def _estimate_context_complexity(
+    *,
+    context_length: int = 0,
+    has_rfp_state: bool = False,
+    has_related_rfps: bool = False,
+    has_cross_thread: bool = False,
+) -> float:
+    """
+    Estimate context complexity score (0.0 to 2.0).
+    Higher score = more complex context = higher reasoning needed.
+    """
+    score = 0.0
+    
+    # Base complexity from context length
+    if context_length > 30000:
+        score += 0.5
+    elif context_length > 15000:
+        score += 0.3
+    elif context_length > 5000:
+        score += 0.1
+    
+    # Additional complexity from context types
+    if has_rfp_state:
+        score += 0.3
+    if has_related_rfps:
+        score += 0.2
+    if has_cross_thread:
+        score += 0.2
+    
+    return min(2.0, score)
+
+
+def _is_long_running_job(purpose: str, attempt: int) -> bool:
+    """
+    Detect if this is a long-running job operation.
+    Long-running jobs benefit from higher reasoning.
+    """
+    purpose_lower = str(purpose or "").strip().lower()
+    
+    # Long-running job purposes
+    if "long_running" in purpose_lower or "analyze_rfps" in purpose_lower:
+        return True
+    
+    # High step count suggests long-running
+    if attempt >= 10:
+        return True
+    
+    return False
+
+
 def tuning_for(
     *,
     purpose: str,
@@ -88,13 +138,20 @@ def tuning_for(
     attempt: int,
     prev_err: Exception | None = None,
     recent_tools: list[str] | None = None,
+    context_length: int = 0,
+    has_rfp_state: bool = False,
+    has_related_rfps: bool = False,
+    has_cross_thread: bool = False,
+    is_long_running: bool = False,
 ) -> AiTuning:
     """
-    Choose adaptive reasoning/verbosity by task kind, retry attempt, and task complexity.
+    Choose adaptive reasoning/verbosity by task kind, retry attempt, task complexity, and context.
 
     - Attempt 1 uses configured defaults (with complexity adjustments).
     - Attempt >=2 escalates reasoning effort ONLY for parse/validation failures.
-    - For tools: complexity is inferred from recent tool calls and step count.
+    - For tools: complexity is inferred from recent tool calls, step count, and context.
+    - Context-aware: Higher reasoning for complex contexts.
+    - Time-based: Higher reasoning for long-running operations.
     
     Args:
         purpose: AI purpose string (e.g., "slack_agent")
@@ -102,6 +159,11 @@ def tuning_for(
         attempt: Step/attempt number (for tools, this is the step count)
         prev_err: Previous error (if retrying)
         recent_tools: List of tool names called in recent steps (for complexity detection)
+        context_length: Estimated context length in characters
+        has_rfp_state: Whether RFP state context is included
+        has_related_rfps: Whether related RFPs context is included
+        has_cross_thread: Whether cross-thread context is included
+        is_long_running: Whether this is a long-running job operation
     """
     k = str(kind or "").strip().lower()
 
@@ -128,12 +190,42 @@ def tuning_for(
                 elif _is_medium_complexity_tool(tool):
                     has_medium_tool = True
         
+        # Estimate context complexity
+        context_complexity = _estimate_context_complexity(
+            context_length=context_length,
+            has_rfp_state=has_rfp_state,
+            has_related_rfps=has_related_rfps,
+            has_cross_thread=has_cross_thread,
+        )
+        
+        # Detect long-running operations
+        if not is_long_running:
+            is_long_running = _is_long_running_job(purpose, steps)
+        
         # Determine base effort: start higher for complex operations
         # Default base is now "medium" instead of "low" for better quality on agent tasks
         base_eff = str(settings.openai_reasoning_effort_json or settings.openai_reasoning_effort or "medium")
         if base_eff == "low":
             # Upgrade low to medium as default for tools (agent tasks are inherently more complex)
             base_eff = "medium"
+        
+        # Adjust base effort for context complexity
+        if context_complexity > 1.0:
+            # Very complex context: start at high
+            if base_eff == "medium":
+                base_eff = "high"
+        elif context_complexity > 0.5:
+            # Moderately complex context: ensure at least medium
+            if base_eff == "low":
+                base_eff = "medium"
+        
+        # Adjust for long-running operations
+        if is_long_running:
+            # Long-running jobs: use higher reasoning throughout
+            if base_eff == "medium":
+                base_eff = "high"
+            elif base_eff == "low":
+                base_eff = "medium"
         
         # Escalate based on steps and complexity
         if has_complex_tool:
@@ -143,7 +235,7 @@ def tuning_for(
             elif steps >= 2:
                 eff = "medium"
             else:
-                eff = "medium"  # Start at medium for complex ops
+                eff = base_eff
         elif has_medium_tool:
             # Medium complexity: moderate escalation
             if steps >= 5:
@@ -160,6 +252,16 @@ def tuning_for(
                 eff = "medium"
             else:
                 eff = base_eff
+        
+        # Apply context complexity boost
+        if context_complexity > 1.0 and eff == "medium":
+            eff = "high"
+        elif context_complexity > 0.5 and eff == "low":
+            eff = "medium"
+        
+        # Apply long-running boost
+        if is_long_running and eff == "medium":
+            eff = "high"
         
         vb = str(settings.openai_text_verbosity_json or settings.openai_text_verbosity or "low")
         return AiTuning(reasoning_effort=str(eff).strip() or "medium", verbosity=str(vb).strip() or "low")

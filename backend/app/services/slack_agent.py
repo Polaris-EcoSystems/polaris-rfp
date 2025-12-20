@@ -538,152 +538,37 @@ def run_slack_agent_question(
     tool_names = [tpl["name"] for tpl in tools if isinstance(tpl, dict) and tpl.get("name")]
     chat_tools = [_to_chat_tool(tpl) for tpl in tools if isinstance(tpl, dict)]
 
-    # User memory/preferences injected into system prompt (bounded).
-    prof = user_profile if isinstance(user_profile, dict) else {}
-    preferred = str(prof.get("preferredName") or "").strip()
-    full = str(prof.get("fullName") or "").strip()
-    effective_name = preferred or full or (str(user_display_name or "").strip() if user_display_name else "")
-    prefs = prof.get("aiPreferences") if isinstance(prof.get("aiPreferences"), dict) else {}
-    mem = str(prof.get("aiMemorySummary") or "").strip()
-    user_ctx_lines: list[str] = []
-    user_sub = str(prof.get("_id") or prof.get("userSub") or "").strip()
-    if user_sub:
-        user_ctx_lines.append(f"- user_sub: {user_sub}")
-    if effective_name:
-        user_ctx_lines.append(f"- name: {effective_name}")
-    if user_email:
-        user_ctx_lines.append(f"- email: {str(user_email).strip().lower()}")
-    if user_id:
-        user_ctx_lines.append(f"- slack_user_id: {str(user_id).strip()}")
+    # Use enhanced context builder for comprehensive context
+    from .agent_context_builder import (
+        build_user_context,
+        build_thread_context,
+        build_comprehensive_context,
+    )
     
-    # Profile completion status
-    profile_completed_at = prof.get("profileCompletedAt")
-    if profile_completed_at:
-        user_ctx_lines.append(f"- profile_completed_at: {profile_completed_at}")
-    onboarding_version = prof.get("onboardingVersion")
-    if onboarding_version:
-        user_ctx_lines.append(f"- onboarding_version: {onboarding_version}")
-
-    # Timestamps
-    created_at = prof.get("createdAt")
-    if created_at:
-        user_ctx_lines.append(f"- profile_created_at: {created_at}")
-    updated_at = prof.get("updatedAt")
-    if updated_at:
-        user_ctx_lines.append(f"- profile_updated_at: {updated_at}")
-
-    # Include resume information if available
-    resume_assets = prof.get("resumeAssets")
-    if isinstance(resume_assets, list) and resume_assets:
-        resume_info: list[str] = []
-        for asset in resume_assets[:5]:  # Limit to 5 most recent
-            if not isinstance(asset, dict):
-                continue
-            file_name = str(asset.get("fileName") or "").strip()
-            s3_key = str(asset.get("s3Key") or "").strip()
-            uploaded_at = str(asset.get("uploadedAt") or "").strip()
-            content_type = str(asset.get("contentType") or "").strip().lower()
-            if file_name and s3_key:
-                resume_entry = f"{file_name} (S3: {s3_key})"
-                if content_type:
-                    resume_entry += f" [{content_type}]"
-                if uploaded_at:
-                    resume_entry += f" uploaded {uploaded_at}"
-                resume_info.append(resume_entry)
-        if resume_info:
-            user_ctx_lines.append(f"- resumes: {', '.join(resume_info)}")
+    # Build comprehensive context
+    comprehensive_ctx = build_comprehensive_context(
+        user_profile=user_profile,
+        user_display_name=user_display_name,
+        user_email=user_email,
+        user_id=user_id,
+        channel_id=channel_id,
+        thread_ts=thread_ts,
+        rfp_id=None,  # slack_agent is read-only, no RFP scope
+        max_total_chars=50000,
+    )
     
-    # Include job titles and certifications if available
-    job_titles = prof.get("jobTitles")
-    if isinstance(job_titles, list) and job_titles:
-        titles_str = ", ".join([str(t) for t in job_titles[:5]])
-        if titles_str:
-            user_ctx_lines.append(f"- job_titles: {titles_str}")
-    
-    certs = prof.get("certifications")
-    if isinstance(certs, list) and certs:
-        certs_str = ", ".join([str(c) for c in certs[:10]])
-        if certs_str:
-            user_ctx_lines.append(f"- certifications: {certs_str}")
-
-    # Include linked team member information if available
-    linked_team_member_id = prof.get("linkedTeamMemberId")
-    if linked_team_member_id:
-        user_ctx_lines.append(f"- linked_team_member_id: {linked_team_member_id}")
-        # Fetch and include team member details
-        try:
-            from . import content_repo
-            team_member = content_repo.get_team_member_by_id(str(linked_team_member_id).strip())
-            if team_member and isinstance(team_member, dict):
-                tm_name = str(team_member.get("nameWithCredentials") or team_member.get("name") or "").strip()
-                if tm_name:
-                    user_ctx_lines.append(f"- team_member_name: {tm_name}")
-                tm_position = str(team_member.get("position") or "").strip()
-                if tm_position:
-                    user_ctx_lines.append(f"- team_member_position: {tm_position}")
-                tm_bio = str(team_member.get("biography") or "").strip()
-                if tm_bio:
-                    # Clip biography to reasonable length for context
-                    bio_preview = tm_bio[:500] + "..." if len(tm_bio) > 500 else tm_bio
-                    user_ctx_lines.append(f"- team_member_biography: {bio_preview}")
-                # Include bio profiles (project-type-specific bios)
-                bio_profiles = team_member.get("bioProfiles")
-                if isinstance(bio_profiles, list) and bio_profiles:
-                    for bp in bio_profiles[:3]:  # Limit to 3 most relevant
-                        if isinstance(bp, dict):
-                            bp_label = str(bp.get("label") or "").strip()
-                            bp_project_types = bp.get("projectTypes")
-                            if bp_label:
-                                types_str = ""
-                                if isinstance(bp_project_types, list) and bp_project_types:
-                                    types_str = f" ({', '.join([str(t) for t in bp_project_types[:3]])})"
-                                user_ctx_lines.append(f"- team_member_bio_profile: {bp_label}{types_str}")
-        except Exception:
-            # Best-effort: if fetching team member fails, continue without it
-            pass
-    
-    if isinstance(prefs, dict) and prefs:
-        # Keep this compact.
-        try:
-            user_ctx_lines.append(f"- preferences_json: {clip_text(json.dumps(prefs, ensure_ascii=False), max_chars=1200)}")
-        except Exception:
-            pass
-    if mem:
-        user_ctx_lines.append(f"- memory_summary: {clip_text(mem, max_chars=1200)}")
-    user_ctx = "\n".join(user_ctx_lines).strip()
-
-    # Fetch thread history for context (stateful memory) if we have thread info
-    thread_context = ""
-    if channel_id and thread_ts:
-        try:
-            from .agent_tools.slack_read import get_thread as slack_get_thread
-            from .slack_web import get_user_info, slack_user_display_name
-            
-            result = slack_get_thread(channel=channel_id, thread_ts=thread_ts, limit=50)
-            if result.get("ok"):
-                thread_messages = result.get("messages", [])
-                if thread_messages and isinstance(thread_messages, list):
-                    lines: list[str] = []
-                    for msg in thread_messages:
-                        if not isinstance(msg, dict):
-                            continue
-                        user_id_msg = str(msg.get("user") or "").strip()
-                        text = str(msg.get("text") or "").strip()
-                        if not text:
-                            continue
-                        user_name = "User"
-                        if user_id_msg:
-                            try:
-                                user_info = get_user_info(user_id=user_id_msg)
-                                user_name = slack_user_display_name(user_info) or user_id_msg
-                            except Exception:
-                                user_name = user_id_msg
-                        lines.append(f"{user_name}: {text}")
-                    if lines:
-                        thread_context = "\n\nThread conversation history (for context - remember previous exchanges like channel names, permissions, preferences):\n" + "\n".join(lines) + "\n"
-        except Exception:
-            # Best-effort: if fetching fails, continue without thread history
-            pass
+    # Extract user context and thread context for backward compatibility
+    user_ctx = build_user_context(
+        user_profile=user_profile,
+        user_display_name=user_display_name,
+        user_email=user_email,
+        user_id=user_id,
+    )
+    thread_context = build_thread_context(
+        channel_id=channel_id,
+        thread_ts=thread_ts,
+        limit=100,
+    )
 
     system = "\n".join(
         [
@@ -701,6 +586,9 @@ def run_slack_agent_question(
             "",
             "User context (authoritative; do not guess beyond this):",
             user_ctx or "- (none provided)",
+            "",
+            "Enhanced context (for deeper awareness):",
+            comprehensive_ctx or "- (none provided)",
             "",
             "Output rules:",
             "- Be concise. Prefer 1–2 short paragraphs, OR a short list when listing items.",
@@ -808,9 +696,27 @@ def run_slack_agent_question(
                     continue
                 _tpl, func = tool
                 try:
-                    result = func(args if isinstance(args, dict) else {})
+                    # Use resilience module for retry and error handling
+                    from .agent_resilience import retry_with_classification
+                    
+                    def _execute_tool():
+                        return func(args if isinstance(args, dict) else {})
+                    
+                    result = retry_with_classification(
+                        _execute_tool,
+                        max_retries=2,
+                        base_delay=0.5,
+                        max_delay=5.0,
+                    )
                 except Exception as e:
-                    result = {"ok": False, "error": str(e) or "tool_failed"}
+                    from .agent_resilience import classify_error
+                    classification = classify_error(e)
+                    result = {
+                        "ok": False,
+                        "error": str(e) or "tool_failed",
+                        "errorCategory": classification.category.value,
+                        "retryable": classification.retryable,
+                    }
                 try:
                     append_event(
                         rfp_id="rfp_slack_agent",
@@ -836,7 +742,8 @@ def run_slack_agent_question(
 
     prev_id: str | None = None
     steps = 0
-    meta: dict[str, Any] = {"model": model, "steps": 0}
+    start_time = time.time()
+    meta: dict[str, Any] = {"model": model, "steps": 0, "started_at": start_time}
     recent_tools: list[str] = []  # Track recent tool calls for complexity detection
 
     while True:
@@ -844,14 +751,29 @@ def run_slack_agent_question(
         if steps > max(1, int(max_steps)):
             raise AiUpstreamError("slack_agent_max_steps_exceeded")
 
-        # Get tuning with complexity awareness
+        # Get tuning with complexity awareness (including context complexity)
+        # Estimate context complexity
+        context_len = len(input0) if not prev_id else 0  # Approximate context length
         tuning = tuning_for(
             purpose="slack_agent",
             kind="tools",
             attempt=steps,
             recent_tools=recent_tools[-5:] if recent_tools else None,  # Last 5 tools for context
+            context_length=context_len,
+            has_rfp_state=False,  # slack_agent is read-only, no RFP scope
+            has_related_rfps=False,
+            has_cross_thread=bool(thread_context),
+            is_long_running=False,
         )
 
+        # Use adaptive timeout based on complexity
+        from .agent_resilience import adaptive_timeout
+        timeout_seconds = adaptive_timeout(
+            base_timeout=60.0,
+            complexity_score=1.0 + (len(recent_tools) * 0.1),  # Slightly increase for more tools
+            previous_failures=0,  # Could track this in future
+        )
+        
         kwargs: dict[str, Any] = {
             "model": model,
             "tools": tools,
@@ -859,6 +781,7 @@ def run_slack_agent_question(
             "reasoning": {"effort": tuning.reasoning_effort},
             "text": {"verbosity": tuning.verbosity},
             "max_output_tokens": 900,
+            "timeout": timeout_seconds,
         }
         if prev_id:
             kwargs["previous_response_id"] = prev_id
@@ -867,7 +790,29 @@ def run_slack_agent_question(
         else:
             kwargs["input"] = input0
 
-        resp = client.responses.create(**kwargs)
+        # Wrap API call with resilience
+        from .agent_resilience import retry_with_classification
+        
+        def _call_api():
+            return client.responses.create(**kwargs)
+        
+        try:
+            resp = retry_with_classification(
+                _call_api,
+                max_retries=2,
+                base_delay=1.0,
+                max_delay=10.0,
+            )
+        except Exception as e:
+            # If API call fails, try with reduced reasoning (graceful degradation)
+            from .agent_resilience import should_retry_with_adjusted_params
+            should_retry, adjusted = should_retry_with_adjusted_params(e, attempt=1)
+            if should_retry and adjusted:
+                kwargs["reasoning"] = {"effort": adjusted.get("reasoning_effort", "medium")}
+                kwargs["max_output_tokens"] = adjusted.get("max_tokens", 900)
+                resp = client.responses.create(**kwargs)
+            else:
+                raise
         prev_id = str(getattr(resp, "id", "") or "") or prev_id
 
         tool_calls = _extract_tool_calls(resp)
@@ -919,20 +864,53 @@ def run_slack_agent_question(
             _tpl, func = tool
             started = time.time()
             try:
-                result = func(args if isinstance(args, dict) else {})
+                # Use resilience module for retry and error handling
+                from .agent_resilience import retry_with_classification, classify_error
+                
+                def _execute_tool():
+                    return func(args if isinstance(args, dict) else {})
+                
+                result = retry_with_classification(
+                    _execute_tool,
+                    max_retries=2,  # Quick retry for tool failures
+                    base_delay=0.5,
+                    max_delay=5.0,
+                    on_retry=lambda exc, attempt: log.warning(
+                        "slack_agent_tool_retry",
+                        tool=name,
+                        attempt=attempt,
+                        error=str(exc)[:200],
+                    ),
+                )
             except Exception as e:
-                result = {"ok": False, "error": str(e) or "tool_failed"}
+                # Classify error for better reporting
+                from .agent_resilience import classify_error
+                classification = classify_error(e)
+                result = {
+                    "ok": False,
+                    "error": str(e) or "tool_failed",
+                    "errorCategory": classification.category.value,
+                    "retryable": classification.retryable,
+                }
             dur_ms = int((time.time() - started) * 1000)
             try:
                 log.info("slack_agent_tool", tool=name, ok=bool(result.get("ok")), duration_ms=dur_ms)
             except Exception:
                 pass
             try:
+                # Enhanced telemetry with performance metrics
+                telemetry_payload = {
+                    "ok": bool(result.get("ok")),
+                    "durationMs": dur_ms,
+                    "step": steps,
+                    "errorCategory": result.get("errorCategory"),
+                    "retryable": result.get("retryable"),
+                }
                 append_event(
                     rfp_id="rfp_slack_agent",
                     type="tool_call",
                     tool=name,
-                    payload={"ok": bool(result.get("ok")), "durationMs": dur_ms},
+                    payload=telemetry_payload,
                     inputs_redacted={
                         "argsKeys": [str(k) for k in list((args or {}).keys())[:60]] if isinstance(args, dict) else [],
                         "channelId": channel_id,
@@ -943,6 +921,15 @@ def run_slack_agent_question(
                     },
                     created_by="slack_agent",
                     correlation_id=None,
+                )
+                # Also log performance metrics
+                log.info(
+                    "agent_tool_call",
+                    tool=name,
+                    ok=bool(result.get("ok")),
+                    duration_ms=dur_ms,
+                    step=steps,
+                    error_category=result.get("errorCategory"),
                 )
             except Exception:
                 pass
@@ -979,5 +966,37 @@ def run_slack_agent_question(
             raise AiUpstreamError("empty_model_response")
         meta["steps"] = steps
         meta["response_id"] = prev_id
+        
+        # Log completion telemetry
+        try:
+            from .agent_telemetry import track_agent_operation
+            
+            total_duration = int((time.time() - (meta.get("started_at") or time.time())) * 1000)
+            track_agent_operation(
+                operation_type="slack_agent",
+                purpose="slack_agent",
+                duration_ms=total_duration,
+                steps=steps,
+                success=True,
+                reasoning_effort=tuning.reasoning_effort,
+                context_length=len(input0) if not prev_id else 0,
+                tool_count=len(recent_tools),
+            )
+            append_event(
+                rfp_id="rfp_slack_agent",
+                type="agent_completion",
+                tool="slack_agent",
+                payload={
+                    "steps": steps,
+                    "durationMs": total_duration,
+                    "reasoningEffort": tuning.reasoning_effort,
+                    "success": True,
+                    "toolCount": len(recent_tools),
+                },
+                created_by="slack_agent",
+            )
+        except Exception:
+            pass
+        
         return SlackAgentAnswer(text=text, meta=meta)
 
