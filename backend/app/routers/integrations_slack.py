@@ -1124,7 +1124,7 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
         prop_count = sum(1 for p in props if str(p.get("rfpId") or "").strip() == rid)
 
         # Prefer blocks for a richer Slack UX.
-        text0, blocks = _build_rfp_summary_blocks(rfp=r, proposals_count=prop_count)
+        text0, blocks2 = _build_rfp_summary_blocks(rfp=r, proposals_count=prop_count)
         # Append warnings + requirements into plain text (keeps blocks clean).
         summary_lines: list[str] = []
         if warnings:
@@ -1139,7 +1139,7 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
             for alt in hits[1:4]:
                 summary_lines.append(_format_rfp_line(alt))
         text = (text0 + ("\n" + "\n".join(summary_lines) if summary_lines else "")).strip()
-        return {"response_type": rt, "text": text, "blocks": blocks}
+        return {"response_type": rt, "text": text, "blocks": blocks2}
 
     if sub == "rfp":
         if not args:

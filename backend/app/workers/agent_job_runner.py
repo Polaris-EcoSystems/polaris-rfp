@@ -25,7 +25,8 @@ def _now_iso() -> str:
 
 
 def _job_scope_rfp_id(job: dict[str, Any]) -> str | None:
-    scope = job.get("scope") if isinstance(job.get("scope"), dict) else {}
+    raw_scope = job.get("scope")
+    scope: dict[str, Any] = raw_scope if isinstance(raw_scope, dict) else {}
     rid = str(scope.get("rfpId") or "").strip()
     return rid or None
 
@@ -55,7 +56,8 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
 
         job_type = str(job.get("jobType") or "").strip()
         rid = _job_scope_rfp_id(job) or ""
-        payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+        raw_payload = job.get("payload")
+        payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
 
         try:
             if rid:
@@ -102,7 +104,11 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                 rfp_id = str(payload.get("rfpId") or "").strip() or rid or None
                 if not proposal_id or not actor:
                     raise RuntimeError("missing_proposalId_or_actor")
-                res = open_pr_for_change_proposal(proposal_id=proposal_id, actor_slack_user_id=actor, rfp_id=rfp_id)
+                res = open_pr_for_change_proposal(
+                    proposal_id=proposal_id,
+                    actor_slack_user_id=actor,
+                    rfp_id=rfp_id,
+                )
                 if channel and thread_ts:
                     try:
                         if res.get("ok"):
@@ -129,7 +135,8 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                 res = get_pr_checks(pr_url_or_number=pr)
                 if channel and thread_ts and res.get("ok"):
                     try:
-                        summary = res.get("checksSummary") or {}
+                        summary_raw = res.get("checksSummary")
+                        summary: dict[str, Any] = summary_raw if isinstance(summary_raw, dict) else {}
                         txt = (
                             f"PR checks status:\n"
                             f"- total: {summary.get('total')}\n"

@@ -190,7 +190,7 @@ def preview_version(
     render_inputs = (body or {}).get("renderInputs") if isinstance((body or {}).get("renderInputs"), dict) else {}
 
     try:
-        from docxtpl import DocxTemplate  # type: ignore
+        from docxtpl import DocxTemplate
     except Exception as e:
         raise HTTPException(status_code=500, detail="DOCX template dependency not installed") from e
 

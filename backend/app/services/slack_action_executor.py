@@ -96,29 +96,31 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
         # Preferences merge (shallow)
         prefs_merge = a.get("aiPreferencesMerge")
         if isinstance(prefs_merge, dict):
-            existing = profile.get("aiPreferences") if isinstance(profile.get("aiPreferences"), dict) else {}
-            merged = dict(existing)
+            existing_raw = profile.get("aiPreferences")
+            existing_prefs: dict[str, Any] = existing_raw if isinstance(existing_raw, dict) else {}
+            merged_prefs: dict[str, Any] = dict(existing_prefs)
             # Bound + shallow merge
             for kk, vv in list(prefs_merge.items())[:50]:
                 k2 = str(kk or "").strip()[:60]
                 if not k2:
                     continue
                 if isinstance(vv, (int, float, bool)) or vv is None:
-                    merged[k2] = vv
+                    merged_prefs[k2] = vv
                 else:
-                    merged[k2] = str(vv)[:500]
-            updates["aiPreferences"] = merged
+                    merged_prefs[k2] = str(vv)[:500]
+            updates["aiPreferences"] = merged_prefs
 
         # Forget preference keys
         forget_keys = a.get("forgetPreferenceKeys")
         if isinstance(forget_keys, list):
-            existing = profile.get("aiPreferences") if isinstance(profile.get("aiPreferences"), dict) else {}
-            merged = dict(existing)
+            existing_raw = profile.get("aiPreferences")
+            existing_prefs2: dict[str, Any] = existing_raw if isinstance(existing_raw, dict) else {}
+            merged_prefs2: dict[str, Any] = dict(existing_prefs2)
             for kk in forget_keys[:50]:
                 k2 = str(kk or "").strip()
-                if k2 in merged:
-                    merged.pop(k2, None)
-            updates["aiPreferences"] = merged
+                if k2 in merged_prefs2:
+                    merged_prefs2.pop(k2, None)
+            updates["aiPreferences"] = merged_prefs2
 
         # Memory set / append / clear
         if bool(a.get("clearMemory") is True):
@@ -129,8 +131,8 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
         if "aiMemoryAppend" in a:
             note = str(a.get("aiMemoryAppend") or "").strip()
             if note:
-                existing = str(profile.get("aiMemorySummary") or "").strip()
-                next_mem = (existing + ("\n" if existing else "") + f"- {note}").strip()
+                existing_mem = str(profile.get("aiMemorySummary") or "").strip()
+                next_mem = (existing_mem + ("\n" if existing_mem else "") + f"- {note}").strip()
                 # Keep last 4000 chars (trim from front).
                 if len(next_mem) > 4000:
                     next_mem = next_mem[-4000:]
@@ -161,7 +163,7 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
         actor = str(a.get("_actorSlackUserId") or "").strip()
         channel = str(a.get("channelId") or "").strip()
         thread_ts = str(a.get("threadTs") or "").strip() or None
-        rfp_id = str(a.get("rfpId") or "").strip() or None
+        rfp_id = str(a.get("rfpId") or "").strip()
         if not proposal_id:
             return {"ok": False, "error": "missing_proposalId"}
         if not actor:
@@ -176,7 +178,7 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
                 "_actorSlackUserId": actor,
                 "channelId": channel,
                 "threadTs": thread_ts,
-                "rfpId": rfp_id,
+                "rfpId": rfp_id or None,
             },
             requested_by_user_sub=None,
         )
@@ -198,12 +200,12 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
             return {"ok": False, "error": "missing_pr"}
         channel = str(a.get("channelId") or "").strip()
         thread_ts = str(a.get("threadTs") or "").strip() or None
-        rfp_id = str(a.get("rfpId") or "").strip() or None
+        rfp_id = str(a.get("rfpId") or "").strip()
         job = create_agent_job(
             job_type="self_modify_check_pr",
             scope={"rfpId": rfp_id} if rfp_id else {},
             due_at=_now_iso(),
-            payload={"pr": pr, "channelId": channel, "threadTs": thread_ts, "rfpId": rfp_id},
+            payload={"pr": pr, "channelId": channel, "threadTs": thread_ts, "rfpId": rfp_id or None},
             requested_by_user_sub=None,
         )
         if channel and thread_ts:
@@ -223,12 +225,12 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
         poll_s = int(a.get("pollSeconds") or 10)
         channel = str(a.get("channelId") or "").strip()
         thread_ts = str(a.get("threadTs") or "").strip() or None
-        rfp_id = str(a.get("rfpId") or "").strip() or None
+        rfp_id = str(a.get("rfpId") or "").strip()
         job = create_agent_job(
             job_type="self_modify_verify_ecs",
             scope={"rfpId": rfp_id} if rfp_id else {},
             due_at=_now_iso(),
-            payload={"timeoutSeconds": timeout_s, "pollSeconds": poll_s, "channelId": channel, "threadTs": thread_ts, "rfpId": rfp_id},
+            payload={"timeoutSeconds": timeout_s, "pollSeconds": poll_s, "channelId": channel, "threadTs": thread_ts, "rfpId": rfp_id or None},
             requested_by_user_sub=None,
         )
         if channel and thread_ts:

@@ -108,9 +108,6 @@ Conditions:
   UseOpenAiProjectId: !Not [!Equals [!Ref OpenAiProjectId, '']]
   UseOpenAiOrganizationId: !Not [!Equals [!Ref OpenAiOrganizationId, '']]
   UseSlackSecretArn: !Not [!Equals [!Ref SlackSecretArn, '']]
-  UseNorthStarDailyReportChannel:
-    !Not [!Equals [!Ref NorthStarDailyReportChannel, '']]
-  SelfModifyOn: !Equals [!Ref SelfModifyEnabled, 'true']
   UseGitHubSecretArn: !Not [!Equals [!Ref GitHubSecretArn, '']]
 
 Resources:
@@ -558,7 +555,7 @@ Resources:
     Properties:
       Name: !Sub 'northstar-ambient-${Environment}'
       FlexibleTimeWindow:
-        Mode: OFF
+        Mode: 'OFF'
       ScheduleExpression: !Sub 'rate(${AmbientTickRateMinutes} minutes)'
       Target:
         Arn: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${EcsClusterName}'
@@ -578,7 +575,7 @@ Resources:
     Properties:
       Name: !Sub 'northstar-job-runner-${Environment}'
       FlexibleTimeWindow:
-        Mode: OFF
+        Mode: 'OFF'
       ScheduleExpression: !Sub 'rate(${JobRunnerRateMinutes} minutes)'
       Target:
         Arn: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${EcsClusterName}'
@@ -598,7 +595,7 @@ Resources:
     Properties:
       Name: !Sub 'northstar-daily-report-${Environment}'
       FlexibleTimeWindow:
-        Mode: OFF
+        Mode: 'OFF'
       ScheduleExpression: 'cron(0 8 * * ? *)'
       ScheduleExpressionTimezone: 'America/Chicago'
       Target:

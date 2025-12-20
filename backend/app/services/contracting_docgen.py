@@ -89,7 +89,7 @@ def render_contract_docx(
         raise ValueError("Template version missing s3Key")
 
     try:
-        from docxtpl import DocxTemplate  # type: ignore
+        from docxtpl import DocxTemplate
     except Exception as e:
         raise RuntimeError("DOCX template dependency not installed (docxtpl)") from e
 
@@ -181,12 +181,13 @@ def generate_budget_xlsx(
             model = {"items": [], "notes": "", "currency": "USD"}
 
     try:
-        from openpyxl import Workbook  # type: ignore
-        from openpyxl.styles import Alignment, Font, PatternFill  # type: ignore
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
     except Exception as e:
         raise RuntimeError("XLSX dependency not installed (openpyxl)") from e
 
-    items_in = model.get("items") if isinstance(model.get("items"), list) else []
+    raw_items = model.get("items")
+    items_in: list[Any] = raw_items if isinstance(raw_items, list) else []
     items: list[dict[str, Any]] = [x for x in items_in if isinstance(x, dict)]
 
     # Normalize + compute totals.

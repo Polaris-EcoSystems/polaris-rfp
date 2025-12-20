@@ -800,7 +800,14 @@ def revoke_client_package(*, case_id: str, package_id: str, revoked_by_user_sub:
         expression_attribute_values={":r": now, ":u": now, ":n": None},
         return_values="ALL_NEW",
     )
-    out = normalize_client_package(updated) or None
+    if not updated:
+        raise DdbNotFound(
+            message="Package not found",
+            operation="UpdateItem",
+            table_name=get_main_table().table_name,
+            key=client_package_key(case_id, package_id),
+        )
+    out = normalize_client_package(updated) or {}
     try:
         touch_case(str(case_id))
     except Exception:

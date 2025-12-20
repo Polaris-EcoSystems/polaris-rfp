@@ -137,8 +137,10 @@ def _event_append_tool(args: dict[str, Any]) -> dict[str, Any]:
 def _schedule_job_tool(args: dict[str, Any]) -> dict[str, Any]:
     due_at = str(args.get("dueAt") or "").strip()
     job_type = str(args.get("jobType") or "").strip() or "unknown"
-    scope = args.get("scope") if isinstance(args.get("scope"), dict) else {}
-    payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+    raw_scope = args.get("scope")
+    scope: dict[str, Any] = raw_scope if isinstance(raw_scope, dict) else {}
+    raw_payload = args.get("payload")
+    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
     job = create_agent_job(job_type=job_type, scope=scope, due_at=due_at, payload=payload, requested_by_user_sub=None)
     return {"ok": True, "job": job}
 
@@ -147,7 +149,8 @@ def _create_change_proposal_tool(args: dict[str, Any]) -> dict[str, Any]:
     summary = str(args.get("summary") or "").strip()
     patch = str(args.get("patch") or "")
     rfp_id = str(args.get("rfpId") or "").strip() or None
-    files = args.get("filesTouched") if isinstance(args.get("filesTouched"), list) else []
+    raw_files = args.get("filesTouched")
+    files: list[Any] = raw_files if isinstance(raw_files, list) else []
     cp = create_change_proposal(
         title=title or "Change proposal",
         summary=summary or "",
@@ -400,13 +403,13 @@ def run_slack_operator_for_mention(
 
         if q.strip().lower() in ("where", "where?"):
             b = get_thread_binding(channel_id=ch, thread_ts=th)
-            rid = str((b or {}).get("rfpId") or "").strip() or None
-            if rid:
-                msg = f"This thread is bound to `{rid}`."
+            bound_rid = str((b or {}).get("rfpId") or "").strip() or None
+            if bound_rid:
+                msg = f"This thread is bound to `{bound_rid}`."
             else:
                 msg = "No RFP is bound to this thread yet. Bind it once with: `@polaris link rfp_...`"
             chat_post_message_result(text=msg, channel=ch, thread_ts=th, unfurl_links=False)
-            return SlackOperatorResult(did_post=True, text=msg, meta={"boundRfpId": rid})
+            return SlackOperatorResult(did_post=True, text=msg, meta={"boundRfpId": bound_rid})
     except Exception:
         # Never block the operator on thread-binding helpers.
         pass

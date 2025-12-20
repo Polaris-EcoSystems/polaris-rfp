@@ -52,8 +52,9 @@ def get_user_profile_by_slack_user_id(*, slack_user_id: str) -> dict[str, Any] |
         limit=1,
         next_token=None,
     )
-    it = (pg.items or [None])[0] if pg.items else None
-    return normalize_user_profile_for_api(it) if isinstance(it, dict) else None
+    items = pg.items or []
+    it0 = items[0] if items else None
+    return normalize_user_profile_for_api(it0) if isinstance(it0, dict) else None
 
 
 def upsert_user_profile(*, user_sub: str, email: str | None, updates: dict[str, Any]) -> dict[str, Any]:

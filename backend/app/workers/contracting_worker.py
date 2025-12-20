@@ -54,7 +54,8 @@ def _process_job(job_id: str, *, receive_count: int) -> None:
     if not running:
         return
 
-    payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
+    raw_payload = job.get("payload")
+    payload: dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
     job_type = str(job.get("jobType") or "").strip()
     case_id = str(payload.get("caseId") or job.get("caseId") or "").strip()
     if not case_id:

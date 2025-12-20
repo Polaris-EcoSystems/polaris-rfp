@@ -295,10 +295,13 @@ def verify_ecs_rollout(*, timeout_s: int = 600, poll_s: int = 10) -> dict[str, A
             return {"ok": False, "error": "service_not_found"}
         last = svc
 
-        deployments = svc.get("deployments") if isinstance(svc.get("deployments"), list) else []
+        raw_deployments = svc.get("deployments")
+        deployments: list[dict[str, Any]] = (
+            [d for d in raw_deployments if isinstance(d, dict)] if isinstance(raw_deployments, list) else []
+        )
         primary = None
         for d in deployments:
-            if isinstance(d, dict) and str(d.get("status") or "").upper() == "PRIMARY":
+            if str(d.get("status") or "").upper() == "PRIMARY":
                 primary = d
                 break
 
@@ -309,7 +312,7 @@ def verify_ecs_rollout(*, timeout_s: int = 600, poll_s: int = 10) -> dict[str, A
         stable = (
             desired == running
             and rollout_state in ("COMPLETED", "")
-            and len([d for d in deployments if isinstance(d, dict)]) <= 1
+            and len(deployments) <= 1
         )
         if stable:
             return {

@@ -157,7 +157,8 @@ def slack_user_display_name(user: dict[str, Any] | None) -> str | None:
     """
     if not isinstance(user, dict):
         return None
-    prof = user.get("profile") if isinstance(user.get("profile"), dict) else {}
+    raw_prof = user.get("profile")
+    prof: dict[str, Any] = raw_prof if isinstance(raw_prof, dict) else {}
     candidates = [
         str(prof.get("display_name_normalized") or "").strip(),
         str(prof.get("display_name") or "").strip(),

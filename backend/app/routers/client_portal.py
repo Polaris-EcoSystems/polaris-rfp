@@ -23,7 +23,8 @@ def get_portal_package(token: str):
     if not pkg:
         raise HTTPException(status_code=404, detail="Portal package not found")
     # Return minimal safe payload for clients.
-    files = pkg.get("selectedFiles") if isinstance(pkg.get("selectedFiles"), list) else []
+    raw_files = pkg.get("selectedFiles")
+    files: list[object] = raw_files if isinstance(raw_files, list) else []
     safe_files = []
     for f in files:
         if not isinstance(f, dict):
@@ -63,7 +64,8 @@ def presign_portal_file(token: str, fileId: str, expiresIn: int = 900):
     fid = str(fileId or "").strip()
     if not fid:
         raise HTTPException(status_code=400, detail="fileId is required")
-    files = pkg.get("selectedFiles") if isinstance(pkg.get("selectedFiles"), list) else []
+    raw_files = pkg.get("selectedFiles")
+    files: list[object] = raw_files if isinstance(raw_files, list) else []
     match = None
     for f in files:
         if not isinstance(f, dict):

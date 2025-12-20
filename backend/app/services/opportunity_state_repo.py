@@ -279,7 +279,8 @@ def patch_state(
             current = table.get_item(key=opportunity_state_key(rfp_id=rid)) or {}
 
         cur_ver = int(current.get("version") or 0)
-        cur_state = current.get("state") if isinstance(current.get("state"), dict) else default_state(rfp_id=rid)
+        raw_state = current.get("state")
+        cur_state: dict[str, Any] = raw_state if isinstance(raw_state, dict) else default_state(rfp_id=rid)
         next_state = _merge_state(cur_state, patch if isinstance(patch, dict) else {})
 
         now = _now_iso()

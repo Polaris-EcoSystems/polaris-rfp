@@ -462,7 +462,8 @@ def presign_zip_result(jobId: str, expiresIn: int = 900):
     job = get_contracting_job(str(jobId or "").strip()) or {}
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    res = job.get("result") if isinstance(job.get("result"), dict) else {}
+    raw_res = job.get("result")
+    res: dict[str, Any] = raw_res if isinstance(raw_res, dict) else {}
     key = str(res.get("zipS3Key") or "").strip()
     if not key:
         raise HTTPException(status_code=404, detail="Zip result not available")
