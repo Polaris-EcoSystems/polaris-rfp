@@ -1169,17 +1169,26 @@ def run_slack_operator_for_mention(
         return SlackOperatorResult(did_post=did_post, text=None, meta={"steps": steps, "response_format": "chat_tools"})
 
     prev_id: str | None = None
+    recent_tools: list[str] = []  # Track recent tool calls for complexity detection
     while True:
         steps += 1
         if steps > max(1, int(max_steps)):
             break
 
+        # Get tuning with complexity awareness
+        tuning = tuning_for(
+            purpose="slack_agent",
+            kind="tools",
+            attempt=steps,
+            recent_tools=recent_tools[-5:] if recent_tools else None,  # Last 5 tools for context
+        )
+
         kwargs: dict[str, Any] = {
             "model": model,
             "tools": tools,
             "tool_choice": _sa._tool_choice_allowed(tool_names),
-            "reasoning": {"effort": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).reasoning_effort},
-            "text": {"verbosity": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).verbosity},
+            "reasoning": {"effort": tuning.reasoning_effort},
+            "text": {"verbosity": tuning.verbosity},
             "max_output_tokens": 1100,
         }
         if prev_id:
@@ -1206,6 +1215,13 @@ def run_slack_operator_for_mention(
                 args = json.loads(raw_args) if isinstance(raw_args, str) and raw_args else {}
             except Exception:
                 args = {}
+
+            # Track tool for complexity detection
+            if name:
+                recent_tools.append(name)
+                # Keep only last 10 tools to avoid unbounded growth
+                if len(recent_tools) > 10:
+                    recent_tools = recent_tools[-10:]
 
             args, proto_err = _inject_and_enforce(tool_name=name, tool_args=args if isinstance(args, dict) else {})
             if proto_err is not None:
@@ -1279,14 +1295,21 @@ def run_slack_operator_for_mention(
                 pass
             outputs.append(_sa._tool_output_item(call_id, _sa._safe_json(result)))
 
+        # Get updated tuning with latest tool complexity
+        tuning2 = tuning_for(
+            purpose="slack_agent",
+            kind="tools",
+            attempt=steps,
+            recent_tools=recent_tools[-5:] if recent_tools else None,
+        )
         resp2 = client.responses.create(
             model=model,
             previous_response_id=prev_id,
             input=outputs,
             tools=tools,
             tool_choice=_sa._tool_choice_allowed(tool_names),
-            reasoning={"effort": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).reasoning_effort},
-            text={"verbosity": tuning_for(purpose="slack_agent", kind="tools", attempt=steps).verbosity},
+            reasoning={"effort": tuning2.reasoning_effort},
+            text={"verbosity": tuning2.verbosity},
             max_output_tokens=1100,
         )
         prev_id = str(getattr(resp2, "id", "") or "") or prev_id
