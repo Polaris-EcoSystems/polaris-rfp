@@ -1,6 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'North Star scheduled agent tasks (ambient tick, job runner, daily report) on ECS RunTask via EventBridge Scheduler'
 
+
 Parameters:
   Environment:
     Type: String
