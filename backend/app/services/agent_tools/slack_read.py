@@ -55,13 +55,35 @@ def get_thread(*, channel: str, thread_ts: str, limit: int = 25) -> dict[str, An
         if not isinstance(m, dict):
             continue
         txt = str(m.get("text") or "")
-        out.append(
-            {
-                "ts": m.get("ts"),
-                "user": m.get("user"),
-                "text": (txt[:2000] + "…") if len(txt) > 2000 else txt,
-            }
-        )
+        msg_data: dict[str, Any] = {
+            "ts": m.get("ts"),
+            "user": m.get("user"),
+            "text": (txt[:2000] + "…") if len(txt) > 2000 else txt,
+        }
+        
+        # Include file attachments if present
+        files_raw = m.get("files")
+        if isinstance(files_raw, list) and files_raw:
+            files_info: list[dict[str, Any]] = []
+            for f in files_raw:
+                if not isinstance(f, dict):
+                    continue
+                file_info: dict[str, Any] = {
+                    "id": f.get("id"),
+                    "name": f.get("name"),
+                    "mimetype": f.get("mimetype"),
+                    "filetype": f.get("filetype"),
+                    "size": f.get("size"),
+                }
+                # Include download URL if available (needed for creating RFPs)
+                url_private = f.get("url_private_download") or f.get("url_private")
+                if url_private:
+                    file_info["url"] = str(url_private).strip()
+                files_info.append(file_info)
+            if files_info:
+                msg_data["files"] = files_info
+        
+        out.append(msg_data)
     return {"ok": True, "channel": ch, "threadTs": ts, "messages": out}
 
 

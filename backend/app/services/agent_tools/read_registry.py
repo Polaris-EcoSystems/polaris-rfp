@@ -35,6 +35,7 @@ from .aws_cognito import list_users as cognito_list_users
 from .aws_ecs import describe_service as ecs_describe_service
 from .aws_ecs import describe_task_definition as ecs_describe_task_definition
 from .aws_ecs import list_tasks as ecs_list_tasks
+from .aws_ecs import metadata_introspect as ecs_metadata_introspect
 from .aws_logs import tail_log_group as logs_tail
 from .aws_logs_insights import search_logs as telemetry_search_logs
 from .aws_logs_insights import top_errors as telemetry_top_errors
@@ -1027,6 +1028,14 @@ def _ecs_describe_task_definition_tool(args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(e) or "ecs_failed"}
 
 
+def _ecs_metadata_introspect_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Introspect ECS container metadata from the task metadata endpoint."""
+    try:
+        return ecs_metadata_introspect()
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "ecs_metadata_failed"}
+
+
 def _cognito_describe_user_pool_tool(args: dict[str, Any]) -> dict[str, Any]:
     up = str(args.get("userPoolId") or "").strip() or None
     try:
@@ -1880,6 +1889,19 @@ READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
             },
         ),
         _ecs_describe_task_definition_tool,
+    ),
+    "ecs_metadata_introspect": (
+        tool_def(
+            "ecs_metadata_introspect",
+            "Introspect ECS container metadata from the task metadata endpoint. Queries the ECS_CONTAINER_METADATA_URI_V4 endpoint to discover task, cluster, service, and container information about the current ECS task. Use this to self-discover environment information when running in ECS.",
+            {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _ecs_metadata_introspect_tool,
     ),
     "cognito_describe_user_pool": (
         tool_def(

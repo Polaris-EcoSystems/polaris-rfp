@@ -839,7 +839,7 @@ def _operations_requiring_rfp_scope(question: str) -> bool | None:
     """
     q_lower = str(question or "").lower().strip()
     
-    # Explicit indicators that this is NOT about an existing RFP
+    # Explicit indicators that this is NOT about an existing RFP (creating/uploading new RFPs)
     if any(phrase in q_lower for phrase in [
         "isn't about an existing rfp",
         "is not about an existing rfp",
@@ -847,6 +847,17 @@ def _operations_requiring_rfp_scope(question: str) -> bool | None:
         "not about an rfp",
         "not tied to an rfp",
         "new rfp",
+        "brand new",
+        "it's new",
+        "it is new",
+        "upload.*as.*new",
+        "upload.*new",
+        "create.*new",
+        "upload the file",
+        "upload this",
+        "upload it",
+        "can you upload",
+        "upload as",
         "search for",
         "find a new",
         "north star",
@@ -1309,6 +1320,68 @@ def _slack_send_dm_tool(args: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
+def _rfp_create_from_slack_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Create a new RFP from a Slack file URL."""
+    file_url = str(args.get("fileUrl") or "").strip()
+    file_name = str(args.get("fileName") or "upload.pdf").strip() or "upload.pdf"
+    channel_id = str(args.get("channelId") or "").strip()
+    thread_ts = str(args.get("threadTs") or "").strip() or None
+    
+    if not file_url:
+        return {"ok": False, "error": "missing_file_url"}
+    
+    try:
+        from .slack_web import download_slack_file
+        from .rfp_analyzer import analyze_rfp
+        from .rfps_repo import create_rfp_from_analysis
+        
+        def _rfp_url(rfp_id: str) -> str:
+            from ..settings import settings
+            base = str(settings.frontend_base_url or "").rstrip("/")
+            return f"{base}/rfps/{str(rfp_id or '').strip()}"
+        
+        # Download the file from Slack
+        pdf_data = download_slack_file(url=file_url, max_bytes=60 * 1024 * 1024)
+        
+        # Analyze the RFP
+        analysis = analyze_rfp(pdf_data, file_name)
+        
+        # Create the RFP
+        saved = create_rfp_from_analysis(analysis=analysis, source_file_name=file_name, source_file_size=len(pdf_data))
+        rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
+        
+        if not rfp_id:
+            return {"ok": False, "error": "rfp_creation_failed", "hint": "RFP was created but no ID was returned"}
+        
+        # Post a confirmation message if channel/thread provided
+        if channel_id and thread_ts:
+            try:
+                from .slack_web import chat_post_message_result
+                chat_post_message_result(
+                    text=f"Created RFP: <{_rfp_url(rfp_id)}|`{rfp_id}`>",
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    unfurl_links=False,
+                )
+            except Exception:
+                pass  # Non-fatal if we can't post the message
+        
+        return {
+            "ok": True,
+            "rfpId": rfp_id,
+            "fileName": file_name,
+            "fileSize": len(pdf_data),
+        }
+    except RuntimeError as e:
+        err_msg = str(e) or "analysis_failed"
+        if "No extractable text" in err_msg:
+            return {"ok": False, "error": "no_extractable_text", "hint": "PDF appears to contain no selectable text (may be a scanned image)"}
+        return {"ok": False, "error": "analysis_failed", "hint": err_msg}
+    except Exception as e:
+        err_msg = str(e) or "creation_failed"
+        return {"ok": False, "error": "creation_failed", "hint": err_msg}
+
+
 OPERATOR_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
     # Read tools (existing platform browsing).
     **_sa.READ_TOOLS,
@@ -1559,6 +1632,24 @@ OPERATOR_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
             },
         ),
         _slack_send_dm_tool,
+    ),
+    "rfp_create_from_slack_file": (
+        _tool_def(
+            "rfp_create_from_slack_file",
+            "Create a new RFP opportunity from a PDF file attached to a Slack message. Use this when the user asks to upload a file as a new RFP opportunity or create a new RFP from a file in the thread. The fileUrl should come from the 'files' array in thread messages (from slack_get_thread).",
+            {
+                "type": "object",
+                "properties": {
+                    "fileUrl": {"type": "string", "description": "Slack file download URL (url_private_download or url_private from file metadata)", "minLength": 1, "maxLength": 500},
+                    "fileName": {"type": "string", "description": "Name of the file (e.g., 'RFP.pdf')", "minLength": 1, "maxLength": 200},
+                    "channelId": {"type": "string", "description": "Channel ID to post confirmation message (optional)", "maxLength": 50},
+                    "threadTs": {"type": "string", "description": "Thread timestamp to post confirmation message (optional)", "maxLength": 40},
+                },
+                "required": ["fileUrl", "fileName"],
+                "additionalProperties": False,
+            },
+        ),
+        _rfp_create_from_slack_file_tool,
     ),
 }
 
@@ -1944,6 +2035,7 @@ def run_slack_operator_for_mention(
             "- When users ask about their professional background, check both user context (job titles, certifications) and linked team member information (biography, bioProfiles) if available. Use `get_team_member` tool to fetch full team member details if needed.",
             "- For complex requests: Break down into steps, gather information incrementally, and iterate. Use multi-turn loops to work through the problem systematically.",
             "- Team awareness: You have access to team member profiles, biographies, and project-specific bios. Use `get_team_member` or `list_team_members` when users ask about team capabilities or need to match team members to projects.",
+            "- Creating new RFPs from files: When users ask to upload a file as a new RFP opportunity (e.g., 'upload this as a new opportunity', 'create a new RFP from the file above', 'it's brand new'), use `slack_get_thread` to find PDF files in the thread, then use `rfp_create_from_slack_file` with the file URL and name. This does NOT require RFP scope - it creates a NEW RFP.",
             "",
             "GPT-5.2 Best Practices:",
             "- You are using GPT-5.2 with the Responses API, which supports passing chain of thought (CoT) between turns for improved intelligence.",

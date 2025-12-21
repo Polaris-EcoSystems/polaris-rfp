@@ -619,6 +619,34 @@ Resources:
                 Resource:
                   - !GetAtt ContractingJobsQueue.Arn
                   - !GetAtt ContractingJobsDeadLetterQueue.Arn
+              - !If
+                - UseAgentMemoryTableName
+                - Sid: AgentMemoryDynamoDBAccess
+                  Effect: Allow
+                  Action:
+                    - dynamodb:GetItem
+                    - dynamodb:PutItem
+                    - dynamodb:UpdateItem
+                    - dynamodb:DeleteItem
+                    - dynamodb:Query
+                    - dynamodb:Scan
+                    - dynamodb:BatchWriteItem
+                    - dynamodb:BatchGetItem
+                  Resource:
+                    - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AgentMemoryTableName}'
+                    - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${AgentMemoryTableName}/index/*'
+                - !Ref AWS::NoValue
+              - !If
+                - UseOpenSearchEndpoint
+                - Sid: OpenSearchAccess
+                  Effect: Allow
+                  Action:
+                    - es:ESHttpPost
+                    - es:ESHttpPut
+                    - es:ESHttpGet
+                    - es:ESHttpHead
+                  Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/polaris-mem-${Environment}/*'
+                - !Ref AWS::NoValue
 
   ContractingJobsDeadLetterQueue:
     Type: AWS::SQS::Queue
@@ -745,6 +773,16 @@ Resources:
               - !Ref AWS::NoValue
             - Name: CONTRACTING_JOBS_QUEUE_URL
               Value: !Ref ContractingJobsQueue
+            - !If
+              - UseAgentMemoryTableName
+              - Name: AGENT_MEMORY_TABLE_NAME
+                Value: !Ref AgentMemoryTableName
+              - !Ref AWS::NoValue
+            - !If
+              - UseOpenSearchEndpoint
+              - Name: OPENSEARCH_ENDPOINT
+                Value: !Ref OpenSearchEndpoint
+              - !Ref AWS::NoValue
           Secrets: !If
             - UseJwtSecretArn
             - - Name: JWT_SECRET

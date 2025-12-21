@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
+import httpx
+
+from ...observability.logging import get_logger
 from ...settings import settings
 from .allowlist import parse_csv, uniq
 from .aws_clients import ecs_client
+
+log = get_logger("aws_ecs")
 
 
 def _allowed_clusters() -> list[str]:
@@ -165,4 +171,101 @@ def update_service(
         "taskDefinition": svc.get("taskDefinition"),
         "deploymentConfiguration": svc.get("deploymentConfiguration"),
     }
+
+
+def metadata_introspect() -> dict[str, Any]:
+    """
+    Introspect ECS container metadata from the task metadata endpoint.
+    Queries the ECS_CONTAINER_METADATA_URI_V4 endpoint to discover task, cluster, service,
+    and environment information about the current container.
+    """
+    metadata_uri = os.environ.get("ECS_CONTAINER_METADATA_URI_V4")
+    if not metadata_uri:
+        return {"ok": False, "error": "not_running_in_ecs", "hint": "ECS_CONTAINER_METADATA_URI_V4 not set"}
+    
+    try:
+        base_url = metadata_uri.rstrip("/")
+        
+        # Fetch task metadata
+        task_data: dict[str, Any] | None = None
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.get(f"{base_url}/task")
+                if resp.status_code == 200:
+                    task_data = resp.json() if resp.content else None
+        except Exception as e:
+            log.warning("ecs_metadata_task_failed", error=str(e))
+        
+        # Fetch container metadata
+        container_data: dict[str, Any] | None = None
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.get(f"{base_url}")
+                if resp.status_code == 200:
+                    container_data = resp.json() if resp.content else None
+        except Exception as e:
+            log.warning("ecs_metadata_container_failed", error=str(e))
+        
+        # Extract relevant fields
+        result: dict[str, Any] = {
+            "ok": True,
+            "metadataUri": metadata_uri,
+        }
+        
+        if task_data and isinstance(task_data, dict):
+            # Extract task information (ECS metadata v4 uses camelCase)
+            task_arn = task_data.get("TaskARN") or task_data.get("taskARN")
+            cluster_arn = task_data.get("Cluster") or task_data.get("cluster")
+            family = task_data.get("Family") or task_data.get("family")
+            revision = task_data.get("Revision") or task_data.get("revision")
+            
+            if task_arn:
+                result["taskArn"] = str(task_arn)
+                # Extract cluster name from ARN if it's an ARN
+                if cluster_arn:
+                    result["clusterArn"] = str(cluster_arn)
+                    # Extract cluster name (last part of ARN after /)
+                    if "/" in cluster_arn:
+                        result["cluster"] = cluster_arn.split("/")[-1]
+                    else:
+                        result["cluster"] = cluster_arn
+            if family:
+                result["taskFamily"] = str(family)
+            if revision:
+                result["taskRevision"] = str(revision)
+            
+            # Extract availability zone
+            availability_zone = task_data.get("AvailabilityZone") or task_data.get("availabilityZone")
+            if availability_zone:
+                result["availabilityZone"] = str(availability_zone)
+            
+            # Extract region from task ARN if available
+            if task_arn and "arn:aws:ecs:" in task_arn:
+                parts = task_arn.split(":")
+                if len(parts) >= 4:
+                    result["region"] = parts[3]
+        
+        if container_data and isinstance(container_data, dict):
+            # Extract container-specific info
+            container_name = container_data.get("Name") or container_data.get("name")
+            container_id = container_data.get("DockerId") or container_data.get("dockerId")
+            
+            if container_name:
+                result["containerName"] = str(container_name)
+            if container_id:
+                result["containerId"] = str(container_id)
+            
+            # Note: Environment variables are not directly available via metadata endpoint v4
+            # They would need to be checked via task definition or container labels
+            # For security, we don't expose env var values here
+        
+        # Include task definition family:revision if we have both
+        if result.get("taskFamily") and result.get("taskRevision"):
+            result["taskDefinition"] = f"{result['taskFamily']}:{result['taskRevision']}"
+        
+        return result
+        
+    except Exception as e:
+        log.warning("ecs_metadata_introspect_failed", error=str(e))
+        return {"ok": False, "error": str(e) or "metadata_request_failed"}
 
