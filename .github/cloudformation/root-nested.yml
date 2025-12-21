@@ -316,8 +316,15 @@ Resources:
         SlackSecretArn: !Ref SlackSecretArn
         SlackRfpMachineChannel: !Ref SlackRfpMachineChannel
         EnableSlackTokenRotation: !Ref EnableSlackTokenRotation
+        # AgentMemoryTable is created in NorthStarAgentStack and exported
+        # Since BackendStack is created before NorthStarAgentStack, we construct the table name
+        # using the same pattern: northstar-agent-memory-${Environment}
+        # This matches the table name in northstar-agent.yml: !Sub 'northstar-agent-memory-${Environment}'
+        AgentMemoryTableName: !Sub 'northstar-agent-memory-${Environment}'
+        GitHubRepo: !Ref GitHubRepo
 
   NorthStarAgentStack:
+    DependsOn: BackendStack
     Type: AWS::CloudFormation::Stack
     Properties:
       TemplateURL: northstar-agent.yml

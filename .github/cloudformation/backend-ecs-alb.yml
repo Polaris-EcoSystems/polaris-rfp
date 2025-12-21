@@ -17,6 +17,8 @@ Conditions:
   UseSlackSecretArnAndRotation: !And
     - !Condition UseSlackSecretArn
     - !Condition SlackTokenRotationEnabled
+  UseAgentMemoryTableName: !Not [!Equals [!Ref AgentMemoryTableName, '']]
+  UseGitHubRepo: !Not [!Equals [!Ref GitHubRepo, '']]
 
 Parameters:
   Environment:
@@ -186,6 +188,16 @@ Parameters:
   CanvaTokenEncKey:
     Type: String
     NoEcho: true
+    Default: ''
+
+  AgentMemoryTableName:
+    Type: String
+    Description: DynamoDB table name for agent memory (from NorthStarAgentStack)
+    Default: ''
+
+  GitHubRepo:
+    Type: String
+    Description: GitHub repo (org/repo) used for GitHub API operations (e.g. righteousgambit/apps/polaris-rfp)
     Default: ''
 
 Resources:
@@ -822,6 +834,16 @@ Resources:
               - !Ref AWS::NoValue
             - Name: CONTRACTING_JOBS_QUEUE_URL
               Value: !Ref ContractingJobsQueue
+            - !If
+              - UseAgentMemoryTableName
+              - Name: AGENT_MEMORY_TABLE_NAME
+                Value: !Ref AgentMemoryTableName
+              - !Ref AWS::NoValue
+            - !If
+              - UseGitHubRepo
+              - Name: GITHUB_REPO
+                Value: !Ref GitHubRepo
+              - !Ref AWS::NoValue
           Secrets: !If
             - UseJwtSecretArn
             - - Name: JWT_SECRET

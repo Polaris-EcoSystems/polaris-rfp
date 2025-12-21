@@ -124,7 +124,8 @@ jobs:
           if [ -n "${{ secrets.NORTHSTAR_GITHUB_REPO }}" ]; then
             echo "NORTHSTAR_GITHUB_REPO=${{ secrets.NORTHSTAR_GITHUB_REPO }}" >> $GITHUB_ENV
           else
-            echo "NORTHSTAR_GITHUB_REPO=" >> $GITHUB_ENV
+            # Default to the repository where this workflow is running
+            echo "NORTHSTAR_GITHUB_REPO=${{ github.repository }}" >> $GITHUB_ENV
           fi
           if [ -n "${{ secrets.NORTHSTAR_GITHUB_BASE_BRANCH }}" ]; then
             echo "NORTHSTAR_GITHUB_BASE_BRANCH=${{ secrets.NORTHSTAR_GITHUB_BASE_BRANCH }}" >> $GITHUB_ENV
