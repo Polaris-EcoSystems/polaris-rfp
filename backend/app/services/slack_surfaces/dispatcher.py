@@ -47,8 +47,9 @@ def handle_event_callback(*, payload: dict[str, Any], background_tasks: Any) -> 
     if ev_type == "workflow_step_execute":
         # The workflow_step_execute event structure has workflow_step nested in the event
         # Extract workflow_step_execute_id from the nested workflow_step object
-        workflow_step = ev.get("workflow_step") if isinstance(ev.get("workflow_step"), dict) else {}
-        workflow_payload = {
+        workflow_step_raw = ev.get("workflow_step")
+        workflow_step: dict[str, Any] = workflow_step_raw if isinstance(workflow_step_raw, dict) else {}
+        workflow_payload: dict[str, Any] = {
             "workflow_step_execute_id": str(workflow_step.get("workflow_step_execute_id") or "").strip(),
             "workflow_step": workflow_step,
         }
