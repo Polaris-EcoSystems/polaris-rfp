@@ -168,7 +168,6 @@ def get_diagnostics(
     channel_id: str | None = None,
     use_cache: bool = True,
     force_refresh: bool = False,
-    request: Request | None = None,
 ):
     """
     Get agent diagnostics including metrics and recent activities.
