@@ -204,7 +204,7 @@ Resources:
   OpenSearchDomain:
     Type: AWS::OpenSearchService::Domain
     Properties:
-      DomainName: !Sub 'polaris-agent-memory-${Environment}'
+      DomainName: !Sub 'polaris-mem-${Environment}'
       EngineVersion: 'OpenSearch_2.11'
       ClusterConfig:
         InstanceType: t3.small.search
@@ -235,7 +235,7 @@ Resources:
             Principal:
               AWS: !GetAtt NorthStarTaskRole.Arn
             Action: 'es:*'
-            Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/polaris-agent-memory-${Environment}/*'
+            Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/polaris-mem-${Environment}/*'
 
   NorthStarTaskExecutionRole:
     Type: AWS::IAM::Role
@@ -342,7 +342,7 @@ Resources:
                   - es:ESHttpPut
                   - es:ESHttpGet
                   - es:ESHttpHead
-                Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/polaris-agent-memory-${Environment}/*'
+                Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/polaris-mem-${Environment}/*'
 
   NorthStarTaskRoleSlackSecretPolicy:
     Type: AWS::IAM::Policy
