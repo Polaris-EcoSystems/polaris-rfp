@@ -93,7 +93,11 @@ def compress_old_memories(
     
     # Group memories by similarity (simple grouping by shared keywords)
     # For now, we'll just compress all together
-    memory_ids = [mem.get("memoryId") for mem in memories_to_compress if mem.get("memoryId")]
+    memory_ids: list[str] = []
+    for mem in memories_to_compress:
+        mid = mem.get("memoryId")
+        if mid and isinstance(mid, str):
+            memory_ids.append(mid)
     
     # Build summary content from all memories
     memory_contents: list[str] = []
@@ -137,6 +141,25 @@ def compress_old_memories(
     first_memory = memories_to_compress[0] if memories_to_compress else {}
     provenance_from_original = first_memory.get("metadata", {}).get("provenance", {}) if isinstance(first_memory.get("metadata"), dict) else {}
     
+    # Helper function for type-safe string conversion
+    def _safe_str_or_none(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value if value.strip() else None
+        if isinstance(value, (int, float)):
+            return str(value)
+        return None
+    
+    # Preserve provenance from original memories (with type safety)
+    cognito_user_id = _safe_str_or_none(first_memory.get("cognitoUserId") or provenance_from_original.get("cognitoUserId"))
+    slack_user_id = _safe_str_or_none(first_memory.get("slackUserId") or provenance_from_original.get("slackUserId"))
+    slack_channel_id = _safe_str_or_none(first_memory.get("slackChannelId") or provenance_from_original.get("slackChannelId"))
+    slack_thread_ts = _safe_str_or_none(first_memory.get("slackThreadTs") or provenance_from_original.get("slackThreadTs"))
+    slack_team_id = _safe_str_or_none(first_memory.get("slackTeamId") or provenance_from_original.get("slackTeamId"))
+    rfp_id_prov = _safe_str_or_none(first_memory.get("rfpId") or provenance_from_original.get("rfpId"))
+    source = str(first_memory.get("source") or "memory_compression")
+    
     compressed_memory = create_memory(
         memory_type=memory_type,
         scope_id=scope_id,
@@ -147,14 +170,13 @@ def compress_old_memories(
         compressed=True,
         original_memory_ids=memory_ids,
         expires_at=expires_at,
-        # Preserve provenance from original memories
-        cognito_user_id=first_memory.get("cognitoUserId") or provenance_from_original.get("cognitoUserId"),
-        slack_user_id=first_memory.get("slackUserId") or provenance_from_original.get("slackUserId"),
-        slack_channel_id=first_memory.get("slackChannelId") or provenance_from_original.get("slackChannelId"),
-        slack_thread_ts=first_memory.get("slackThreadTs") or provenance_from_original.get("slackThreadTs"),
-        slack_team_id=first_memory.get("slackTeamId") or provenance_from_original.get("slackTeamId"),
-        rfp_id=first_memory.get("rfpId") or provenance_from_original.get("rfpId"),
-        source=first_memory.get("source") or "memory_compression",
+        cognito_user_id=cognito_user_id,
+        slack_user_id=slack_user_id,
+        slack_channel_id=slack_channel_id,
+        slack_thread_ts=slack_thread_ts,
+        slack_team_id=slack_team_id,
+        rfp_id=rfp_id_prov,
+        source=source,
     )
     
     # Mark original memories for deletion via TTL
@@ -163,18 +185,25 @@ def compress_old_memories(
     
     for mem in memories_to_compress:
         memory_id = mem.get("memoryId")
-        created_at = mem.get("createdAt")
+        created_at_raw = mem.get("createdAt")
         mem_type = mem.get("memoryType")
         mem_scope = mem.get("scopeId")
         
-        if memory_id and created_at and mem_type and mem_scope:
+        # Ensure created_at_for_update is a string (it should be from DB, but check for type safety)
+        created_at_for_update: str | None = None
+        if isinstance(created_at_raw, str):
+            created_at_for_update = created_at_raw
+        elif isinstance(created_at_raw, datetime):
+            created_at_for_update = created_at_raw.isoformat().replace("+00:00", "Z")
+        
+        if memory_id and created_at_for_update and mem_type and mem_scope:
             try:
                 # Update memory to set expires_at for TTL deletion
                 update_memory(
-                    memory_id=memory_id,
-                    memory_type=mem_type,
-                    scope_id=mem_scope,
-                    created_at=created_at,
+                    memory_id=str(memory_id),
+                    memory_type=str(mem_type),
+                    scope_id=str(mem_scope),
+                    created_at=created_at_for_update,
                     expires_at=delete_ts,
                 )
                 # Also remove from OpenSearch index immediately
@@ -216,7 +245,7 @@ def _generate_memory_summary(content: str, memory_type: str) -> str:
     Returns:
         Summarized content
     """
-    from ..ai.client import call_text_verified
+    from ..ai.verified_calls import call_text_verified
     
     prompt = f"""Summarize the following {memory_type.lower()} memories into a concise summary that preserves key information, decisions, and insights.
 

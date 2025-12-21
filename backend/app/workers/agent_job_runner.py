@@ -427,7 +427,7 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     max_duration = 25 * 60  # 25 minutes (safety margin for ECS task)
                     
                     try:
-                        result = execute_universal_job(
+                        result_raw = execute_universal_job(
                             job_id=jid,
                             payload=payload,
                             rfp_id=rid,
@@ -435,10 +435,12 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                         )
                         
                         # Result is a dict, not OrchestrationResult
-                        if not isinstance(result, dict):
+                        if not isinstance(result_raw, dict):
                             fail_job(job_id=jid, error="universal_job_execution_failed: invalid_result_type")
                             failed += 1
                             continue
+                        
+                        universal_result: dict[str, Any] = result_raw
                         
                         # Check if we're approaching timeout
                         elapsed = time.time() - job_start_time
@@ -459,10 +461,10 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                             completed += 1
                             continue
                         
-                        if result.get("ok"):
-                            complete_job(job_id=jid, result=result)
+                        if universal_result.get("ok"):
+                            complete_job(job_id=jid, result=universal_result)
                         else:
-                            fail_job(job_id=jid, error=str(result.get("error") or "universal_job_execution_failed"))
+                            fail_job(job_id=jid, error=str(universal_result.get("error") or "universal_job_execution_failed"))
                         completed += 1
                     except Exception as e:
                         # On error, try to checkpoint if possible

@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from ...settings import settings
+from ..settings import settings
 from ..observability.logging import get_logger
 
 log = get_logger("agent_memory_opensearch")
@@ -319,10 +319,11 @@ def search_memories(
         total_hits = result.get("hits", {}).get("total", {})
         total_count = total_hits.get("value", len(hits)) if isinstance(total_hits, dict) else len(hits)
         
-        memories = []
+        memories: list[dict[str, Any]] = []
         for hit in hits:
-            source = hit.get("_source", {})
-            memories.append(source)
+            source_raw = hit.get("_source", {})
+            if isinstance(source_raw, dict):
+                memories.append(source_raw)
         
         log.info(
             "opensearch_search_completed",

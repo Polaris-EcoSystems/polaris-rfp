@@ -68,8 +68,9 @@ def analyze_completed_jobs(
                 success_rate_by_type[jtype]["failed"] += 1
             
             # Extract execution plan if available (for universal jobs)
-            payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
-            execution_plan = payload.get("execution_plan")
+            payload_raw = job.get("payload")
+            payload = payload_raw if isinstance(payload_raw, dict) else {}
+            execution_plan = payload.get("execution_plan") if isinstance(payload, dict) else None
             
             if execution_plan and isinstance(execution_plan, dict):
                 steps = execution_plan.get("steps", [])
@@ -154,8 +155,9 @@ def extract_best_practices(
         best_practices: list[dict[str, Any]] = []
         
         for job in completed_jobs[:limit]:
-            payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
-            execution_plan = payload.get("execution_plan")
+            payload_raw = job.get("payload")
+            payload = payload_raw if isinstance(payload_raw, dict) else {}
+            execution_plan = payload.get("execution_plan") if isinstance(payload, dict) else None
             
             if execution_plan and isinstance(execution_plan, dict):
                 steps = execution_plan.get("steps", [])
@@ -333,12 +335,14 @@ def generate_job_template(
             "request": request,
         }
         
-        if template_job.get("jobId"):
+        job_id_raw = template_job.get("jobId")
+        if job_id_raw:
             try:
-                full_job = get_job(job_id=str(template_job["jobId"]))
-                if full_job:
-                    payload = full_job.get("payload") if isinstance(full_job.get("payload"), dict) else {}
-                    execution_plan = payload.get("execution_plan")
+                full_job = get_job(job_id=str(job_id_raw))
+                if full_job and isinstance(full_job, dict):
+                    payload_raw = full_job.get("payload")
+                    payload = payload_raw if isinstance(payload_raw, dict) else {}
+                    execution_plan = payload.get("execution_plan") if isinstance(payload, dict) else None
                     if execution_plan:
                         template["suggested_plan"] = execution_plan
             except Exception:

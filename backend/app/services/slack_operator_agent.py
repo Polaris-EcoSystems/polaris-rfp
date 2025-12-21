@@ -1192,14 +1192,25 @@ def run_slack_operator_for_mention(
                         response_format="chat_tools",
                     )
                     try:
-                        post_summary(
-                            rfp_id=rfp_id,
-                            channel=ch,
-                            thread_ts=th,
-                            text=str(ans.text or "").strip() or "Done.",
-                            blocks=ans.blocks,
-                            correlation_id=corr,
-                        )
+                        if rfp_id:
+                            post_summary(
+                                rfp_id=rfp_id,
+                                channel=ch,
+                                thread_ts=th,
+                                text=str(ans.text or "").strip() or "Done.",
+                                blocks=ans.blocks,
+                                correlation_id=corr,
+                            )
+                        else:
+                            # Post without RFP scope (for global operations)
+                            from .slack_reply_tools import chat_post_message_result
+                            chat_post_message_result(
+                                text=str(ans.text or "").strip() or "Done.",
+                                channel=ch,
+                                blocks=ans.blocks,
+                                thread_ts=th,
+                                unfurl_links=False,
+                            )
                         did_post = True
                     except Exception:
                         pass
@@ -1243,19 +1254,20 @@ def run_slack_operator_for_mention(
                         did_journal = True
                 dur_ms = int((time.time() - started) * 1000)
                 try:
-                    append_event(
-                        rfp_id=rfp_id,
-                        type="tool_call",
-                        tool=name,
-                        payload={"ok": bool(result.get("ok")), "durationMs": dur_ms},
-                        inputs_redacted={
-                            "argsKeys": [str(k) for k in list((args or {}).keys())[:60]] if isinstance(args, dict) else [],
-                        },
-                        outputs_redacted={
-                            "resultPreview": {k: result.get(k) for k in list(result.keys())[:30]} if isinstance(result, dict) else {},
-                        },
-                        correlation_id=corr,
-                    )
+                    if rfp_id:
+                        append_event(
+                            rfp_id=rfp_id,
+                            type="tool_call",
+                            tool=name,
+                            payload={"ok": bool(result.get("ok")), "durationMs": dur_ms},
+                            inputs_redacted={
+                                "argsKeys": [str(k) for k in list((args or {}).keys())[:60]] if isinstance(args, dict) else [],
+                            },
+                            outputs_redacted={
+                                "resultPreview": {k: result.get(k) for k in list(result.keys())[:30]} if isinstance(result, dict) else {},
+                            },
+                            correlation_id=corr,
+                        )
                 except Exception:
                     pass
                 messages.append({"role": "tool", "tool_call_id": call_id, "content": _sa._safe_json(result)})
@@ -1263,7 +1275,17 @@ def run_slack_operator_for_mention(
         # Fallback: if the model returned plain text, post it.
         if not did_post and text:
             try:
-                post_summary(rfp_id=rfp_id, channel=ch, thread_ts=th, text=text, correlation_id=corr)
+                if rfp_id:
+                    post_summary(rfp_id=rfp_id, channel=ch, thread_ts=th, text=text, correlation_id=corr)
+                else:
+                    # Post without RFP scope
+                    from .slack_reply_tools import chat_post_message_result
+                    chat_post_message_result(
+                        text=text,
+                        channel=ch,
+                        thread_ts=th,
+                        unfurl_links=False,
+                    )
                 did_post = True
             except Exception:
                 pass
@@ -1424,14 +1446,25 @@ def run_slack_operator_for_mention(
                     response_format="responses_tools",
                 )
                 try:
-                    post_summary(
-                        rfp_id=rfp_id,
-                        channel=ch,
-                        thread_ts=th,
-                        text=str(ans.text or "").strip() or "Done.",
-                        blocks=ans.blocks,
-                        correlation_id=corr,
-                    )
+                    if rfp_id:
+                        post_summary(
+                            rfp_id=rfp_id,
+                            channel=ch,
+                            thread_ts=th,
+                            text=str(ans.text or "").strip() or "Done.",
+                            blocks=ans.blocks,
+                            correlation_id=corr,
+                        )
+                    else:
+                        # Post without RFP scope
+                        from .slack_reply_tools import chat_post_message_result
+                        chat_post_message_result(
+                            text=str(ans.text or "").strip() or "Done.",
+                            channel=ch,
+                            blocks=ans.blocks,
+                            thread_ts=th,
+                            unfurl_links=False,
+                        )
                     did_post = True
                 except Exception:
                     pass
@@ -1489,19 +1522,20 @@ def run_slack_operator_for_mention(
                     "errorCategory": result.get("errorCategory"),
                     "retryable": result.get("retryable"),
                 }
-                append_event(
-                    rfp_id=rfp_id,
-                    type="tool_call",
-                    tool=name,
-                    payload=telemetry_payload,
-                    inputs_redacted={
-                        "argsKeys": [str(k) for k in list((args or {}).keys())[:60]] if isinstance(args, dict) else [],
-                    },
-                    outputs_redacted={
-                        "resultPreview": {k: result.get(k) for k in list(result.keys())[:30]} if isinstance(result, dict) else {},
-                    },
-                    correlation_id=corr,
-                )
+                if rfp_id:
+                    append_event(
+                        rfp_id=rfp_id,
+                        type="tool_call",
+                        tool=name,
+                        payload=telemetry_payload,
+                        inputs_redacted={
+                            "argsKeys": [str(k) for k in list((args or {}).keys())[:60]] if isinstance(args, dict) else [],
+                        },
+                        outputs_redacted={
+                            "resultPreview": {k: result.get(k) for k in list(result.keys())[:30]} if isinstance(result, dict) else {},
+                        },
+                        correlation_id=corr,
+                    )
                 # Also log performance metrics
                 log.info(
                     "agent_tool_call",
@@ -1543,7 +1577,17 @@ def run_slack_operator_for_mention(
     # Fallback: if the model returned plain text and did not post, post it.
     if not did_post and text:
         try:
-            post_summary(rfp_id=rfp_id, channel=ch, thread_ts=th, text=text, correlation_id=corr)
+            if rfp_id:
+                post_summary(rfp_id=rfp_id, channel=ch, thread_ts=th, text=text, correlation_id=corr)
+            else:
+                # Post without RFP scope
+                from .slack_reply_tools import chat_post_message_result
+                chat_post_message_result(
+                    text=text,
+                    channel=ch,
+                    thread_ts=th,
+                    unfurl_links=False,
+                )
             did_post = True
         except Exception:
             pass
