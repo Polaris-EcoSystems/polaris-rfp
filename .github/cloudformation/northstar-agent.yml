@@ -217,7 +217,8 @@ Resources:
       VPCOptions:
         SecurityGroupIds:
           - !Ref OpenSearchSecurityGroup
-        SubnetIds: !Ref PrivateSubnetIds
+        SubnetIds:
+          - !Select [0, !Ref PrivateSubnetIds]
       EncryptionAtRestOptions:
         Enabled: true
       NodeToNodeEncryptionOptions:
