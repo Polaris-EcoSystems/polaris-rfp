@@ -322,6 +322,10 @@ Resources:
         # This matches the table name in northstar-agent.yml: !Sub 'northstar-agent-memory-${Environment}'
         AgentMemoryTableName: !Sub 'northstar-agent-memory-${Environment}'
         GitHubRepo: !Ref GitHubRepo
+        # OpenSearch endpoint: construct from known domain pattern (domain is created in NorthStarAgentStack)
+        # Format: https://{domain-name}.{region}.es.amazonaws.com
+        # Domain name pattern: polaris-mem-${Environment}
+        OpenSearchEndpoint: !Sub 'https://polaris-mem-${Environment}.${AWS::Region}.es.amazonaws.com'
 
   NorthStarAgentStack:
     Type: AWS::CloudFormation::Stack

@@ -43,6 +43,18 @@ def handle_event_callback(*, payload: dict[str, Any], background_tasks: Any) -> 
     ev = _as_dict(payload.get("event"))
     ev_type = str(ev.get("type") or "").strip()
 
+    # Workflow step execute (when received as event_callback)
+    if ev_type == "workflow_step_execute":
+        # The workflow_step_execute event structure has workflow_step nested in the event
+        # Extract workflow_step_execute_id from the nested workflow_step object
+        workflow_step = ev.get("workflow_step") if isinstance(ev.get("workflow_step"), dict) else {}
+        workflow_payload = {
+            "workflow_step_execute_id": str(workflow_step.get("workflow_step_execute_id") or "").strip(),
+            "workflow_step": workflow_step,
+        }
+        res = workflows_surface.handle_workflow_step_execute(payload=workflow_payload)
+        return SlackDispatchResult(ok=True, response_json=res)
+
     # App Home surface
     if ev_type == "app_home_opened":
         background_tasks.add_task(home_surface.on_app_home_opened, payload=payload)
@@ -79,10 +91,31 @@ def handle_event_callback(*, payload: dict[str, Any], background_tasks: Any) -> 
         )
         return SlackDispatchResult(ok=True, response_json={"ok": True})
 
-    # DM concierge (optional; keep off by default until we finalize UX)
+    # DM support - handle direct messages to the bot
     if ev_type == "message" and str(ev.get("channel_type") or "").strip() == "im":
-        if bool(getattr(settings, "slack_dm_enabled", False)):
-            background_tasks.add_task(workflows_surface.on_dm_message, payload=payload)
+        # Extract message details
+        channel = str(ev.get("channel") or "").strip() or None
+        user_id = str(ev.get("user") or "").strip() or None
+        thread_ts = str(ev.get("thread_ts") or ev.get("ts") or "").strip() or None
+        text = str(ev.get("text") or "").strip()
+        text = re.sub(r"<@[^>]+>", "", text).strip()
+        if not text:
+            text = "help"
+        
+        # Rate limit by user to avoid abuse
+        if user_id and not slack_allow(key=f"slack_agent_user:{user_id}", limit=8, per_seconds=60):
+            return SlackDispatchResult(ok=True, response_json={"ok": True})
+        
+        # Handle DM the same way as mentions - use the operator agent
+        background_tasks.add_task(
+            run_slack_operator_for_mention,
+            question=text,
+            channel_id=channel or "",
+            thread_ts=thread_ts or "",
+            user_id=user_id,
+            correlation_id=ev_id or thread_ts,
+            max_steps=8,
+        )
         return SlackDispatchResult(ok=True, response_json={"ok": True})
 
     return SlackDispatchResult(ok=True, response_json={"ok": True})

@@ -618,6 +618,7 @@ Slack Operations:
 - slack_list_recent_messages - List recent channel messages
 - slack_post_summary - Post summary to Slack thread (use after state updates)
 - slack_ask_clarifying_question - Ask blocking clarifying question (rare)
+- slack_send_dm - Send a direct message to a Slack user by their user ID (use when user asks to DM someone)
 
 Agent Jobs:
 - schedule_job - Schedule a job for later execution (dueAt ISO time)
@@ -808,6 +809,25 @@ def _extract_rfp_id(text: str) -> str | None:
     return str(m.group(1)).strip() or None
 
 
+def _extract_user_id_from_mention(text: str) -> str | None:
+    """
+    Extract Slack user ID from a mention in text (e.g., <@U123456> or @Wes).
+    Returns the user ID if found, None otherwise.
+    """
+    t = str(text or "").strip()
+    if not t:
+        return None
+    
+    # Try to extract from Slack mention format: <@U123456> or <@W123456>
+    mention_match = re.search(r"<@([UW][A-Z0-9]+)>", t)
+    if mention_match:
+        return str(mention_match.group(1)).strip() or None
+    
+    # If no mention format found, try to look up by name (requires Slack API call)
+    # This is a best-effort lookup - the agent should prefer explicit user IDs
+    return None
+
+
 def _operations_requiring_rfp_scope(question: str) -> bool | None:
     """
     Detect if the user's question requires an RFP scope.
@@ -887,8 +907,18 @@ def _operations_requiring_rfp_scope(question: str) -> bool | None:
     ]):
         return True
     
-    # Default: assume it might need RFP scope (conservative)
-    return None  # None means "unclear, allow delegation"
+    # Check if question mentions RFP-related terms that suggest RFP context
+    if any(term in q_lower for term in ["rfp", "proposal", "opportunity", "bid"]):
+        # But only if it's asking about a specific RFP, not general questions
+        if any(phrase in q_lower for phrase in ["what is", "tell me about", "show me", "list", "search"]):
+            # General queries about RFPs don't require binding
+            return False
+        # Otherwise might need RFP scope
+        return None
+    
+    # Default: treat as general question (don't require RFP binding)
+    # Only ask for RFP binding if the question clearly requires RFP-scoped operations
+    return False  # False means "doesn't require RFP scope, proceed as general question"
 
 
 def _fetch_thread_history(*, channel_id: str, thread_ts: str, limit: int = 50) -> str:
@@ -1205,6 +1235,80 @@ def _slack_ask_tool(args: dict[str, Any]) -> dict[str, Any]:
     return {"ok": bool(res.get("ok")), "slack": res}
 
 
+def _slack_send_dm_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Send a direct message to a Slack user."""
+    from .slack_web import open_dm_channel, chat_post_message_result, get_user_info, lookup_user_id_by_email
+    from .slack_actor_context import resolve_actor_context
+    
+    user_id = str(args.get("userId") or "").strip()
+    text = str(args.get("text") or "").strip()
+    blocks = args.get("blocks") if isinstance(args.get("blocks"), list) else None
+    
+    if not user_id or not text:
+        return {"ok": False, "error": "missing_user_id_or_text"}
+    
+    # If user_id looks like a name (not starting with U/W), try to resolve it
+    resolved_user_id = user_id
+    if not user_id.startswith(("U", "W")):
+        # Try to find user by name - check if it's a mention format first
+        mention_id = _extract_user_id_from_mention(user_id)
+        if mention_id:
+            resolved_user_id = mention_id
+        else:
+            # Try to resolve by email if it looks like an email address
+            if "@" in user_id:
+                looked_up_id = lookup_user_id_by_email(user_id)
+                if looked_up_id:
+                    resolved_user_id = looked_up_id
+                else:
+                    return {"ok": False, "error": "user_not_found_by_email", "hint": f"Could not find Slack user with email: {user_id}"}
+            else:
+                return {"ok": False, "error": "user_id_must_be_slack_user_id", "hint": "Use Slack user ID format (e.g., U123456), mention format <@U123456>, or email address"}
+    
+    # Validate the resolved user ID by getting user info
+    user_info = get_user_info(user_id=resolved_user_id)
+    if not user_info:
+        return {"ok": False, "error": "user_not_found", "userId": resolved_user_id, "hint": "Could not find Slack user with the provided identifier"}
+    
+    # Get additional platform context about the target user (for logging/auditing)
+    target_user_ctx = None
+    try:
+        target_user_ctx = resolve_actor_context(slack_user_id=resolved_user_id, slack_team_id=None, slack_enterprise_id=None)
+    except Exception:
+        # Non-fatal: continue even if platform context resolution fails
+        pass
+    
+    # Open or get DM channel for the user
+    dm_channel = open_dm_channel(user_id=resolved_user_id)
+    if not dm_channel:
+        return {"ok": False, "error": "failed_to_open_dm_channel", "userId": resolved_user_id}
+    
+    # Send message to DM channel
+    res = chat_post_message_result(
+        text=text,
+        channel=dm_channel,
+        blocks=blocks,
+        unfurl_links=False,
+    )
+    
+    # Build response with user context information if available
+    response = {
+        "ok": bool(res.get("ok")),
+        "slack": res,
+        "dmChannel": dm_channel,
+        "userId": resolved_user_id,
+    }
+    
+    # Include user context information if available (for logging/auditing)
+    if target_user_ctx:
+        if target_user_ctx.email:
+            response["userEmail"] = target_user_ctx.email
+        if target_user_ctx.display_name:
+            response["userDisplayName"] = target_user_ctx.display_name
+    
+    return response
+
+
 OPERATOR_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
     # Read tools (existing platform browsing).
     **_sa.READ_TOOLS,
@@ -1439,6 +1543,23 @@ OPERATOR_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
         ),
         _slack_ask_tool,
     ),
+    "slack_send_dm": (
+        _tool_def(
+            "slack_send_dm",
+            "Send a direct message to a Slack user by their user ID (e.g., U123456). Use this when the user asks you to DM someone or send them a message privately.",
+            {
+                "type": "object",
+                "properties": {
+                    "userId": {"type": "string", "description": "Slack user ID (e.g., U123456) to send DM to", "minLength": 1, "maxLength": 50},
+                    "text": {"type": "string", "description": "Message text to send", "minLength": 1, "maxLength": 4000},
+                    "blocks": {"type": "array", "items": {"type": "object"}, "maxItems": 40, "description": "Optional Slack Block Kit blocks"},
+                },
+                "required": ["userId", "text"],
+                "additionalProperties": False,
+            },
+        ),
+        _slack_send_dm_tool,
+    ),
 }
 
 
@@ -1594,24 +1715,23 @@ def run_slack_operator_for_mention(
                 pass
         else:
             # requires_rfp is True - this clearly needs RFP scope, so ask for it
-            pass
+            # Only ask for RFP binding if requires_rfp is explicitly True (not None/False)
+            if requires_rfp is True:
+                # Ask to include an explicit id or bind the thread; keep it short.
+                msg = (
+                "Which RFP is this about?\n"
+                "- include an id like `rfp_...` in your message, or\n"
+                "- bind this thread once with: `@polaris link rfp_...`"
+                "\n\nIf this isn’t about a specific RFP, use `/polaris ask <question>`."
+                )
+                try:
+                    from .slack_web import chat_post_message_result
 
-        # Only ask for RFP binding if requires_rfp is True or delegation failed for unclear case
-        if requires_rfp is True or (requires_rfp is None):
-            # Ask to include an explicit id or bind the thread; keep it short.
-            msg = (
-            "Which RFP is this about?\n"
-            "- include an id like `rfp_...` in your message, or\n"
-            "- bind this thread once with: `@polaris link rfp_...`"
-            "\n\nIf this isn’t about a specific RFP, use `/polaris ask <question>`."
-        )
-        try:
-            from .slack_web import chat_post_message_result
-
-            chat_post_message_result(text=msg, channel=ch, thread_ts=th, unfurl_links=False)
-        except Exception:
-            pass
-            return SlackOperatorResult(did_post=True, text=msg, meta={"scoped": False})
+                    chat_post_message_result(text=msg, channel=ch, thread_ts=th, unfurl_links=False)
+                except Exception:
+                    pass
+                return SlackOperatorResult(did_post=True, text=msg, meta={"scoped": False})
+            # If requires_rfp is False or None, proceed as a general question (no RFP binding required)
     
     # If we have rfp_id, ensure state exists. Otherwise, proceed without it for global operations.
     if rfp_id:
