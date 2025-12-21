@@ -319,7 +319,7 @@ def _link_memories_after_interaction(
     - Episodic memory → Temporal events (if temporal events detected)
     """
     try:
-        from .agent_memory_db import list_memories_by_scope
+        from .agent_memory_db import list_memories_by_scope, get_memory
         from .agent_memory_relationships import add_relationship
         
         # Get the most recent episodic memory for this user
@@ -342,6 +342,20 @@ def _link_memories_after_interaction(
         if not all([episodic_id, episodic_type, episodic_scope, episodic_created]):
             return
         
+        # Verify episodic memory exists using get_memory (ensures we have valid memory before linking)
+        if (isinstance(episodic_id, str) and isinstance(episodic_type, str) and 
+            isinstance(episodic_scope, str) and isinstance(episodic_created, str)):
+            verified_episodic = get_memory(
+                memory_id=episodic_id,
+                memory_type=episodic_type,
+                scope_id=episodic_scope,
+                created_at=episodic_created,
+            )
+            if not verified_episodic:
+                return  # Memory doesn't exist or couldn't be fetched
+        else:
+            return  # Invalid memory identifiers
+        
         # Link to RFP if present
         if rfp_id:
             rfp_scope = f"RFP#{rfp_id}"
@@ -358,22 +372,31 @@ def _link_memories_after_interaction(
                 rfp_mem_created = rfp_mem.get("createdAt")
                 
                 if all([rfp_mem_id, rfp_mem_type, rfp_mem_scope, rfp_mem_created]):
-                    if (isinstance(episodic_id, str) and isinstance(episodic_type, str) and 
-                        isinstance(episodic_scope, str) and isinstance(episodic_created, str) and
-                        isinstance(rfp_mem_id, str) and isinstance(rfp_mem_type, str) and
-                        isinstance(rfp_mem_scope, str) and isinstance(rfp_mem_created, str)):
-                        add_relationship(
-                            from_memory_id=episodic_id,
-                            from_memory_type=episodic_type,
-                            from_scope_id=episodic_scope,
-                            from_created_at=episodic_created,
-                            to_memory_id=rfp_mem_id,
-                            to_memory_type=rfp_mem_type,
-                            to_scope_id=rfp_mem_scope,
-                            to_created_at=rfp_mem_created,
-                            relationship_type="part_of",
-                            bidirectional=True,
+                    # Verify RFP memory exists using get_memory before linking
+                    if (isinstance(rfp_mem_id, str) and isinstance(rfp_mem_type, str) and
+                        isinstance(rfp_mem_scope, str) and isinstance(rfp_mem_created, str) and
+                        isinstance(episodic_id, str) and isinstance(episodic_type, str) and 
+                        isinstance(episodic_scope, str) and isinstance(episodic_created, str)):
+                        # Type narrowing: all values are confirmed to be str at this point
+                        verified_rfp_mem = get_memory(
+                            memory_id=str(rfp_mem_id),
+                            memory_type=str(rfp_mem_type),
+                            scope_id=str(rfp_mem_scope),
+                            created_at=str(rfp_mem_created),
                         )
+                        if verified_rfp_mem:
+                            add_relationship(
+                                from_memory_id=str(episodic_id),
+                                from_memory_type=str(episodic_type),
+                                from_scope_id=str(episodic_scope),
+                                from_created_at=str(episodic_created),
+                                to_memory_id=str(rfp_mem_id),
+                                to_memory_type=str(rfp_mem_type),
+                                to_scope_id=str(rfp_mem_scope),
+                                to_created_at=str(rfp_mem_created),
+                                relationship_type="part_of",
+                                bidirectional=True,
+                            )
         
         # Link to collaboration context if present
         if channel_id and thread_ts:
@@ -1584,13 +1607,27 @@ def run_slack_operator_for_mention(
     team_awareness_ctx = ""
     if q and any(phrase in q.lower() for phrase in ["team", "member", "biography", "bio", "capability", "skill", "expertise", "who can", "who has"]):
         try:
+            from .agent_context_builder import build_user_context
             from . import content_repo
+            
+            # Build user context for the current user (includes their linked team member info)
+            user_ctx = build_user_context(
+                user_profile=actor_ctx.user_profile if actor_ctx else None,
+                user_display_name=actor_ctx.display_name if actor_ctx else None,
+                user_email=actor_ctx.email if actor_ctx else None,
+                user_id=user_id,
+            )
             
             # Get team members list for awareness
             team_members = content_repo.list_team_members(limit=50)
             if team_members:
                 team_summary_lines: list[str] = []
                 team_summary_lines.append("Team Member Awareness:")
+                # Include current user's context if available
+                if user_ctx:
+                    team_summary_lines.append("Current User Context:")
+                    team_summary_lines.append(user_ctx)
+                    team_summary_lines.append("")
                 team_summary_lines.append(f"- Total team members in system: {len(team_members)}")
                 # Include key team members (first 10) with their positions
                 for tm in team_members[:10]:
@@ -1633,6 +1670,58 @@ def run_slack_operator_for_mention(
     # Extract relevant tool categories from metaprompt
     relevant_tool_categories = _extract_relevant_tool_categories(metaprompt)
     
+    # Retrieve procedural memories for tool guidance
+    procedural_guidance = ""
+    if actor_user_sub:
+        try:
+            from .agent_memory_retrieval import get_memories_for_context
+            procedural_memories = get_memories_for_context(
+                user_sub=actor_user_sub,
+                rfp_id=rfp_id,
+                query_text=q,  # Use user query to find relevant patterns
+                memory_types=["PROCEDURAL"],
+                limit=5,  # Get top 5 relevant procedural memories
+            )
+            
+            if procedural_memories:
+                tool_patterns: list[str] = []
+                for mem in procedural_memories:
+                    metadata = mem.get("metadata", {})
+                    tool_seq = metadata.get("toolSequence", [])
+                    workflow = mem.get("summary") or mem.get("content", "")
+                    success = metadata.get("success", True)
+                    
+                    if tool_seq and isinstance(tool_seq, list) and len(tool_seq) > 0:
+                        seq_str = " → ".join([str(t) for t in tool_seq[:5]])  # Limit to 5 tools
+                        status = "✓" if success else "✗"
+                        pattern = f"  {status} {seq_str}"
+                        if workflow:
+                            pattern += f" ({workflow[:60]})"
+                        tool_patterns.append(pattern)
+                
+                if tool_patterns:
+                    procedural_guidance = "\n".join([
+                        "Past Successful Tool Patterns (for similar requests):",
+                        *tool_patterns[:3],  # Show top 3 patterns
+                        "",
+                    ])
+        except Exception as e:
+            log.warning("procedural_memory_retrieval_failed", error=str(e))
+    
+    # Check for relevant skills if query mentions skills/capabilities
+    skills_guidance = ""
+    if q and any(term in q.lower() for term in ["skill", "capability", "expertise", "what can", "how to"]):
+        try:
+            from .agent_tools.read_registry import READ_TOOLS
+            if "skills_search" in READ_TOOLS:
+                skills_guidance = (
+                    "- Use `skills_search` to find relevant skills/capabilities for this request\n"
+                    "- Use `skills_get` to get details about a specific skill\n"
+                    "- Use `skills_load` to load and execute a skill\n"
+                )
+        except Exception:
+            pass
+    
     system = "\n".join(
         [
             "You are Polaris Operator, a general-purpose Slack-connected agent for an RFP→Proposal→Contracting platform.",
@@ -1650,6 +1739,9 @@ def run_slack_operator_for_mention(
             "Relevant Tool Categories for this request:",
             relevant_tool_categories if relevant_tool_categories else "- All tools available",
             "",
+            procedural_guidance if procedural_guidance else "",
+            "Skills System:" if skills_guidance else "",
+            skills_guidance if skills_guidance else "",
             "Slack Permissions:",
             SLACK_BOT_SCOPES.strip(),
             "",
@@ -1779,6 +1871,7 @@ def run_slack_operator_for_mention(
             {"role": "system", "content": system},
             {"role": "user", "content": q},
         ]
+        recent_tools_chat: list[str] = []  # Track tool calls for procedural memory (chat_tools path)
         while True:
             steps += 1
             if steps > max(1, int(max_steps)):
@@ -1829,6 +1922,12 @@ def run_slack_operator_for_mention(
                 if proto_err is not None:
                     messages.append({"role": "tool", "tool_call_id": call_id, "content": _sa._safe_json(proto_err)})
                     continue
+
+                # Track tool for procedural memory
+                if name:
+                    recent_tools_chat.append(name)
+                    if len(recent_tools_chat) > 10:
+                        recent_tools_chat = recent_tools_chat[-10:]
 
                 if name == "slack_post_summary" or name == "slack_ask_clarifying_question":
                     did_post = True
@@ -1899,6 +1998,9 @@ def run_slack_operator_for_mention(
                         "retryable": classification.retryable,
                     }
 
+                # Track tool failure for learning
+                tool_failed = not bool(result.get("ok"))
+                
                 # Update protocol flags on success.
                 if bool(result.get("ok")):
                     if name == "opportunity_load":
@@ -1907,6 +2009,49 @@ def run_slack_operator_for_mention(
                         did_patch = True
                     elif name == "journal_append":
                         did_journal = True
+                elif tool_failed and actor_user_sub:
+                    # Store failure pattern (best-effort, non-blocking)
+                    try:
+                        from .agent_memory_hooks import store_procedural_memory_from_tool_sequence
+                        # Get recent tools up to this point (including the failed one)
+                        failed_sequence = recent_tools_chat[-3:] if len(recent_tools_chat) >= 3 else recent_tools_chat
+                        if failed_sequence:
+                            error_msg = str(result.get("error", "unknown_error")) if isinstance(result, dict) else "tool_failed"
+                            # Resolve actor context for provenance (if not already resolved)
+                            try:
+                                from .slack_actor_context import resolve_actor_context
+                                actor_ctx_for_failure = resolve_actor_context(slack_user_id=user_id, force_refresh=False)
+                                cognito_id = actor_ctx_for_failure.user_sub or actor_user_sub
+                                slack_id = actor_ctx_for_failure.slack_user_id or user_id
+                                team_id = actor_ctx_for_failure.slack_team_id
+                            except Exception:
+                                cognito_id = actor_user_sub
+                                slack_id = user_id
+                                team_id = None
+                            
+                            store_procedural_memory_from_tool_sequence(
+                                user_sub=actor_user_sub,
+                                tool_sequence=failed_sequence,
+                                success=False,  # Mark as failure
+                                outcome=f"Tool {name} failed: {error_msg}",
+                                context={
+                                    "rfpId": rfp_id,
+                                    "channelId": ch,
+                                    "threadTs": th,
+                                    "failedTool": name,
+                                    "error": error_msg,
+                                },
+                                cognito_user_id=cognito_id,
+                                slack_user_id=slack_id,
+                                slack_channel_id=ch,
+                                slack_thread_ts=th,
+                                slack_team_id=team_id,
+                                rfp_id=rfp_id,
+                                source="slack_operator",
+                            )
+                            log.info("tool_failure_memory_stored", tool=name, error=error_msg[:100])
+                    except Exception as e:
+                        log.warning("tool_failure_memory_store_failed", error=str(e))
                 dur_ms = int((time.time() - started) * 1000)
                 try:
                     if rfp_id:
@@ -2025,6 +2170,40 @@ def run_slack_operator_for_mention(
                     )
                 except Exception as e:
                     log.warning("memory_linking_failed", error=str(e))
+                
+                # Store procedural memory from successful tool sequence
+                # Only store if we actually used tools and completed successfully
+                if did_post and recent_tools_chat:
+                    try:
+                        from .agent_memory_hooks import store_procedural_memory_from_tool_sequence
+                        store_procedural_memory_from_tool_sequence(
+                            user_sub=actor_user_sub,
+                            tool_sequence=recent_tools_chat,
+                            success=True,
+                            outcome=text or "Action completed successfully",
+                            context={
+                                "rfpId": rfp_id,
+                                "channelId": ch,
+                                "threadTs": th,
+                                "steps": steps,
+                                "userQuery": q,
+                                "toolCount": len(recent_tools_chat),
+                            },
+                            cognito_user_id=cognito_user_id_for_memory,
+                            slack_user_id=slack_user_id_for_memory,
+                            slack_channel_id=ch,
+                            slack_thread_ts=th,
+                            slack_team_id=slack_team_id_for_memory,
+                            rfp_id=rfp_id,
+                            source="slack_operator",
+                        )
+                        log.info(
+                            "procedural_memory_stored",
+                            tool_count=len(recent_tools_chat),
+                            tool_sequence=recent_tools_chat[:5],  # Log first 5 tools
+                        )
+                    except Exception as e:
+                        log.warning("procedural_memory_store_failed", error=str(e))
             except Exception:
                 pass  # Non-critical
         
@@ -2174,6 +2353,9 @@ def run_slack_operator_for_mention(
                 # Keep only last 10 tools to avoid unbounded growth
                 if len(recent_tools) > 10:
                     recent_tools = recent_tools[-10:]
+                
+                # Track tool failures for learning (store procedural memory with success=False)
+                # This will be checked after tool execution
 
             args, proto_err = _inject_and_enforce(tool_name=name, tool_args=args if isinstance(args, dict) else {})
             if proto_err is not None:
@@ -2237,6 +2419,9 @@ def run_slack_operator_for_mention(
             try:
                 # Use resilience module for retry and error handling
                 from .agent_resilience import retry_with_classification, classify_error
+                
+                # Track tool failure for learning (will store procedural memory with success=False)
+                tool_failed = False
                 
                 def _execute_tool():
                     return func(args if isinstance(args, dict) else {})

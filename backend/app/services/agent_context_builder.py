@@ -554,6 +554,14 @@ def build_memory_context(
                 created_at = mem.get("createdAt", "")
                 tags = mem.get("tags", [])
                 
+                # For procedural memories, include tool sequence if available
+                if mem_type == "PROCEDURAL":
+                    metadata = mem.get("metadata", {})
+                    tool_seq = metadata.get("toolSequence", [])
+                    if tool_seq and isinstance(tool_seq, list) and len(tool_seq) > 0:
+                        seq_str = " → ".join([str(t) for t in tool_seq[:5]])  # Limit to 5 tools
+                        summary = f"Tools: {seq_str} | {summary}"
+                
                 # Format: summary (created: date) [tags]
                 line = f"  - {clip_text(summary, max_chars=200)}"
                 if created_at:
