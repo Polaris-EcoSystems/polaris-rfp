@@ -6,6 +6,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from pydantic import BaseModel, Field
+
 from ..ai.client import AiNotConfigured, _client
 from ..ai.context import normalize_ws
 from ..ai.tuning import tuning_for
@@ -647,6 +649,213 @@ class SlackOperatorResult:
     meta: dict[str, Any] | None = None
 
 
+# Template-based metaprompts are generated inline in _match_metaprompt_template
+# (Pydantic models can't be in module-level dicts, so we create them on-demand)
+
+
+def _match_metaprompt_template(question: str, rfp_id: str | None) -> MetapromptAnalysis | None:
+    """Check if question matches a known template pattern."""
+    q_lower = question.lower().strip()
+    
+    # Check for update status patterns
+    if any(phrase in q_lower for phrase in ["update status", "change status", "set status"]) and rfp_id:
+        return MetapromptAnalysis(
+            intent="update_rfp_state",
+            complexity="simple",
+            required_tools=["opportunity_load", "opportunity_patch", "journal_append"],
+            likely_steps=3,
+            missing_info=[],
+            confidence=0.95,
+            reasoning="User wants to update RFP status. Requires: opportunity_load → opportunity_patch → journal_append",
+        )
+    
+    # Check for query patterns
+    if any(phrase in q_lower for phrase in ["what is", "tell me about", "show me", "what's the"]) and ("rfp" in q_lower or "proposal" in q_lower):
+        return MetapromptAnalysis(
+            intent="query",
+            complexity="simple",
+            required_tools=["get_rfp"],
+            likely_steps=1,
+            missing_info=[],
+            confidence=0.90,
+            reasoning="User wants information about an RFP. Read-only operation, no RFP scope needed if general query",
+        )
+    
+    # Check for create/upload new RFP patterns
+    if any(phrase in q_lower for phrase in ["upload", "create new", "new rfp", "brand new"]) and ("rfp" in q_lower or "opportunity" in q_lower):
+        return MetapromptAnalysis(
+            intent="create_rfp",
+            complexity="moderate",
+            required_tools=["slack_get_thread", "rfp_create_from_slack_file"],
+            likely_steps=2,
+            missing_info=[],
+            confidence=0.90,
+            reasoning="User wants to create new RFP from file. No RFP scope needed - this creates a NEW RFP",
+        )
+    
+    # Check for schedule job patterns
+    if any(phrase in q_lower for phrase in ["schedule job", "queue job", "run job"]) and not rfp_id:
+        return MetapromptAnalysis(
+            intent="schedule_job",
+            complexity="simple",
+            required_tools=["schedule_job"],
+            likely_steps=1,
+            missing_info=[],
+            confidence=0.90,
+            reasoning="User wants to schedule a job. Global operation, no RFP scope needed unless RFP ID provided",
+        )
+    
+    return None
+
+
+def _generate_structured_metaprompt(
+    *,
+    question: str,
+    rfp_id: str | None,
+    user_id: str | None,
+    comprehensive_ctx: str | None,
+    model: str,
+    client: Any,
+) -> MetapromptAnalysis:
+    """
+    Generate structured metaprompt analysis using GPT-5.2.
+    
+    Returns structured analysis with intent, complexity, required tools, etc.
+    Uses templates for common patterns (fast path), falls back to LLM, then keyword-based.
+    """
+    if not question or not question.strip():
+        return MetapromptAnalysis(
+            intent="unknown",
+            complexity="simple",
+            required_tools=[],
+            likely_steps=1,
+            missing_info=[],
+            confidence=0.0,
+            reasoning="Empty question provided",
+        )
+    
+    # Try template-based matching first (fast, no LLM call)
+    template_match = _match_metaprompt_template(question, rfp_id)
+    if template_match:
+        log.info("metaprompt_template_matched", intent=template_match.intent, question=question[:50])
+        return template_match
+    
+    try:
+        metaprompt_system = "\n".join([
+            "You are analyzing a user's request to generate structured analysis that will guide an AI agent.",
+            "Your job is to determine:",
+            "1. User's intent (e.g., 'update_rfp_state', 'query_rfp_info', 'schedule_job', 'create_rfp', 'get_help')",
+            "2. Complexity level: 'simple' (1-3 steps), 'moderate' (4-6 steps), or 'complex' (7+ steps or multi-turn)",
+            "3. Required tools (e.g., 'opportunity_load', 'opportunity_patch', 'journal_append', 'get_rfp', 'schedule_job')",
+            "4. Estimated steps needed",
+            "5. Missing information that might be needed (e.g., 'rfp_id', 'user_email', 'channel_id')",
+            "",
+            "Context available:",
+            f"- RFP scope: {rfp_id or 'none (global operations allowed)'}",
+            f"- User ID: {user_id or 'unknown'}",
+            f"- Available context: {'Yes (comprehensive context provided)' if comprehensive_ctx else 'Limited'}",
+            "",
+            "User's question:",
+            question,
+            "",
+            "Provide structured analysis as JSON.",
+        ])
+        
+        from ..ai.client import call_json, AiUpstreamError, AiNotConfigured
+        
+        try:
+            analysis, _ = call_json(
+                purpose="metaprompt_analysis",
+                response_model=MetapromptAnalysis,
+                messages=[
+                    {"role": "system", "content": metaprompt_system},
+                    {"role": "user", "content": "Analyze this request and provide structured analysis."},
+                ],
+                temperature=0.3,
+                max_tokens=400,
+                retries=1,
+                timeout_s=10,
+            )
+            return analysis
+        except (AiUpstreamError, AiNotConfigured) as e:
+            log.warning("structured_metaprompt_failed", error=str(e), question=question[:100])
+            return _generate_fallback_structured_metaprompt(question=question, rfp_id=rfp_id)
+    except Exception as e:
+        log.warning("structured_metaprompt_exception", error=str(e), question=question[:100])
+        return _generate_fallback_structured_metaprompt(question=question, rfp_id=rfp_id)
+
+
+def _generate_fallback_structured_metaprompt(*, question: str, rfp_id: str | None) -> MetapromptAnalysis:
+    """Generate keyword-based fallback structured metaprompt when LLM call fails."""
+    if not question:
+        return MetapromptAnalysis(
+            intent="unknown",
+            complexity="simple",
+            required_tools=[],
+            likely_steps=1,
+            missing_info=[],
+            confidence=0.3,
+            reasoning="Empty question - fallback analysis",
+        )
+    
+    q_lower = question.lower()
+    
+    # Determine intent
+    intent = "query"
+    if any(term in q_lower for term in ["update", "change", "modify", "patch", "set"]):
+        if any(term in q_lower for term in ["rfp", "opportunity", "state", "journal"]):
+            intent = "update_rfp_state"
+        else:
+            intent = "update"
+    elif any(term in q_lower for term in ["create", "add", "new", "upload"]):
+        if "rfp" in q_lower or "opportunity" in q_lower:
+            intent = "create_rfp"
+        else:
+            intent = "create"
+    elif any(term in q_lower for term in ["schedule", "queue", "run", "job"]):
+        intent = "schedule_job"
+    elif any(term in q_lower for term in ["what", "who", "when", "where", "how", "tell me", "show me", "list"]):
+        intent = "query"
+    
+    # Determine complexity
+    complexity = "simple"
+    if any(term in q_lower for term in ["and", "also", "then", "after", "multiple", "several", "all"]):
+        complexity = "moderate"
+    if any(term in q_lower for term in ["analyze", "compare", "evaluate", "review", "comprehensive"]):
+        complexity = "complex"
+    
+    # Determine likely tools
+    required_tools: list[str] = []
+    if any(term in q_lower for term in ["opportunity", "journal", "state", "patch"]):
+        required_tools.append("opportunity_load")
+        if any(term in q_lower for term in ["update", "change", "modify", "patch"]):
+            required_tools.append("opportunity_patch")
+            required_tools.append("journal_append")
+    if "rfp" in q_lower or "proposal" in q_lower:
+        if intent != "create_rfp":
+            required_tools.append("get_rfp")
+    if "job" in q_lower or "schedule" in q_lower:
+        required_tools.append("schedule_job")
+    
+    # Estimate steps
+    likely_steps = 2 if complexity == "simple" else (4 if complexity == "moderate" else 6)
+    
+    # Missing info
+    missing_info: list[str] = []
+    if ("rfp" in q_lower or "opportunity" in q_lower) and not rfp_id:
+        missing_info.append("rfp_id")
+    
+    return MetapromptAnalysis(
+        intent=intent,
+        complexity=complexity,
+        required_tools=required_tools,
+        likely_steps=likely_steps,
+        missing_info=missing_info,
+        confidence=0.5,  # Lower confidence for fallback
+        reasoning=f"Keyword-based fallback analysis: intent={intent}, complexity={complexity}",
+    )
+
+
 def _generate_metaprompt(
     *,
     question: str,
@@ -656,6 +865,32 @@ def _generate_metaprompt(
     model: str,
     client: Any,
 ) -> str:
+    """
+    Generate a metaprompt by analyzing the user's request (legacy string format).
+    
+    Now uses structured analysis internally and formats as text for backward compatibility.
+    """
+    analysis = _generate_structured_metaprompt(
+        question=question,
+        rfp_id=rfp_id,
+        user_id=user_id,
+        comprehensive_ctx=comprehensive_ctx,
+        model=model,
+        client=client,
+    )
+    
+    # Format structured analysis as readable text
+    parts: list[str] = []
+    parts.append(f"Intent: {analysis.intent} (complexity: {analysis.complexity})")
+    if analysis.required_tools:
+        parts.append(f"Likely tools: {', '.join(analysis.required_tools)}")
+    if analysis.missing_info:
+        parts.append(f"May need: {', '.join(analysis.missing_info)}")
+    parts.append(f"Estimated steps: {analysis.likely_steps}")
+    if analysis.reasoning:
+        parts.append(f"Analysis: {analysis.reasoning}")
+    
+    return ". ".join(parts) + "."
     """
     Generate a metaprompt by analyzing the user's request.
     
@@ -761,9 +996,107 @@ def _generate_fallback_metaprompt(*, question: str, rfp_id: str | None) -> str:
     return ". ".join(analysis_parts) + "."
 
 
+def _generate_tool_recommendations(
+    *,
+    analysis: MetapromptAnalysis,
+    rfp_id: str | None,
+    procedural_memories: list[dict[str, Any]] | None = None,
+) -> str:
+    """
+    Generate tool recommendations based on structured metaprompt analysis.
+    
+    Returns formatted string with recommended tools and reasoning.
+    """
+    recommendations: list[str] = []
+    
+    # Use required_tools from analysis as primary recommendations
+    if analysis.required_tools:
+        recommendations.append("Recommended tools based on analysis:")
+        for tool in analysis.required_tools[:5]:  # Limit to top 5
+            recommendations.append(f"  - {tool}")
+    
+    # Add protocol recommendations for RFP-scoped operations
+    if rfp_id and any(tool in analysis.required_tools for tool in ["opportunity_patch", "journal_append", "event_append"]):
+        if "opportunity_load" not in analysis.required_tools:
+            recommendations.append("  - opportunity_load (required before RFP write operations)")
+    
+    # Add recommendations based on procedural memory patterns if available
+    if procedural_memories:
+        # Extract common tool sequences from successful patterns
+        common_tools: set[str] = set()
+        for mem in procedural_memories[:3]:  # Top 3 patterns
+            metadata = mem.get("metadata", {})
+            tool_seq = metadata.get("toolSequence", [])
+            if tool_seq and isinstance(tool_seq, list):
+                common_tools.update(tool_seq[:3])  # First 3 tools from each pattern
+        
+        if common_tools and common_tools != set(analysis.required_tools):
+            additional = common_tools - set(analysis.required_tools)
+            if additional:
+                recommendations.append("\nTools commonly used for similar requests:")
+                for tool in list(additional)[:3]:
+                    recommendations.append(f"  - {tool} (from successful patterns)")
+    
+    if not recommendations:
+        return ""
+    
+    return "\n".join(recommendations)
+
+
+def _extract_relevant_tool_categories_from_analysis(analysis: MetapromptAnalysis) -> str:
+    """
+    Extract relevant tool categories from structured metaprompt analysis.
+    
+    Returns a formatted string listing relevant tool categories.
+    """
+    relevant_categories: list[str] = []
+    
+    # Use structured analysis to determine categories
+    intent_lower = analysis.intent.lower()
+    required_tools_lower = [t.lower() for t in analysis.required_tools]
+    
+    # RFP/Proposal operations
+    if any(tool in required_tools_lower for tool in ["opportunity_load", "opportunity_patch", "journal_append", "event_append", "get_rfp"]):
+        relevant_categories.append("- Opportunity State Management (opportunity_load, opportunity_patch, journal_append, event_append)")
+        relevant_categories.append("- RFP/Proposal Browsing (list_rfps, search_rfps, get_rfp, list_proposals)")
+    elif any(term in intent_lower for term in ["rfp", "opportunity", "proposal"]):
+        relevant_categories.append("- RFP/Proposal Browsing (list_rfps, search_rfps, get_rfp, list_proposals)")
+    
+    # Job operations
+    if any(tool in required_tools_lower for tool in ["schedule_job", "agent_job"]):
+        relevant_categories.append("- Agent Jobs (schedule_job, agent_job_list, agent_job_get, job_plan)")
+    elif "job" in intent_lower or "schedule" in intent_lower:
+        relevant_categories.append("- Agent Jobs (schedule_job, agent_job_list, agent_job_get, job_plan)")
+    
+    # Team member operations
+    if any(tool in required_tools_lower for tool in ["get_team_member", "list_team_members"]):
+        relevant_categories.append("- Team Member Lookup (get_team_member, list_team_members)")
+    
+    # Slack operations
+    if any(tool in required_tools_lower for tool in ["slack_get_thread", "slack_post_summary", "slack_send_dm"]):
+        relevant_categories.append("- Slack Operations (slack_get_thread, slack_list_recent_messages, slack_post_summary, slack_send_dm)")
+    
+    # File/RFP creation
+    if "create_rfp" in intent_lower or "rfp_create_from_slack_file" in required_tools_lower:
+        relevant_categories.append("- RFP Creation (rfp_create_from_slack_file, slack_get_thread)")
+    
+    # Query operations
+    if analysis.intent == "query" or "get_" in str(required_tools_lower):
+        relevant_categories.append("- Read Tools (all read tools from READ_TOOLS registry)")
+    
+    # Complexity-based guidance
+    if analysis.complexity == "complex":
+        relevant_categories.append("- Multi-step workflows may be needed - plan carefully and iterate")
+    
+    if not relevant_categories:
+        return "- All tool categories may be relevant"
+    
+    return "\n".join(relevant_categories)
+
+
 def _extract_relevant_tool_categories(metaprompt: str) -> str:
     """
-    Extract relevant tool categories from the metaprompt to help guide tool selection.
+    Extract relevant tool categories from text metaprompt (legacy fallback).
     
     Returns a formatted string listing relevant tool categories.
     """
@@ -828,112 +1161,266 @@ def _extract_user_id_from_mention(text: str) -> str | None:
     return None
 
 
-def _operations_requiring_rfp_scope(question: str) -> bool | None:
+@dataclass(frozen=True)
+class RfpScopeRequirement:
+    """Result of RFP scope requirement analysis."""
+    requires_rfp: bool | None  # True, False, or None
+    confidence: float  # 0.0 to 1.0
+    indicators: list[str]  # Which phrases/patterns matched
+    reasoning: str  # Brief explanation
+
+
+class MetapromptAnalysis(BaseModel):
+    """Structured analysis of user request."""
+    intent: str = Field(description="User's intent, e.g., 'update_rfp_state', 'query', 'schedule_job', 'create_rfp'")
+    complexity: str = Field(description="Request complexity: 'simple', 'moderate', or 'complex'")
+    required_tools: list[str] = Field(default_factory=list, description="Likely tools needed (e.g., 'opportunity_load', 'opportunity_patch')")
+    likely_steps: int = Field(default=3, description="Estimated number of tool call steps needed")
+    missing_info: list[str] = Field(default_factory=list, description="Information that might be needed (e.g., 'rfp_id', 'user_email')")
+    confidence: float = Field(default=0.7, ge=0.0, le=1.0, description="Confidence in this analysis (0.0 to 1.0)")
+    reasoning: str = Field(description="Brief explanation of the analysis")
+
+
+def _classify_rfp_scope_intent_with_ml(
+    question: str,
+    thread_context: str | None = None,
+    has_thread_rfp_binding: bool = False,
+    model: str | None = None,
+    client: Any | None = None,
+) -> RfpScopeRequirement | None:
     """
-    Detect if the user's question requires an RFP scope.
+    Use GPT-5.2 to classify RFP scope intent (optional ML enhancement).
+    
+    Returns RfpScopeRequirement if successful, None if should fall back to keyword-based.
+    """
+    if not model or not client:
+        return None  # Fall back to keyword-based
+    
+    try:
+        from ..ai.client import call_json, AiUpstreamError, AiNotConfigured
+        
+        class RfpScopeIntent(BaseModel):
+            requires_rfp: bool | None = Field(description="True if requires RFP scope, False if global, None if unclear")
+            confidence: float = Field(ge=0.0, le=1.0, description="Confidence 0.0 to 1.0")
+            reasoning: str = Field(description="Brief explanation")
+        
+        prompt = f"""Analyze this user question to determine if it requires RFP scope.
+
+Question: {question}
+
+Context:
+- Thread is bound to RFP: {has_thread_rfp_binding}
+- Thread context: {thread_context[:200] if thread_context else "None"}
+
+RFP-scoped operations include: opportunity_load, opportunity_patch, journal_append, event_append
+Global operations include: schedule_job, agent_job_*, read queries, create new RFP
+
+Determine if this question requires RFP scope (True/False/None) and confidence."""
+        
+        result, _ = call_json(
+            purpose="rfp_scope_intent_classification",
+            response_model=RfpScopeIntent,
+            messages=[
+                {"role": "system", "content": "You classify user questions to determine if they require RFP scope."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,  # Low temperature for classification
+            max_tokens=200,
+            retries=1,
+            timeout_s=5,
+        )
+        
+        return RfpScopeRequirement(
+            requires_rfp=result.requires_rfp,
+            confidence=result.confidence,
+            indicators=["ml_classification"],
+            reasoning=result.reasoning,
+        )
+    except (AiUpstreamError, AiNotConfigured) as e:
+        # API errors - log and fall back to keyword-based classification (ML is optional enhancement)
+        log.info("ml_rfp_scope_classification_failed", error=str(e), error_type=type(e).__name__)
+        return None
+    except Exception as e:
+        # Other unexpected errors - log and fall back to keyword-based classification
+        log.warning("ml_rfp_scope_classification_exception", error=str(e), error_type=type(e).__name__)
+        return None
+
+
+def _operations_requiring_rfp_scope(
+    question: str,
+    thread_context: str | None = None,
+    has_thread_rfp_binding: bool = False,
+    use_ml_classification: bool = False,
+    model: str | None = None,
+    client: Any | None = None,
+) -> RfpScopeRequirement:
+    """
+    Detect if the user's question requires an RFP scope with confidence scoring.
+    
+    Args:
+        question: User's question text
+        thread_context: Optional thread conversation history for context-aware detection
+        has_thread_rfp_binding: Whether thread is bound to an RFP
     
     Returns:
-    - True if the question clearly requires RFP-scoped operations
-    - False if it's clearly a global operation (job scheduling, querying, etc.)
-    - None if unclear (should allow delegation)
+        RfpScopeRequirement with requires_rfp (True/False/None), confidence, indicators, and reasoning
     """
     q_lower = str(question or "").lower().strip()
+    indicators: list[str] = []
+    confidence_scores: list[float] = []
+    
+    # Context-aware adjustment: if thread is bound to RFP, ambiguous queries likely need scope
+    context_boost = 0.15 if has_thread_rfp_binding else 0.0
     
     # Explicit indicators that this is NOT about an existing RFP (creating/uploading new RFPs)
-    if any(phrase in q_lower for phrase in [
-        "isn't about an existing rfp",
-        "is not about an existing rfp",
-        "not about a specific rfp",
-        "not about an rfp",
-        "not tied to an rfp",
-        "new rfp",
-        "brand new",
-        "it's new",
-        "it is new",
-        "upload.*as.*new",
-        "upload.*new",
-        "create.*new",
-        "upload the file",
-        "upload this",
-        "upload it",
-        "can you upload",
-        "upload as",
-        "search for",
-        "find a new",
-        "north star",
-        "runner job",
-        "schedule a job",
-        "create a job",
-        "queue a job",
-    ]):
-        return False
+    false_indicators = [
+        ("isn't about an existing rfp", 0.98),
+        ("is not about an existing rfp", 0.98),
+        ("not about a specific rfp", 0.95),
+        ("not about an rfp", 0.95),
+        ("not tied to an rfp", 0.95),
+        ("new rfp", 0.90),
+        ("brand new", 0.90),
+        ("it's new", 0.85),
+        ("it is new", 0.85),
+        ("upload the file", 0.85),
+        ("upload this", 0.85),
+        ("upload it", 0.85),
+        ("can you upload", 0.85),
+        ("upload as", 0.85),
+        ("search for", 0.80),
+        ("find a new", 0.80),
+        ("north star", 0.95),
+        ("runner job", 0.95),
+        ("schedule a job", 0.90),
+        ("create a job", 0.90),
+        ("queue a job", 0.90),
+    ]
+    
+    for phrase, conf in false_indicators:
+        if phrase in q_lower:
+            indicators.append(f"false_indicator:{phrase}")
+            confidence_scores.append(conf)
+            return RfpScopeRequirement(
+                requires_rfp=False,
+                confidence=conf,
+                indicators=indicators,
+                reasoning=f"Question explicitly indicates global operation or new RFP creation: '{phrase}'"
+            )
     
     # Questions about the bot itself, its capabilities, tools, or general help
-    if any(phrase in q_lower for phrase in [
-        "what tools",
-        "what skills",
-        "what capabilities",
-        "what can you",
-        "what are you",
-        "how can you",
-        "what do you",
-        "available to you",
-        "available tools",
-        "your capabilities",
-        "your skills",
-        "your tools",
-        "help me",
-        "how do you",
-        "what memories",
-        "types of memories",
-        "what types",
-    ]):
-        return False
+    capability_indicators = [
+        ("what tools", 0.95), ("what skills", 0.95), ("what capabilities", 0.95),
+        ("what can you", 0.95), ("what are you", 0.95), ("how can you", 0.95),
+        ("what do you", 0.90), ("available to you", 0.90), ("available tools", 0.95),
+        ("your capabilities", 0.95), ("your skills", 0.95), ("your tools", 0.95),
+        ("help me", 0.85), ("how do you", 0.90), ("what memories", 0.95),
+        ("types of memories", 0.95), ("what types", 0.90),
+    ]
+    
+    for phrase, conf in capability_indicators:
+        if phrase in q_lower:
+            indicators.append(f"capability_query:{phrase}")
+            confidence_scores.append(conf)
+            return RfpScopeRequirement(
+                requires_rfp=False,
+                confidence=conf,
+                indicators=indicators,
+                reasoning=f"Question is about bot capabilities/help, not RFP operations: '{phrase}'"
+            )
     
     # Operations that typically don't require RFP scope
-    if any(phrase in q_lower for phrase in [
-        "schedule job",
-        "agent job",
-        "job list",
-        "job status",
-        "query jobs",
-        "runner",
-    ]):
+    job_phrases = ["schedule job", "agent job", "job list", "job status", "query jobs", "runner"]
+    if any(phrase in q_lower for phrase in job_phrases):
         # But check if they mention an RFP - if so, it might be scoped
-        if _extract_rfp_id(question):
-            return True
-        return False
+        rfp_id_in_text = _extract_rfp_id(question)
+        if rfp_id_in_text:
+            indicators.append(f"job_with_rfp:{rfp_id_in_text}")
+            return RfpScopeRequirement(
+                requires_rfp=True,
+                confidence=0.85,
+                indicators=indicators,
+                reasoning=f"Job operation mentions RFP ID {rfp_id_in_text}, likely RFP-scoped"
+            )
+        indicators.append("job_operation:global")
+        return RfpScopeRequirement(
+            requires_rfp=False,
+            confidence=0.90,
+            indicators=indicators,
+            reasoning="Job operation without RFP ID, global operation"
+        )
     
-    # Operations that clearly require RFP scope
-    # Only return True for specific phrases that unambiguously indicate RFP-scoped write operations
-    # (opportunity_patch, journal_append, event_append require RFP scope)
-    if any(phrase in q_lower for phrase in [
-        "journal entry",  # Adding journal entries
-        "add to journal",  # Adding to journal
-        "append journal",  # Appending to journal
-        "opportunity state",  # OpportunityState operations
-        "update opportunity",  # Updating OpportunityState
-        "patch opportunity",  # Patching OpportunityState
-        "update the opportunity",  # Updating OpportunityState
-        "update opportunity state",  # Updating OpportunityState
-        "patch the opportunity",  # Patching OpportunityState
-        "update rfp",  # Explicit RFP update
-        "update the rfp",  # Explicit RFP update
-    ]):
-        return True
+    # Operations that clearly require RFP scope (high confidence)
+    # Only match specific phrases that unambiguously indicate RFP-scoped write operations
+    true_indicators = [
+        ("journal entry", 0.95), ("add to journal", 0.95), ("append journal", 0.95),
+        ("opportunity state", 0.95), ("update opportunity", 0.95), ("patch opportunity", 0.95),
+        ("update the opportunity", 0.95), ("update opportunity state", 0.95),
+        ("patch the opportunity", 0.95), ("update rfp", 0.95), ("update the rfp", 0.95),
+    ]
     
-    # Check if question mentions RFP-related terms that suggest RFP context
-    if any(term in q_lower for term in ["rfp", "proposal", "opportunity", "bid"]):
+    for phrase, conf in true_indicators:
+        if phrase in q_lower:
+            indicators.append(f"true_indicator:{phrase}")
+            confidence_scores.append(conf)
+            return RfpScopeRequirement(
+                requires_rfp=True,
+                confidence=conf,
+                indicators=indicators,
+                reasoning=f"Question explicitly mentions RFP-scoped write operation: '{phrase}'"
+            )
+    
+    # Check if question mentions RFP-related terms that suggest RFP context (ambiguous case)
+    rfp_terms = ["rfp", "proposal", "opportunity", "bid"]
+    if any(term in q_lower for term in rfp_terms):
+        # Context-aware: if thread is bound to RFP, ambiguous queries likely need scope
+        if has_thread_rfp_binding:
+            indicators.append(f"rfp_term_in_bound_thread:{[t for t in rfp_terms if t in q_lower]}")
+            return RfpScopeRequirement(
+                requires_rfp=True,
+                confidence=0.60 + context_boost,  # Lower confidence, but context suggests RFP scope
+                indicators=indicators,
+                reasoning="Question mentions RFP-related terms and thread is bound to RFP, likely needs scope"
+            )
+        
         # But only if it's asking about a specific RFP, not general questions
-        if any(phrase in q_lower for phrase in ["what is", "tell me about", "show me", "list", "search"]):
-            # General queries about RFPs don't require binding
-            return False
-        # Otherwise might need RFP scope
-        return None
+        general_query_phrases = ["what is", "tell me about", "show me", "list", "search"]
+        if any(phrase in q_lower for phrase in general_query_phrases):
+            indicators.append(f"general_query_with_rfp_term:{[t for t in rfp_terms if t in q_lower]}")
+            return RfpScopeRequirement(
+                requires_rfp=False,
+                confidence=0.80,
+                indicators=indicators,
+                reasoning="General query about RFPs, doesn't require specific RFP scope"
+            )
+        
+        # Otherwise might need RFP scope (unclear)
+        indicators.append(f"ambiguous_rfp_term:{[t for t in rfp_terms if t in q_lower]}")
+        return RfpScopeRequirement(
+            requires_rfp=None,
+            confidence=0.50,  # Unclear - let conversational agent try first
+            indicators=indicators,
+            reasoning="Question mentions RFP-related terms but intent is unclear, delegation recommended"
+        )
     
     # Default: treat as general question (don't require RFP binding)
     # Only ask for RFP binding if the question clearly requires RFP-scoped operations
-    return False  # False means "doesn't require RFP scope, proceed as general question"
+    if has_thread_rfp_binding:
+        # Thread is bound to RFP but question doesn't mention RFP terms
+        # Could be pronoun/anaphora reference ("what's the status?" in RFP thread)
+        return RfpScopeRequirement(
+            requires_rfp=None,  # Unclear, but thread context suggests might need it
+            confidence=0.40 + context_boost,
+            indicators=["default_with_rfp_thread_binding"],
+            reasoning="No clear RFP indicators in question, but thread is bound to RFP - may be referencing it implicitly"
+        )
+    
+    return RfpScopeRequirement(
+        requires_rfp=False,
+        confidence=0.85,
+        indicators=["default:no_rfp_indicators"],
+        reasoning="No RFP-related indicators found, treating as general question"
+    )
 
 
 def _fetch_thread_history(*, channel_id: str, thread_ts: str, limit: int = 50) -> str:
@@ -981,6 +1468,40 @@ def _fetch_thread_history(*, channel_id: str, thread_ts: str, limit: int = 50) -
         # Best-effort: if fetching fails, return empty string (don't break the agent)
         log.warning("thread_history_fetch_failed", channel=channel_id, thread_ts=thread_ts)
         return ""
+
+
+def _validate_tool_result(*, tool_name: str, result: dict[str, Any]) -> str | None:
+    """
+    Validate tool result structure before passing to next step.
+    
+    Returns error message if validation fails, None if valid.
+    """
+    if not isinstance(result, dict):
+        return f"Tool result is not a dict, got {type(result).__name__}"
+    
+    # All tools should return an "ok" field
+    if "ok" not in result:
+        return "Tool result missing 'ok' field"
+    
+    # Check for common required fields based on tool type
+    if tool_name == "opportunity_load":
+        if result.get("ok") and "opportunity" not in result:
+            return "opportunity_load missing 'opportunity' field in success result"
+    elif tool_name == "get_rfp":
+        if result.get("ok") and "rfpId" not in result:
+            return "get_rfp missing 'rfpId' field in success result"
+    elif tool_name in ("opportunity_patch", "journal_append", "event_append"):
+        if result.get("ok") and "rfpId" not in result:
+            return f"{tool_name} missing 'rfpId' field in success result"
+    elif tool_name == "rfp_create_from_slack_file":
+        if result.get("ok") and "rfpId" not in result:
+            return "rfp_create_from_slack_file missing 'rfpId' field in success result"
+    
+    # Check for error details when ok=False
+    if not result.get("ok") and "error" not in result:
+        return "Tool result indicates failure but missing 'error' field"
+    
+    return None
 
 
 def _tool_def(name: str, description: str, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -1727,21 +2248,48 @@ def run_slack_operator_for_mention(
 
     # Attempt to scope to an RFP for durable state.
     rfp_id = _extract_rfp_id(q)
+    thread_binding = None
     if not rfp_id:
         # Fall back to thread binding.
         try:
-            b = get_thread_binding(channel_id=ch, thread_ts=th)
-            rfp_id = str((b or {}).get("rfpId") or "").strip() or None
+            thread_binding = get_thread_binding(channel_id=ch, thread_ts=th)
+            rfp_id = str((thread_binding or {}).get("rfpId") or "").strip() or None
         except Exception:
             rfp_id = None
+            thread_binding = None
 
     if not rfp_id:
-        # Check if this operation requires RFP scope
-        requires_rfp = _operations_requiring_rfp_scope(q)
+        # Check if this operation requires RFP scope (with context-aware detection)
+        has_thread_binding = bool(thread_binding and thread_binding.get("rfpId"))
+        
+        try:
+            thread_ctx_preview = _fetch_thread_history(channel_id=ch, thread_ts=th, limit=10)
+        except Exception:
+            thread_ctx_preview = None
+        
+        # Use keyword-based classification (fast and reliable)
+        # ML classification can be enabled later by initializing model/client earlier if needed
+        scope_req = _operations_requiring_rfp_scope(
+            question=q,
+            thread_context=thread_ctx_preview,
+            has_thread_rfp_binding=has_thread_binding,
+            use_ml_classification=False,
+        )
+        if not scope_req:
+            # Fallback if scope_req is None (shouldn't happen, but be safe)
+            scope_req = RfpScopeRequirement(
+                requires_rfp=None,
+                confidence=0.0,
+                indicators=["fallback"],
+                reasoning="Classification failed, treating as unclear",
+            )
+        requires_rfp = scope_req.requires_rfp
         
         # Try delegating to conversational agent for non-RFP questions or unclear cases
+        # Use confidence to make nuanced decisions: low confidence False → still try conversational agent first
         if requires_rfp is False:
             # This operation clearly doesn't require RFP scope - delegate to conversational agent
+            # (even if confidence is low, False means don't ask for RFP scope)
             try:
                 from .slack_web import chat_post_message_result
                 from .slack_actor_context import resolve_actor_context
@@ -1777,6 +2325,7 @@ def run_slack_operator_for_mention(
         elif requires_rfp is None:
             # Unclear - try delegating to conversational agent first
             # This keeps @mentions responsive without requiring thread binding.
+            # If confidence is high but still None, we might want to be more cautious
             try:
                 from .slack_web import chat_post_message_result
                 from .slack_actor_context import resolve_actor_context
@@ -1832,6 +2381,7 @@ def run_slack_operator_for_mention(
     if rfp_id:
         ensure_state_exists(rfp_id=rfp_id)
 
+    # Initialize model and client early (needed for ML classification if enabled)
     model = settings.openai_model_for("slack_agent")
     client = _client(timeout_s=75)
 
@@ -1925,8 +2475,8 @@ def run_slack_operator_for_mention(
         limit=5,
     ) if rfp_id else ""
 
-    # Generate metaprompt: analyze the user's request to determine approach, relevant tools, and complexity
-    metaprompt = _generate_metaprompt(
+    # Generate structured metaprompt analysis
+    metaprompt_analysis = _generate_structured_metaprompt(
         question=q,
         rfp_id=rfp_id,
         user_id=user_id,
@@ -1935,11 +2485,27 @@ def run_slack_operator_for_mention(
         client=client,
     )
     
-    # Extract relevant tool categories from metaprompt
-    relevant_tool_categories = _extract_relevant_tool_categories(metaprompt)
+    # Format metaprompt as text for system prompt (backward compatibility)
+    metaprompt = f"Intent: {metaprompt_analysis.intent} (complexity: {metaprompt_analysis.complexity}). {metaprompt_analysis.reasoning}"
+    
+    # Extract relevant tool categories from structured analysis
+    relevant_tool_categories = _extract_relevant_tool_categories_from_analysis(metaprompt_analysis)
+    
+    # Adaptive max_steps based on complexity analysis
+    if metaprompt_analysis.complexity == "simple":
+        effective_max_steps = max(3, min(max_steps, 5))  # 3-5 steps for simple
+    elif metaprompt_analysis.complexity == "moderate":
+        effective_max_steps = max(6, min(max_steps, 10))  # 6-10 steps for moderate
+    else:  # complex
+        effective_max_steps = max(12, min(max_steps, 20))  # 12-20 steps for complex
+    
+    # Also consider likely_steps from analysis
+    if metaprompt_analysis.likely_steps > effective_max_steps:
+        effective_max_steps = min(metaprompt_analysis.likely_steps + 2, max_steps * 2)  # Add buffer
     
     # Retrieve procedural memories for tool guidance
     procedural_guidance = ""
+    procedural_memories: list[dict[str, Any]] | None = None
     if actor_user_sub:
         try:
             from .agent_memory_retrieval import get_memories_for_context
@@ -1976,6 +2542,13 @@ def run_slack_operator_for_mention(
         except Exception as e:
             log.warning("procedural_memory_retrieval_failed", error=str(e))
     
+    # Tool recommendation engine: recommend specific tools based on analysis and procedural memories
+    tool_recommendations = _generate_tool_recommendations(
+        analysis=metaprompt_analysis,
+        rfp_id=rfp_id,
+        procedural_memories=procedural_memories,
+    )
+    
     # Check for relevant skills if query mentions skills/capabilities
     skills_guidance = ""
     if q and any(term in q.lower() for term in ["skill", "capability", "expertise", "what can", "how to"]):
@@ -2006,6 +2579,9 @@ def run_slack_operator_for_mention(
             "",
             "Relevant Tool Categories for this request:",
             relevant_tool_categories if relevant_tool_categories else "- All tools available",
+            "",
+            "Tool Recommendations:" if tool_recommendations else "",
+            tool_recommendations if tool_recommendations else "",
             "",
             procedural_guidance if procedural_guidance else "",
             "Skills System:" if skills_guidance else "",
@@ -2079,6 +2655,7 @@ def run_slack_operator_for_mention(
     did_load = False
     did_patch = False
     did_journal = False
+    last_load_time: float | None = None
 
     def _inject_and_enforce(*, tool_name: str, tool_args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
         """
@@ -2090,7 +2667,7 @@ def run_slack_operator_for_mention(
         
         Note: Some tools don't require RFP scope (schedule_job, agent_job_*, read tools).
         """
-        nonlocal did_load, did_patch, did_journal
+        nonlocal did_load, did_patch, did_journal, last_load_time
         name = str(tool_name or "").strip()
         args2 = tool_args if isinstance(tool_args, dict) else {}
 
@@ -2122,14 +2699,43 @@ def run_slack_operator_for_mention(
 
         # Load-first protocol (only for RFP-scoped operations).
         # Skip if no RFP scope OR if tool doesn't require it.
+        # Context-aware: if context was recently loaded, we may relax the requirement for read operations
         if rfp_id and name not in tools_not_requiring_rfp and not is_read_tool and not did_load:
             # RFP-scoped operation that requires state reconstruction
             if name not in ("opportunity_load",):
-                return args2, {
-                    "ok": False,
-                    "error": "protocol_missing_opportunity_load",
-                    "hint": "Call opportunity_load first to reconstruct context before using other RFP-scoped tools.",
-                }
+                # Check if context was recently loaded (within last 30 seconds in same invocation)
+                # This allows skipping redundant loads in multi-turn conversations
+                now = time.time()
+                context_freshness = None
+                if last_load_time:
+                    context_freshness = now - last_load_time
+                context_is_fresh = context_freshness is not None and context_freshness < 30.0
+                
+                # For read-only RFP operations, we might be more lenient
+                # But for write operations, we should enforce more strictly
+                is_write_operation = name in ("opportunity_patch", "journal_append", "event_append")
+                
+                if not context_is_fresh or is_write_operation:
+                    # Write operations: enforce strictly (always require fresh load)
+                    # Read operations: if context is fresh, allow but log suggestion
+                    if is_write_operation:
+                        # Write operations: enforce more strictly - always need fresh load
+                        return args2, {
+                            "ok": False,
+                            "error": "protocol_missing_opportunity_load",
+                            "hint": "Call opportunity_load first to reconstruct context before using other RFP-scoped write tools.",
+                        }
+                    else:
+                        # Read operations: if context is not fresh, suggest but don't block
+                        # Agent can proceed but may have stale context
+                        log.info(
+                            "protocol_suggestion_opportunity_load",
+                            tool_name=name,
+                            rfp_id=rfp_id,
+                            context_age_seconds=context_freshness,
+                            hint="Consider calling opportunity_load first for fresh context",
+                        )
+                        # Don't return error, just log the suggestion - agent can proceed
 
         # Write-it-down protocol: before posting/asking in RFP-scoped context, ensure we wrote durable artifacts.
         if rfp_id and name in ("slack_post_summary", "slack_ask_clarifying_question") and not (did_patch or did_journal):
@@ -2155,7 +2761,7 @@ def run_slack_operator_for_mention(
         recent_tools_chat: list[str] = []  # Track tool calls for procedural memory (chat_tools path)
         while True:
             steps += 1
-            if steps > max(1, int(max_steps)):
+            if steps > max(1, int(effective_max_steps)):
                 break
             completion = client.chat.completions.create(
                 model=model,
@@ -2280,12 +2886,24 @@ def run_slack_operator_for_mention(
                     }
 
                 # Track tool failure for learning
+                # Validate tool result structure
+                validation_error = _validate_tool_result(tool_name=name, result=result)
+                if validation_error:
+                    log.warning(
+                        "tool_result_validation_failed",
+                        tool_name=name,
+                        error=validation_error,
+                    )
+                    # Don't fail the tool call, but log the validation issue
+                    # The agent can handle invalid results if needed
+                
                 tool_failed = not bool(result.get("ok"))
                 
                 # Update protocol flags on success.
                 if bool(result.get("ok")):
                     if name == "opportunity_load":
                         did_load = True
+                        last_load_time = time.time()  # Track when context was loaded
                     elif name == "opportunity_patch":
                         did_patch = True
                     elif name == "journal_append":
@@ -2495,21 +3113,14 @@ def run_slack_operator_for_mention(
     conversation_state: dict[str, Any] = {}  # Track conversation state for multi-turn loops
     start_time = time.time()
     
-    # Determine if this is likely a complex request based on metaprompt
-    is_complex_request = any(phrase in metaprompt.lower() for phrase in [
-        "complex", "multi-step", "workflow", "iterative", "multiple", "requires"
-    ]) if metaprompt else False
-    
-    # Adjust max_steps for complex requests
-    effective_max_steps = max(1, int(max_steps))
-    if is_complex_request:
-        effective_max_steps = max(effective_max_steps, 12)  # Allow more steps for complex requests
+    # Use effective_max_steps calculated from structured metaprompt analysis (already set above)
+    # This is more accurate than keyword-based detection
     
     while True:
         steps += 1
         if steps > effective_max_steps:
             # For complex requests that hit step limit, provide a summary
-            if is_complex_request and steps > max_steps:
+            if metaprompt_analysis.complexity == "complex" and steps > max_steps:
                 try:
                     from .slack_web import chat_post_message_result
                     summary_msg = (
@@ -2564,7 +3175,7 @@ def run_slack_operator_for_mention(
             kwargs["previous_response_id"] = prev_id
             kwargs["input"] = []
             # For multi-turn loops, add conversation state context
-            if conversation_state and is_complex_request:
+            if conversation_state and metaprompt_analysis.complexity == "complex":
                 state_summary = f"\n\nConversation state (step {steps}):\n"
                 state_summary += f"- Previous tools used: {', '.join(recent_tools[-5:]) if recent_tools else 'none'}\n"
                 state_summary += f"- Steps completed: {steps - 1}\n"
@@ -2615,7 +3226,7 @@ def run_slack_operator_for_mention(
             text = _sa._responses_text(resp).strip()
             # Check if the agent is indicating it needs more information or wants to continue
             # For complex requests, allow the agent to continue even if it says something
-            if is_complex_request and text and any(phrase in text.lower() for phrase in [
+            if metaprompt_analysis.complexity == "complex" and text and any(phrase in text.lower() for phrase in [
                 "need more", "gather", "let me", "i'll", "checking", "looking", "searching", "working", "analyzing"
             ]):
                 # Agent is working through the problem - continue the loop
