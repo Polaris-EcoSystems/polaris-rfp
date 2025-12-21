@@ -31,3 +31,8 @@ docker-compose.override.yml
 # Temporary files
 *.tmp
 *.temp
+
+# Python cache directories
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
