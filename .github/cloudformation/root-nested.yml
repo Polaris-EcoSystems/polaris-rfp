@@ -324,7 +324,6 @@ Resources:
         GitHubRepo: !Ref GitHubRepo
 
   NorthStarAgentStack:
-    DependsOn: BackendStack
     Type: AWS::CloudFormation::Stack
     Properties:
       TemplateURL: northstar-agent.yml
