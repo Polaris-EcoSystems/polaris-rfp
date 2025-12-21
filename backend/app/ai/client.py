@@ -127,7 +127,9 @@ def _is_model_access_error(e: Exception, *, model: str) -> bool:
 
 def _models_to_try(purpose: str) -> list[str]:
     """
-    Prefer per-purpose model, then fall back to OPENAI_MODEL, then a known-safe default.
+    Prefer per-purpose model, then fall back to OPENAI_MODEL, then GPT-5.2-pro for complex tasks, then a known-safe default.
+    
+    For GPT-5.2 models, includes gpt-5.2-pro as a fallback for when the primary model needs more compute.
     """
     out: list[str] = []
     primary = str(settings.openai_model_for(purpose) or "").strip()
@@ -136,7 +138,16 @@ def _models_to_try(purpose: str) -> list[str]:
     base = str(settings.openai_model or "").strip()
     if base and base not in out:
         out.append(base)
-    if "gpt-4o-mini" not in out:
+    
+    # For GPT-5.2 family models, add gpt-5.2-pro as a fallback for complex tasks
+    # GPT-5.2-pro uses more compute to think harder and provide consistently better answers
+    primary_lower = primary.lower() if primary else ""
+    base_lower = base.lower() if base else ""
+    if ("gpt-5.2" in primary_lower or "gpt-5.2" in base_lower) and "gpt-5.2-pro" not in [m.lower() for m in out]:
+        out.append("gpt-5.2-pro")
+    
+    # Final fallback
+    if "gpt-4o-mini" not in [m.lower() for m in out]:
         out.append("gpt-4o-mini")
     return out
 

@@ -68,6 +68,8 @@ def _escalate_effort(base: str, *, attempt: int, prev_err: Exception | None) -> 
     """
     Escalate effort only when the *previous* attempt failed in a way that
     suggests "think harder" helps (parse/validation failures).
+    
+    Supports GPT-5.2 reasoning levels: none, low, medium, high, xhigh
     """
     a = max(1, int(attempt or 1))
     b = str(base or "").strip().lower() or "low"
@@ -76,9 +78,20 @@ def _escalate_effort(base: str, *, attempt: int, prev_err: Exception | None) -> 
     if not _is_parse_failure(prev_err):
         return b
     # Parse failures: give the model more deliberation on retry.
-    if a == 2:
-        return "medium"
-    return "high"
+    # Escalate through: low -> medium -> high -> xhigh
+    effort_levels = ["none", "low", "medium", "high", "xhigh"]
+    try:
+        current_idx = effort_levels.index(b) if b in effort_levels else 1
+        # Escalate by 1-2 levels on retry
+        new_idx = min(len(effort_levels) - 1, current_idx + (2 if a >= 3 else 1))
+        return effort_levels[new_idx]
+    except (ValueError, IndexError):
+        # Fallback escalation
+        if a == 2:
+            return "medium"
+        elif a >= 3:
+            return "high"
+        return b
 
 
 def _estimate_context_complexity(
@@ -227,10 +240,12 @@ def tuning_for(
             elif base_eff == "low":
                 base_eff = "medium"
         
-        # Escalate based on steps and complexity
+        # Escalate based on steps and complexity (GPT-5.2: supports up to xhigh)
         if has_complex_tool:
-            # Complex operations: escalate faster
-            if steps >= 4:
+            # Complex operations: escalate faster, can reach xhigh for very complex cases
+            if steps >= 8 or (steps >= 6 and context_complexity > 1.5):
+                eff = "xhigh"  # GPT-5.2: use xhigh for very complex multi-step operations
+            elif steps >= 4:
                 eff = "high"
             elif steps >= 2:
                 eff = "medium"
@@ -238,7 +253,9 @@ def tuning_for(
                 eff = base_eff
         elif has_medium_tool:
             # Medium complexity: moderate escalation
-            if steps >= 5:
+            if steps >= 10 or (steps >= 7 and context_complexity > 1.5):
+                eff = "xhigh"  # Escalate to xhigh for persistent complex operations
+            elif steps >= 5:
                 eff = "high"
             elif steps >= 2:
                 eff = "medium"
@@ -246,22 +263,41 @@ def tuning_for(
                 eff = base_eff
         else:
             # Simple operations: step-based escalation (improved thresholds)
-            if steps >= 6:
+            if steps >= 12 or (steps >= 8 and context_complexity > 1.5):
+                eff = "xhigh"  # Even simple ops can need xhigh if they persist
+            elif steps >= 6:
                 eff = "high"
             elif steps >= 3:
                 eff = "medium"
             else:
                 eff = base_eff
         
-        # Apply context complexity boost
-        if context_complexity > 1.0 and eff == "medium":
-            eff = "high"
-        elif context_complexity > 0.5 and eff == "low":
-            eff = "medium"
+        # Apply context complexity boost (can push to xhigh)
+        if context_complexity > 1.5:
+            # Very complex context: escalate to high or xhigh
+            if eff == "high" and (steps >= 6 or is_long_running):
+                eff = "xhigh"
+            elif eff == "medium":
+                eff = "high"
+            elif eff == "low":
+                eff = "medium"
+        elif context_complexity > 1.0:
+            if eff == "medium":
+                eff = "high"
+            elif eff == "low":
+                eff = "medium"
+        elif context_complexity > 0.5:
+            if eff == "low":
+                eff = "medium"
         
-        # Apply long-running boost
-        if is_long_running and eff == "medium":
-            eff = "high"
+        # Apply long-running boost (can push to xhigh)
+        if is_long_running:
+            if eff == "high" and steps >= 5:
+                eff = "xhigh"  # Long-running + high effort + many steps = xhigh
+            elif eff == "medium":
+                eff = "high"
+            elif eff == "low":
+                eff = "medium"
         
         vb = str(settings.openai_text_verbosity_json or settings.openai_text_verbosity or "low")
         return AiTuning(reasoning_effort=str(eff).strip() or "medium", verbosity=str(vb).strip() or "low")

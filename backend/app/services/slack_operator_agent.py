@@ -694,22 +694,70 @@ def _generate_metaprompt(
         ])
         
         # Use a quick, low-cost call to generate the metaprompt
-        from ..ai.client import call_text
+        # Make it resilient to failures - metaprompt is helpful but not critical
+        from ..ai.client import call_text, AiUpstreamError, AiNotConfigured
         
-        metaprompt_text, _ = call_text(
-            purpose="metaprompt_generation",
-            messages=[
-                {"role": "system", "content": metaprompt_system},
-                {"role": "user", "content": "Analyze this request and generate the metaprompt."},
-            ],
-            temperature=0.3,
-            max_tokens=300,
-        )
-        
-        return metaprompt_text.strip() if metaprompt_text else ""
+        try:
+            metaprompt_text, _ = call_text(
+                purpose="metaprompt_generation",
+                messages=[
+                    {"role": "system", "content": metaprompt_system},
+                    {"role": "user", "content": "Analyze this request and generate the metaprompt."},
+                ],
+                temperature=0.3,
+                max_tokens=300,
+                retries=1,  # Quick retry, but don't spend too much time on this
+                timeout_s=10,  # Short timeout since it's non-critical
+            )
+            
+            return metaprompt_text.strip() if metaprompt_text else ""
+        except (AiUpstreamError, AiNotConfigured) as e:
+            # API errors - log and provide simple fallback metaprompt
+            log.warning("metaprompt_generation_failed", error=str(e), question=question[:100], error_type=type(e).__name__)
+            # Provide a simple keyword-based fallback metaprompt
+            return _generate_fallback_metaprompt(question=question, rfp_id=rfp_id)
     except Exception as e:
-        log.warning("metaprompt_generation_failed", error=str(e), question=question[:100])
-        return ""  # Non-critical: continue without metaprompt if generation fails
+        # Catch-all for any other unexpected errors
+        log.warning("metaprompt_generation_failed", error=str(e), question=question[:100], error_type=type(e).__name__)
+        # Provide a simple keyword-based fallback metaprompt
+        return _generate_fallback_metaprompt(question=question, rfp_id=rfp_id)
+
+
+def _generate_fallback_metaprompt(*, question: str, rfp_id: str | None) -> str:
+    """
+    Generate a simple keyword-based fallback metaprompt when LLM call fails.
+    
+    This provides basic analysis without requiring an API call.
+    """
+    if not question:
+        return ""
+    
+    q_lower = question.lower()
+    analysis_parts: list[str] = []
+    
+    # Determine operation type
+    if any(term in q_lower for term in ["what", "who", "when", "where", "how", "tell me", "show me", "list"]):
+        analysis_parts.append("This appears to be an information query")
+    elif any(term in q_lower for term in ["create", "add", "update", "change", "modify", "schedule", "run"]):
+        analysis_parts.append("This appears to be an action request")
+    elif any(term in q_lower for term in ["find", "search", "look for", "discover"]):
+        analysis_parts.append("This appears to be a search/discovery request")
+    else:
+        analysis_parts.append("This appears to be a general request")
+    
+    # Assess complexity
+    if any(term in q_lower for term in ["and", "also", "then", "after", "multiple", "several"]):
+        analysis_parts.append("that may require multiple steps")
+    else:
+        analysis_parts.append("that can likely be handled in a few steps")
+    
+    # RFP awareness
+    if rfp_id:
+        analysis_parts.append("within an RFP context")
+    else:
+        analysis_parts.append("potentially requiring global operations")
+    
+    return ". ".join(analysis_parts) + "."
 
 
 def _extract_relevant_tool_categories(metaprompt: str) -> str:
@@ -1576,8 +1624,13 @@ def run_slack_operator_for_mention(
     # Allow proposing platform actions with human confirmation (existing pattern).
     if bool(settings.slack_agent_actions_enabled):
         tools.append(_sa._propose_action_tool_def())
-    tool_names = [tpl["name"] for tpl in tools if isinstance(tpl, dict) and tpl.get("name")]
-    chat_tools = [_sa._to_chat_tool(tpl) for tpl in tools if isinstance(tpl, dict)]
+    # Filter out tools with empty or missing names before conversion
+    valid_tools = [
+        tpl for tpl in tools
+        if isinstance(tpl, dict) and tpl.get("name") and str(tpl.get("name", "")).strip()
+    ]
+    tool_names = [tpl["name"] for tpl in valid_tools]
+    chat_tools = [_sa._to_chat_tool(tpl) for tpl in valid_tools]
 
     # Use enhanced context builder for comprehensive context
     from .agent_context_builder import (
@@ -1772,6 +1825,13 @@ def run_slack_operator_for_mention(
             "- For complex requests: Break down into steps, gather information incrementally, and iterate. Use multi-turn loops to work through the problem systematically.",
             "- Team awareness: You have access to team member profiles, biographies, and project-specific bios. Use `get_team_member` or `list_team_members` when users ask about team capabilities or need to match team members to projects.",
             "",
+            "GPT-5.2 Best Practices:",
+            "- You are using GPT-5.2 with the Responses API, which supports passing chain of thought (CoT) between turns for improved intelligence.",
+            "- Before calling tools, briefly explain why you're calling them (preambles) - this improves tool-calling accuracy and user confidence.",
+            "- Use reasoning effort appropriately: 'none' for simple queries, 'medium' for standard operations, 'high' for complex multi-step tasks, 'xhigh' for very complex persistent problems.",
+            "- Verbosity: 'low' for concise answers, 'medium' for balanced responses, 'high' for thorough explanations.",
+            "- When a request is complex or persists across many steps, reasoning effort may escalate to 'xhigh' to ensure thorough problem-solving.",
+            "",
             "Runtime context:",
             f"- channel: {ch}",
             f"- thread_ts: {th}",
@@ -1865,8 +1925,13 @@ def run_slack_operator_for_mention(
 
         return args2, None
 
-    # Prefer Responses API; fall back to chat tools if needed.
-    if not _sa._supports_responses_api(client):
+    # Use Responses API for GPT-5.2 (primary path) - provides better intelligence through CoT passing
+    # Only fall back to Chat Completions if Responses API is not available (legacy SDK)
+    # GPT-5.2 works best with Responses API which supports passing chain of thought between turns
+    from ..ai.client import _is_gpt5_family as _is_gpt5_family_check
+    use_responses_api = _sa._supports_responses_api(client) and _is_gpt5_family_check(model)
+    
+    if not use_responses_api:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system},
             {"role": "user", "content": q},
@@ -2295,6 +2360,7 @@ def run_slack_operator_for_mention(
 
         # Wrap API call with resilience
         from .agent_resilience import retry_with_classification, should_retry_with_adjusted_params
+        from ..ai.client import _is_model_access_error, _is_gpt5_family
         
         def _call_api():
             return client.responses.create(**kwargs)
@@ -2307,12 +2373,23 @@ def run_slack_operator_for_mention(
                 max_delay=10.0,
             )
         except Exception as e:
-            # If API call fails, try with reduced reasoning (graceful degradation)
+            # If API call fails, try with adjusted parameters or fallback to gpt-5.2-pro
             should_retry, adjusted = should_retry_with_adjusted_params(e, attempt=1)
             if should_retry and adjusted:
                 kwargs["reasoning"] = {"effort": adjusted.get("reasoning_effort", "medium")}
                 kwargs["max_output_tokens"] = adjusted.get("max_tokens", 1100)
                 resp = client.responses.create(**kwargs)
+            elif _is_model_access_error(e, model=model):
+                # Model access error: try gpt-5.2-pro as fallback for GPT-5.2 models
+                if _is_gpt5_family(model) and model != "gpt-5.2-pro":
+                    log.info("falling_back_to_gpt52_pro", original_model=model)
+                    kwargs["model"] = "gpt-5.2-pro"
+                    # gpt-5.2-pro can handle higher reasoning - keep or increase effort
+                    if tuning.reasoning_effort in ["high", "xhigh"]:
+                        kwargs["reasoning"] = {"effort": "xhigh"}  # Use xhigh for pro model
+                    resp = client.responses.create(**kwargs)
+                else:
+                    raise
             else:
                 raise
         prev_id = str(getattr(resp, "id", "") or "") or prev_id
@@ -2494,22 +2571,45 @@ def run_slack_operator_for_mention(
             outputs.append(_sa._tool_output_item(call_id, _sa._safe_json(result)))
 
         # Get updated tuning with latest tool complexity
+        # May escalate to xhigh for very complex persistent operations
         tuning2 = tuning_for(
             purpose="slack_agent",
             kind="tools",
             attempt=steps,
             recent_tools=recent_tools[-5:] if recent_tools else None,
+            context_length=len(str(outputs)) if outputs else 0,
+            has_rfp_state=bool(rfp_id),
+            is_long_running=steps >= 8,  # Consider long-running if many steps
         )
-        resp2 = client.responses.create(
-            model=model,
-            previous_response_id=prev_id,
-            input=outputs,
-            tools=tools,
-            tool_choice=_sa._tool_choice_allowed(tool_names),
-            reasoning={"effort": tuning2.reasoning_effort},
-            text={"verbosity": tuning2.verbosity},
-            max_output_tokens=1100,
-        )
+        
+        # Try with updated tuning, fallback to gpt-5.2-pro if needed
+        try:
+            resp2 = client.responses.create(
+                model=model,
+                previous_response_id=prev_id,
+                input=outputs,
+                tools=tools,
+                tool_choice=_sa._tool_choice_allowed(tool_names),
+                reasoning={"effort": tuning2.reasoning_effort},
+                text={"verbosity": tuning2.verbosity},
+                max_output_tokens=1100,
+            )
+        except Exception as e2:
+            # If second call fails and we're not already on pro, try gpt-5.2-pro
+            if _is_model_access_error(e2, model=model) and _is_gpt5_family(model) and model != "gpt-5.2-pro":
+                log.info("falling_back_to_gpt52_pro_on_second_call", original_model=model, step=steps)
+                resp2 = client.responses.create(
+                    model="gpt-5.2-pro",
+                    previous_response_id=prev_id,
+                    input=outputs,
+                    tools=tools,
+                    tool_choice=_sa._tool_choice_allowed(tool_names),
+                    reasoning={"effort": "xhigh"},  # Use xhigh for pro model on complex operations
+                    text={"verbosity": tuning2.verbosity},
+                    max_output_tokens=1100,
+                )
+            else:
+                raise
         prev_id = str(getattr(resp2, "id", "") or "") or prev_id
         tool_calls2 = _sa._extract_tool_calls(resp2)
         if tool_calls2:

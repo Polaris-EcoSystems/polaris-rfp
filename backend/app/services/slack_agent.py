@@ -220,11 +220,16 @@ def _supports_responses_api(client: Any) -> bool:
 def _to_chat_tool(t: dict[str, Any]) -> dict[str, Any]:
     """
     Convert a Responses-style function tool spec into a Chat Completions tool spec.
+    
+    Note: Caller should ensure tool has a non-empty name before calling this function.
     """
+    tool_name = str(t.get("name") or "").strip()
+    if not tool_name:
+        raise ValueError(f"Tool must have a non-empty name: {t}")
     return {
         "type": "function",
         "function": {
-            "name": str(t.get("name") or ""),
+            "name": tool_name,
             "description": str(t.get("description") or ""),
             "parameters": t.get("parameters") or {"type": "object", "properties": {}},
         },
@@ -536,8 +541,13 @@ def run_slack_agent_question(
     tools = [tpl for (tpl, _fn) in READ_TOOLS.values()]
     if bool(settings.slack_agent_actions_enabled):
         tools.append(_propose_action_tool_def())
-    tool_names = [tpl["name"] for tpl in tools if isinstance(tpl, dict) and tpl.get("name")]
-    chat_tools = [_to_chat_tool(tpl) for tpl in tools if isinstance(tpl, dict)]
+    # Filter out tools with empty or missing names before conversion
+    valid_tools = [
+        tpl for tpl in tools
+        if isinstance(tpl, dict) and tpl.get("name") and str(tpl.get("name", "")).strip()
+    ]
+    tool_names = [tpl["name"] for tpl in valid_tools]
+    chat_tools = [_to_chat_tool(tpl) for tpl in valid_tools]
 
     # Use enhanced context builder for comprehensive context
     from .agent_context_builder import (
