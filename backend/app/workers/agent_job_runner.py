@@ -17,6 +17,7 @@ from ..services.agent_jobs_repo import (
 from ..services.opportunity_state_repo import ensure_state_exists, patch_state, seed_from_platform
 from ..services.opportunity_compactor import run_opportunity_compaction
 from ..services.agent_daily_digest import run_daily_digest_and_reschedule
+from ..services.agent_diagnostics_scheduler import run_diagnostics_update_and_reschedule
 from ..services.agent_self_improve import run_perch_time_once
 from ..services.slack_reply_tools import post_summary
 from ..services.self_modify_pipeline import get_pr_checks, open_pr_for_change_proposal, verify_ecs_rollout
@@ -182,6 +183,15 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     completed += 1
                     continue
 
+                if job_type == "agent_diagnostics_update":
+                    # Global, not tied to an RFP. Updates diagnostics in memory.
+                    hours = int(payload.get("hours") or 24)
+                    reschedule_minutes = int(payload.get("rescheduleMinutes") or 60)
+                    res = run_diagnostics_update_and_reschedule(hours=hours, reschedule_minutes=reschedule_minutes)
+                    complete_job(job_id=jid, result=res)
+                    completed += 1
+                    continue
+
                 if job_type in ("agent_perch_time", "telemetry_self_improve"):
                     hours = int(payload.get("hours") or 6)
                     resched = payload.get("rescheduleMinutes")
@@ -341,10 +351,26 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     checkpoint_id = str(job.get("checkpointId") or "").strip() or None
                     resume = bool(checkpoint_id)
                     
+                    # Initialize token budget tracker for long-running job
+                    from ..services.long_running_job_helpers import initialize_token_budget_for_job
+                    from ..services.agent_checkpoint import get_latest_checkpoint as get_checkpoint
+                    
+                    checkpoint_for_budget: dict[str, Any] | None = None
+                    if resume and checkpoint_id:
+                        checkpoint = get_checkpoint(rfp_id=rid or "rfp_agent_analysis", job_id=jid)
+                        if checkpoint:
+                            checkpoint_for_budget = checkpoint.get("payload", {}).get("checkpointData", {})
+                    
+                    token_budget_tracker = initialize_token_budget_for_job(
+                        payload=payload,
+                        checkpoint_data=checkpoint_for_budget,
+                    )
+                    
                     orchestrator = create_analysis_orchestrator(
                         rfp_id=rid or "rfp_agent_analysis",
                         job_id=jid,
                         rfp_ids=rfp_ids,
+                        token_budget_tracker=token_budget_tracker,
                     )
                     
                     # Execute with timeout handling

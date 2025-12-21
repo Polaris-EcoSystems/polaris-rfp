@@ -124,17 +124,26 @@ def execute_universal_job(
     
     rfp_id_for_job = rfp_id or payload.get("rfpId") or "rfp_universal_job"
     
-    # Check if we have a saved plan (from checkpoint)
+    # Initialize token budget tracker (default: 15 minutes, scale: 4 hours = $10)
+    from .long_running_job_helpers import initialize_token_budget_for_job
+    
+    # Check if resuming from checkpoint - restore plan and tracker if present
     plan = payload.get("execution_plan")
     checkpoint_id = payload.get("checkpoint_id")
+    checkpoint_data_for_budget: dict[str, Any] | None = None
     
     if resume and checkpoint_id:
-        # Restore plan from checkpoint if available
         checkpoint = get_latest_checkpoint(rfp_id=rfp_id_for_job, job_id=job_id)
         if checkpoint:
-            checkpoint_data = checkpoint.get("payload", {}).get("checkpointData", {})
-            if "execution_plan" in checkpoint_data:
-                plan = checkpoint_data.get("execution_plan")
+            checkpoint_data_for_budget = checkpoint.get("payload", {}).get("checkpointData", {})
+            if "execution_plan" in checkpoint_data_for_budget:
+                plan = checkpoint_data_for_budget.get("execution_plan")
+    
+    # Initialize or restore token budget tracker
+    token_budget_tracker = initialize_token_budget_for_job(
+        payload=payload,
+        checkpoint_data=checkpoint_data_for_budget,
+    )
     
     # Plan if we don't have one
     if not plan:
@@ -146,10 +155,12 @@ def execute_universal_job(
         if similar_jobs:
             planning_context["similar_successful_jobs"] = similar_jobs[:2]  # Include top 2 as guidance
         
+        # Pass token budget tracker to planner if available (for token tracking during planning)
         planning_result = plan_job_execution(
             request=request,
             context=planning_context,
             rfp_id=rfp_id,
+            token_budget_tracker=token_budget_tracker,
         )
         if not planning_result.get("ok"):
             return {
@@ -160,12 +171,13 @@ def execute_universal_job(
         if not plan:
             return {"ok": False, "error": "planning_returned_no_plan"}
     
-    # Create orchestrator
+    # Create orchestrator with token budget tracker
     orchestrator = LongRunningOrchestrator(
         rfp_id=rfp_id_for_job,
         job_id=job_id,
         checkpoint_interval_steps=10,
         checkpoint_interval_seconds=300.0,
+        token_budget_tracker=token_budget_tracker,
     )
     
     # Add steps from plan
@@ -230,12 +242,28 @@ def execute_universal_job(
             except Exception as e:
                 log.warning("job_learning_failed", error=str(e), job_id=job_id)
             
-            return {
+            # Include token usage in result (prefer from result, otherwise from tracker)
+            result_dict = {
                 "ok": True,
                 "success": True,
                 "completed_steps": result.completed_steps,
                 "final_result": result.final_result,
             }
+            
+            # Use token_usage from result if available, otherwise from tracker
+            if result.token_usage:
+                result_dict["token_usage"] = result.token_usage
+            elif token_budget_tracker:
+                result_dict["token_usage"] = {
+                    "budget_tokens": token_budget_tracker.budget_tokens,
+                    "used_tokens": token_budget_tracker.usage.total_tokens,
+                    "remaining_tokens": token_budget_tracker.remaining_tokens(),
+                    "cost_usd": token_budget_tracker.usage.cost_usd,
+                    "input_tokens": token_budget_tracker.usage.input_tokens,
+                    "output_tokens": token_budget_tracker.usage.output_tokens,
+                }
+            
+            return result_dict
         else:
             # Job failed - learn from failure and attempt recovery
             recovery_attempted = False
@@ -265,7 +293,8 @@ def execute_universal_job(
             except Exception as e:
                 log.warning("job_learning_failed", error=str(e), job_id=job_id)
             
-            return {
+            # Include token usage in result (prefer from result, otherwise from tracker)
+            result_dict = {
                 "ok": False,
                 "success": False,
                 "error": result.error,
@@ -274,14 +303,42 @@ def execute_universal_job(
                 "recovery_attempted": recovery_attempted,
                 "partial_results": result.final_result if result.final_result else {},
             }
+            
+            # Use token_usage from result if available, otherwise from tracker
+            if result.token_usage:
+                result_dict["token_usage"] = result.token_usage
+            elif token_budget_tracker:
+                result_dict["token_usage"] = {
+                    "budget_tokens": token_budget_tracker.budget_tokens,
+                    "used_tokens": token_budget_tracker.usage.total_tokens,
+                    "remaining_tokens": token_budget_tracker.remaining_tokens(),
+                    "cost_usd": token_budget_tracker.usage.cost_usd,
+                    "input_tokens": token_budget_tracker.usage.input_tokens,
+                    "output_tokens": token_budget_tracker.usage.output_tokens,
+                }
+            
+            return result_dict
     
     except Exception as e:
         log.error("universal_job_execution_failed", error=str(e), job_id=job_id, request=request[:200])
-        return {
+        result_dict = {
             "ok": False,
             "error": str(e),
             "success": False,
         }
+        
+        # Include token usage if tracker available
+        if token_budget_tracker:
+            result_dict["token_usage"] = {
+                "budget_tokens": token_budget_tracker.budget_tokens,
+                "used_tokens": token_budget_tracker.usage.total_tokens,
+                "remaining_tokens": token_budget_tracker.remaining_tokens(),
+                "cost_usd": token_budget_tracker.usage.cost_usd,
+                "input_tokens": token_budget_tracker.usage.input_tokens,
+                "output_tokens": token_budget_tracker.usage.output_tokens,
+            }
+        
+        return result_dict
 
 
 def _learn_from_successful_job(

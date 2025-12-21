@@ -11,6 +11,9 @@ from .agent_checkpoint import (
     validate_checkpoint_state,
 )
 from .agent_resilience import retry_with_classification
+from ..observability.logging import get_logger
+
+log = get_logger("agent_long_running")
 
 
 @dataclass
@@ -33,6 +36,7 @@ class OrchestrationResult:
     failed_steps: list[str]
     final_result: dict[str, Any] | None
     error: str | None = None
+    token_usage: dict[str, Any] | None = None  # Token usage stats if tracker was used
 
 
 class LongRunningOrchestrator:
@@ -48,11 +52,13 @@ class LongRunningOrchestrator:
         job_id: str | None = None,
         checkpoint_interval_steps: int = 10,
         checkpoint_interval_seconds: float = 300.0,
+        token_budget_tracker: Any | None = None,  # TokenBudgetTracker
     ):
         self.rfp_id = rfp_id
         self.job_id = job_id
         self.checkpoint_interval_steps = checkpoint_interval_steps
         self.checkpoint_interval_seconds = checkpoint_interval_seconds
+        self.token_budget_tracker = token_budget_tracker
         self.steps: dict[str, StepDefinition] = {}
         self.completed_steps: set[str] = set()
         self.failed_steps: set[str] = set()
@@ -101,7 +107,12 @@ class LongRunningOrchestrator:
             "step_id": step_id,
             "step_name": step.name,
             "previous_results": {sid: self.step_results[sid] for sid in step.depends_on if sid in self.step_results},
+            "token_budget_tracker": self.token_budget_tracker,  # Pass tracker to step execution
         }
+        
+        # Add budget status to context if tracker available
+        if self.token_budget_tracker:
+            step_context["token_budget_status"] = self.token_budget_tracker.get_budget_status_message()
         
         # Execute step with retry if retryable
         if step.retryable:
@@ -122,6 +133,10 @@ class LongRunningOrchestrator:
             "step_results": self.step_results,
             "current_step": self.current_step,
         }
+        
+        # Include token budget tracker state in checkpoint
+        if self.token_budget_tracker:
+            checkpoint_data["token_budget"] = self.token_budget_tracker.to_dict()
         
         tool_calls: list[dict[str, Any]] = []
         for step_id in self.completed_steps:
@@ -153,6 +168,16 @@ class LongRunningOrchestrator:
         restored = restore_from_checkpoint(rfp_id=self.rfp_id, job_id=self.job_id)
         if not restored:
             return False
+        
+        # Restore token budget tracker from checkpoint if present
+        checkpoint_payload = restored.get("payload", {})
+        checkpoint_data = checkpoint_payload.get("checkpointData", {})
+        if "token_budget" in checkpoint_data and self.token_budget_tracker is None:
+            from .token_budget_tracker import TokenBudgetTracker
+            try:
+                self.token_budget_tracker = TokenBudgetTracker.from_dict(checkpoint_data["token_budget"])
+            except Exception:
+                pass  # Continue without tracker if restoration fails
         
         # Validate checkpoint
         is_valid, error = validate_checkpoint_state(checkpoint_state=restored)
@@ -208,11 +233,20 @@ class LongRunningOrchestrator:
                     break
                 
                 try:
+                    # Check if budget exhausted before executing step
+                    if self.token_budget_tracker and self.token_budget_tracker.is_budget_exhausted():
+                        log.info("token_budget_exhausted_before_step", step_id=step_id, remaining_tokens=self.token_budget_tracker.remaining_tokens())
+                        # Still execute but log warning
+                    
                     result = self.execute_step(step_id, ctx)
                     self.step_results[step_id] = result
                     self.completed_steps.add(step_id)
                     self.current_step += 1
                     steps_executed += 1
+                    
+                    # Check if budget exhausted after step
+                    if self.token_budget_tracker and self.token_budget_tracker.is_budget_exhausted():
+                        log.info("token_budget_exhausted_after_step", step_id=step_id, remaining_tokens=self.token_budget_tracker.remaining_tokens())
                     
                     # Checkpoint if needed
                     if should_checkpoint(
@@ -237,12 +271,32 @@ class LongRunningOrchestrator:
         all_steps = set(self.steps.keys())
         success = len(self.failed_steps) == 0 and self.completed_steps == all_steps
         
+        # Log final token usage and include in result
+        token_usage_dict: dict[str, Any] | None = None
+        if self.token_budget_tracker:
+            log.info(
+                "orchestration_token_usage",
+                total_tokens=self.token_budget_tracker.usage.total_tokens,
+                remaining_tokens=self.token_budget_tracker.remaining_tokens(),
+                cost_usd=self.token_budget_tracker.usage.cost_usd,
+                budget_tokens=self.token_budget_tracker.budget_tokens,
+            )
+            token_usage_dict = {
+                "budget_tokens": self.token_budget_tracker.budget_tokens,
+                "used_tokens": self.token_budget_tracker.usage.total_tokens,
+                "remaining_tokens": self.token_budget_tracker.remaining_tokens(),
+                "cost_usd": self.token_budget_tracker.usage.cost_usd,
+                "input_tokens": self.token_budget_tracker.usage.input_tokens,
+                "output_tokens": self.token_budget_tracker.usage.output_tokens,
+            }
+        
         return OrchestrationResult(
             success=success,
             completed_steps=list(self.completed_steps),
             failed_steps=list(self.failed_steps),
             final_result=self.step_results if success else None,
             error=f"Failed steps: {', '.join(self.failed_steps)}" if self.failed_steps else None,
+            token_usage=token_usage_dict,
         )
 
 
@@ -251,11 +305,16 @@ def create_analysis_orchestrator(
     rfp_id: str,
     job_id: str | None = None,
     rfp_ids: list[str],
+    token_budget_tracker: Any | None = None,  # TokenBudgetTracker
 ) -> LongRunningOrchestrator:
     """
     Create an orchestrator for analyzing multiple RFPs.
     """
-    orchestrator = LongRunningOrchestrator(rfp_id=rfp_id, job_id=job_id)
+    orchestrator = LongRunningOrchestrator(
+        rfp_id=rfp_id,
+        job_id=job_id,
+        token_budget_tracker=token_budget_tracker,
+    )
     
     # Step 1: Load all RFPs
     def load_rfps(context: dict[str, Any]) -> dict[str, Any]:

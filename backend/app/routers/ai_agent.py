@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ..ai.client import AiNotConfigured, AiUpstreamError
 from ..ai.user_context import load_user_profile_from_request
+from ..services.agent_diagnostics import build_agent_diagnostics
 from ..services.slack_action_executor import execute_action
 from ..services.slack_actions_repo import create_action, get_action, mark_action_done
 from ..services.slack_agent import run_slack_agent_question
@@ -157,4 +158,44 @@ def cancel(body: dict, request: Request):
     except Exception:
         pass
     return {"ok": True, "cancelled": True}
+
+
+@router.get("/diagnostics")
+def get_diagnostics(
+    hours: int = 24,
+    user_sub: str | None = None,
+    rfp_id: str | None = None,
+    channel_id: str | None = None,
+    use_cache: bool = True,
+    force_refresh: bool = False,
+    request: Request | None = None,
+):
+    """
+    Get agent diagnostics including metrics and recent activities.
+    
+    Enhanced with contextual filtering and caching.
+    
+    Args:
+        hours: Number of hours to look back (default 24, max 168)
+        user_sub: Optional user filter for activities
+        rfp_id: Optional RFP filter for activities
+        channel_id: Optional Slack channel filter
+        use_cache: Whether to use cached results (default True)
+        force_refresh: Force refresh even if cache is valid (default False)
+    
+    Returns:
+        Dict with metrics, activities, and summary
+    """
+    try:
+        diagnostics = build_agent_diagnostics(
+            hours=hours,
+            user_sub=user_sub,
+            rfp_id=rfp_id,
+            channel_id=channel_id,
+            use_cache=use_cache,
+            force_refresh=force_refresh,
+        )
+        return diagnostics
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"error": "diagnostics_failed", "details": str(e)})
 

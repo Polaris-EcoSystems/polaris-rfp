@@ -28,6 +28,7 @@ from .slack_thread_bindings_repo import get_binding as get_thread_binding, set_b
 from .slack_reply_tools import ask_clarifying_question, post_summary
 from .agent_tools.slack_read import get_thread as slack_get_thread
 from .slack_web import get_user_info, slack_user_display_name
+from .slack_formatting_guide import SLACK_FORMATTING_GUIDE
 
 # Reuse proven OpenAI tool-call plumbing from slack_agent to avoid divergence.
 from . import slack_agent as _sa
@@ -976,7 +977,7 @@ def run_slack_operator_for_mention(
         build_comprehensive_context,
     )
     
-    # Build comprehensive context
+    # Build comprehensive context with query-aware retrieval
     comprehensive_ctx = build_comprehensive_context(
         user_profile=actor_ctx.user_profile if actor_ctx else None,
         user_display_name=actor_ctx.display_name if actor_ctx else None,
@@ -985,6 +986,7 @@ def run_slack_operator_for_mention(
         channel_id=ch,
         thread_ts=th,
         rfp_id=rfp_id,
+        user_query=q,  # Pass user query for query-aware memory retrieval
         max_total_chars=50000,
     )
     
@@ -1042,6 +1044,8 @@ def run_slack_operator_for_mention(
             "- You can use schedule_job, agent_job_*, and read tools without RFP scope.",
             "- You can use slack_post_summary without RFP scope (just omit rfpId or use a placeholder).",
             "- Do NOT try to use opportunity_load, opportunity_patch, journal_append, or event_append without RFP scope.",
+            "",
+            SLACK_FORMATTING_GUIDE.strip(),
         ]
     )
     

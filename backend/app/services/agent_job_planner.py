@@ -90,6 +90,7 @@ def plan_job_execution(
     request: str,
     context: dict[str, Any] | None = None,
     rfp_id: str | None = None,
+    token_budget_tracker: Any | None = None,  # TokenBudgetTracker (optional, for token tracking during planning)
 ) -> dict[str, Any]:
     """
     Use AI to plan a job execution for a user request.
@@ -189,6 +190,7 @@ Be specific with tool names and arguments. Think through edge cases and failure 
             messages=messages,
             temperature=0.3,
             max_tokens=4000,
+            token_budget_tracker=token_budget_tracker,  # Track tokens during planning
         )
         if not response_text or not isinstance(response_text, str):
             raise RuntimeError("empty_or_invalid_response_from_planner")

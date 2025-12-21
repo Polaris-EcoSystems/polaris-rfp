@@ -16,6 +16,7 @@ from .agent_tools.read_registry import READ_TOOLS as READ_TOOLS_REGISTRY
 from .slack_actions_repo import create_action, get_action, mark_action_done
 from .slack_action_executor import execute_action
 from .slack_action_risk import classify_action_risk
+from .slack_formatting_guide import SLACK_FORMATTING_GUIDE
 
 # Slack bot token scopes - capabilities the agent has
 # (Note: This is duplicated in slack_operator_agent.py to avoid circular imports)
@@ -545,7 +546,7 @@ def run_slack_agent_question(
         build_comprehensive_context,
     )
     
-    # Build comprehensive context
+    # Build comprehensive context with query-aware retrieval
     comprehensive_ctx = build_comprehensive_context(
         user_profile=user_profile,
         user_display_name=user_display_name,
@@ -554,6 +555,7 @@ def run_slack_agent_question(
         channel_id=channel_id,
         thread_ts=thread_ts,
         rfp_id=None,  # slack_agent is read-only, no RFP scope
+        user_query=q,  # Pass user query for query-aware memory retrieval
         max_total_chars=50000,
     )
     
@@ -599,9 +601,7 @@ def run_slack_agent_question(
             "- When users ask about their resume, check the user context for resume S3 keys. For PDF or DOCX files, use `extract_resume_text` to extract text content. For plain text files, use `s3_get_object_text`. For binary files that need downloading, use `s3_presign_get` to get a download URL.",
             "- When users ask about their professional background, check both user context (job titles, certifications) and linked team member information (biography, bioProfiles) if available. Use `get_team_member` tool to fetch full team member details if needed.",
             "",
-            "Slack formatting:",
-            "- Use bullets only when presenting a list (do not force bullets for single sentences).",
-            "- Put IDs in backticks.",
+            SLACK_FORMATTING_GUIDE.strip(),
         ]
     )
     if thread_context:

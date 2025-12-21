@@ -8,6 +8,7 @@ from .agent_events_repo import list_recent_events
 from .agent_jobs_repo import list_jobs_by_scope
 from .agent_journal_repo import list_recent_entries
 from .agent_memory_retrieval import get_memories_for_context
+from .external_context_service import format_external_context_for_prompt, get_external_context_for_query
 from .opportunity_state_repo import get_state
 from .rfps_repo import get_rfp_by_id, list_rfps
 
@@ -465,6 +466,9 @@ def build_memory_context(
     tenant_id: str | None = None,
     query_text: str | None = None,
     limit: int = 10,
+    channel_id: str | None = None,
+    thread_ts: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> str:
     """
     Build memory context from the new structured memory system.
@@ -480,34 +484,90 @@ def build_memory_context(
         Formatted memory context string
     """
     try:
+        # Build context dict for scope expansion
+        expansion_context: dict[str, Any] = {}
+        if rfp_id:
+            # Try to get RFP participants and channels from opportunity state
+            try:
+                from .opportunity_state_repo import get_state
+                rfp_state = get_state(rfp_id=rfp_id)
+                if rfp_state:
+                    # Extract participants, channels from state if available
+                    expansion_context["rfp_id"] = rfp_id
+            except Exception:
+                pass
+        
+        if channel_id:
+            expansion_context["channel_id"] = channel_id
+            if thread_ts:
+                expansion_context["thread_ts"] = thread_ts
+        
         memories = get_memories_for_context(
             user_sub=user_sub,
             rfp_id=rfp_id,
             tenant_id=tenant_id,
             query_text=query_text,
             limit=limit,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            context=expansion_context or context,
+            expand_scopes=True,  # Enable contextual scope expansion
         )
+        
+        # Pass token budget tracker to retrieval if available
+        # (Currently handled in get_memories_for_context via retrieve_relevant_memories)
         
         if not memories:
             return ""
         
         lines: list[str] = []
         lines.append("Relevant agent memories:")
+        if query_text:
+            lines.append(f"[Retrieved based on query: {query_text[:100]}]")
+        lines.append("")
         
+        # Group memories by type for better organization
+        by_type: dict[str, list[dict[str, Any]]] = {}
         for mem in memories[:limit]:
-            mem_type = mem.get("memoryType", "")
-            summary = mem.get("summary") or mem.get("content", "")
-            created_at = mem.get("createdAt", "")
-            
-            # Format: [TYPE] summary (created: date)
-            line = f"  [{mem_type}] {clip_text(summary, max_chars=200)}"
-            if created_at:
-                # Extract date part from ISO timestamp
-                date_part = created_at.split("T")[0] if "T" in created_at else created_at[:10]
-                line += f" (from {date_part})"
-            lines.append(line)
+            mem_type = str(mem.get("memoryType", "")).upper()
+            if mem_type not in by_type:
+                by_type[mem_type] = []
+            by_type[mem_type].append(mem)
         
-        return "\n".join(lines)
+        # Format by type (all memory types)
+        type_order = [
+            "EPISODIC",
+            "SEMANTIC",
+            "PROCEDURAL",
+            "COLLABORATION_CONTEXT",
+            "TEMPORAL_EVENT",
+            "DIAGNOSTICS",
+            "EXTERNAL_CONTEXT",
+        ]
+        for mem_type in type_order:
+            if mem_type not in by_type:
+                continue
+            type_label = mem_type.lower().replace("_", " ").title()
+            lines.append(f"{type_label} memories:")
+            for mem in by_type[mem_type][:10]:  # Limit per type
+                summary = mem.get("summary") or mem.get("content", "")
+                created_at = mem.get("createdAt", "")
+                tags = mem.get("tags", [])
+                
+                # Format: summary (created: date) [tags]
+                line = f"  - {clip_text(summary, max_chars=200)}"
+                if created_at:
+                    # Extract date part from ISO timestamp
+                    date_part = created_at.split("T")[0] if "T" in created_at else created_at[:10]
+                    line += f" ({date_part})"
+                if tags and isinstance(tags, list):
+                    tag_str = ", ".join([str(t) for t in tags[:3]])
+                    if tag_str:
+                        line += f" [{tag_str}]"
+                lines.append(line)
+            lines.append("")
+        
+        return "\n".join(lines).strip()
     except Exception:
         # Best-effort: if memory retrieval fails, return empty string
         return ""
@@ -522,7 +582,9 @@ def build_comprehensive_context(
     channel_id: str | None = None,
     thread_ts: str | None = None,
     rfp_id: str | None = None,
+    user_query: str | None = None,
     max_total_chars: int = 50000,
+    token_budget_tracker: Any | None = None,  # TokenBudgetTracker
 ) -> str:
     """
     Build comprehensive multi-layer context from all available sources.
@@ -530,11 +592,15 @@ def build_comprehensive_context(
     Context layers (in priority order):
     1. User profile and preferences
     2. Thread conversation history
-    3. Relevant agent memories (new structured memory system)
+    3. Relevant agent memories (new structured memory system) - uses query-aware retrieval if user_query provided
     4. RFP state (OpportunityState, journal, events)
     5. Related RFPs
     6. Recent agent jobs
     7. Cross-thread context
+    
+    Args:
+        user_query: Optional user query/question for query-aware context retrieval
+        (other args same as before)
     
     Returns a formatted string optimized for inclusion in system prompts.
     """
@@ -568,18 +634,26 @@ def build_comprehensive_context(
         context_parts.append("")
     
     # 3. Agent memories (new structured memory system)
-    # Extract keywords from thread context for memory search
-    query_text: str | None = None
-    if thread_ctx:
+    # Use user_query if provided, otherwise extract from thread context
+    query_text: str | None = user_query
+    if not query_text and thread_ctx:
         # Extract key terms from recent thread messages for memory search
-        # For now, we'll just search with user/rfp scope
-        pass
+        # Get last few messages from thread context to extract keywords
+        try:
+            thread_lines = thread_ctx.split("\n")
+            # Extract user messages (lines that might contain questions/requests)
+            recent_messages = [line for line in thread_lines[-20:] if ":" in line and not line.strip().startswith("-")]
+            if recent_messages:
+                # Use last few messages as query context for memory search
+                query_text = " ".join(recent_messages[-3:])[:200]  # Last 3 messages, truncated
+        except Exception:
+            pass  # Fallback to scope-only search
     
     memory_ctx = build_memory_context(
         user_sub=user_sub,
         rfp_id=rfp_id,
         query_text=query_text,
-        limit=10,
+        limit=15,  # Get more memories for better relevance
     )
     if memory_ctx:
         context_parts.append(memory_ctx)
@@ -615,20 +689,83 @@ def build_comprehensive_context(
             context_parts.append(cross_thread_ctx)
             context_parts.append("")
     
+    # Add external context if query provided (real-world context)
+    external_ctx_text = ""
+    if user_query:
+        try:
+            external_ctx = get_external_context_for_query(
+                query=user_query,
+                limit_per_type=3,  # Limit to avoid token bloat
+            )
+            if external_ctx.get("ok"):
+                external_ctx_text = format_external_context_for_prompt(
+                    external_context=external_ctx,
+                    max_chars=1500,  # Limit external context size
+                )
+                if external_ctx_text:
+                    context_parts.append(external_ctx_text)
+                    context_parts.append("")
+        except Exception:
+            # Non-critical: external context fetch failures shouldn't break context building
+            pass
+    
+    # Add token budget awareness if tracker provided
+    if token_budget_tracker:
+        budget_status = token_budget_tracker.get_budget_status_message()
+        context_parts.append("")
+        context_parts.append("=== TOKEN_BUDGET_STATUS ===")
+        context_parts.append(budget_status)
+        context_parts.append("")
+        context_parts.append("IMPORTANT: Continue working on the problem until the budget is exhausted.")
+        context_parts.append("If you have an answer but budget remains: validate/verify, generate additional insights, explore alternatives.")
+        context_parts.append("When budget is critical (≤10% remaining), prioritize providing final answer.")
+        context_parts.append("")
+    
     # Combine all context
     full_context = "\n".join(context_parts).strip()
     
-    # Apply smart truncation if needed
+    # Apply smart truncation with priority preservation
     if len(full_context) > max_total_chars:
-        # Prioritize: keep user context, thread context, and memory context, truncate others
-        if user_ctx:
-            user_ctx_len = len(user_ctx) + 50  # Add some overhead
-            memory_ctx_len = len(memory_ctx) + 50
-            remaining = max_total_chars - user_ctx_len - len(thread_ctx) - memory_ctx_len
-            if remaining > 0:
-                # Keep user + thread + memory, truncate rest
-                truncated = full_context[:max_total_chars - 200] + "\n\n[Context truncated for length...]"
-                return truncated
+        # Priority order: user context > thread context > memory context > RFP context > others
+        # Calculate space needed for high-priority sections
+        high_priority_sections = []
+        high_priority_sections.append(user_ctx)
+        high_priority_sections.append(thread_ctx)
+        high_priority_sections.append(memory_ctx)
+        
+        high_priority_len = sum(len(s) + 50 for s in high_priority_sections if s)  # +50 overhead per section
+        remaining_space = max_total_chars - high_priority_len - 300  # Reserve buffer
+        
+        if remaining_space > 1000:  # Only include lower-priority sections if we have space
+            # Context is fine as-is
+            return full_context
+        else:
+            # Truncate lower-priority sections
+            # Build truncated version with high-priority sections full, others truncated
+            truncated_parts = []
+            if user_ctx:
+                truncated_parts.append("User context:")
+                truncated_parts.append(user_ctx)
+                truncated_parts.append("")
+            if thread_ctx:
+                truncated_parts.append(thread_ctx)
+                truncated_parts.append("")
+            if memory_ctx:
+                truncated_parts.append(memory_ctx)
+                truncated_parts.append("")
+            
+            # Add truncated lower-priority sections if space allows
+            remaining_for_low_priority = max_total_chars - sum(len(s) + 20 for s in truncated_parts)
+            if remaining_for_low_priority > 500:
+                # Add other sections with truncation
+                other_context = "\n".join(context_parts[3:])  # Skip first 3 (already included)
+                if other_context:
+                    truncated_other = clip_text(other_context, max_chars=remaining_for_low_priority - 100)
+                    truncated_parts.append(truncated_other)
+                    if len(other_context) > len(truncated_other):
+                        truncated_parts.append("\n[Additional context truncated for length...]")
+            
+            return "\n".join(truncated_parts).strip()
     
     return full_context
 

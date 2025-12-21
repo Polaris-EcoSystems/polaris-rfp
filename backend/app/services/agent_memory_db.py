@@ -25,6 +25,10 @@ class MemoryType:
     TOOL_PATTERN = "TOOL_PATTERN"
     WORKFLOW = "WORKFLOW"
     CONTEXT_PATTERN = "CONTEXT_PATTERN"
+    DIAGNOSTICS = "DIAGNOSTICS"
+    EXTERNAL_CONTEXT = "EXTERNAL_CONTEXT"  # Real-world context (news, weather, events, research)
+    COLLABORATION_CONTEXT = "COLLABORATION_CONTEXT"  # Team interaction patterns and collaboration context
+    TEMPORAL_EVENT = "TEMPORAL_EVENT"  # Time-indexed events and milestones
 
 
 def _get_memory_table() -> DynamoTable:

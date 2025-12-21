@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     openai_model_rfp_section_summary: str | None = Field(
         default=None, validation_alias="OPENAI_MODEL_RFP_SECTION_SUMMARY"
     )
+    
+    # External context APIs (optional)
+    news_api_key: str | None = Field(default=None, validation_alias="NEWS_API_KEY")
+    openweather_api_key: str | None = Field(default=None, validation_alias="OPENWEATHER_API_KEY")
     # Guardrail: clamp max output tokens (prevents accidental cost explosions).
     openai_max_output_tokens_cap: int = Field(
         default=4000, validation_alias="OPENAI_MAX_OUTPUT_TOKENS_CAP"

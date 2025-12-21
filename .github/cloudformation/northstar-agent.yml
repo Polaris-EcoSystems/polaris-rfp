@@ -1,7 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'North Star scheduled agent tasks (ambient tick, job runner, daily report) on ECS RunTask via EventBridge Scheduler'
 
-
 Parameters:
   Environment:
     Type: String
@@ -72,6 +71,16 @@ Parameters:
     Description: Slack channel ID for daily 8am America/Chicago report
     Default: ''
 
+  # External context API keys (optional)
+  NewsApiKey:
+    Type: String
+    Default: ''
+    Description: NewsAPI key for business/news context (optional)
+  OpenWeatherApiKey:
+    Type: String
+    Default: ''
+    Description: OpenWeatherMap API key for weather context (optional)
+
   # Self-mod settings (used by job runner)
   SelfModifyEnabled:
     Type: String
@@ -99,7 +108,7 @@ Parameters:
     Default: 15
   JobRunnerRateMinutes:
     Type: Number
-    Default: 60
+    Default: 240 # Changed from 60 to 240 (4 hours)
 
 Conditions:
   UseJwtSecretArn: !Not [!Equals [!Ref JwtSecretArn, '']]
@@ -110,6 +119,8 @@ Conditions:
   UseOpenAiOrganizationId: !Not [!Equals [!Ref OpenAiOrganizationId, '']]
   UseSlackSecretArn: !Not [!Equals [!Ref SlackSecretArn, '']]
   UseGitHubSecretArn: !Not [!Equals [!Ref GitHubSecretArn, '']]
+  UseNewsApiKey: !Not [!Equals [!Ref NewsApiKey, '']]
+  UseOpenWeatherApiKey: !Not [!Equals [!Ref OpenWeatherApiKey, '']]
 
 Resources:
   NorthStarLogGroupAmbient:
@@ -128,6 +139,12 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/ecs/northstar-daily-report-${Environment}'
+      RetentionInDays: 14
+
+  NorthStarLogGroupExternalContextAggregator:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/northstar-external-context-aggregator-${Environment}'
       RetentionInDays: 14
 
   NorthStarSecurityGroup:
@@ -476,8 +493,8 @@ Resources:
       Family: !Sub 'northstar-job-runner-${Environment}'
       NetworkMode: awsvpc
       RequiresCompatibilities: ['FARGATE']
-      Cpu: '1024'
-      Memory: '2048'
+      Cpu: '2048' # Doubled from 1024
+      Memory: '4096' # Doubled from 2048
       ExecutionRoleArn: !GetAtt NorthStarTaskExecutionRole.Arn
       TaskRoleArn: !GetAtt NorthStarTaskRole.Arn
       ContainerDefinitions:
@@ -543,6 +560,16 @@ Resources:
               Value: !Ref AgentMemoryTable
             - Name: OPENSEARCH_ENDPOINT
               Value: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
+            - !If
+              - UseNewsApiKey
+              - Name: NEWS_API_KEY
+                Value: !Ref NewsApiKey
+              - !Ref AWS::NoValue
+            - !If
+              - UseOpenWeatherApiKey
+              - Name: OPENWEATHER_API_KEY
+                Value: !Ref OpenWeatherApiKey
+              - !Ref AWS::NoValue
           Secrets: !If
             - UseJwtSecretArn
             - - Name: JWT_SECRET
@@ -709,7 +736,7 @@ Resources:
       Name: !Sub 'northstar-job-runner-${Environment}'
       FlexibleTimeWindow:
         Mode: FLEXIBLE
-        MaximumWindowInMinutes: 15
+        MaximumWindowInMinutes: 240 # 4 hours max window
       ScheduleExpression: !Sub 'rate(${JobRunnerRateMinutes} minutes)'
       Target:
         Arn: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${EcsClusterName}'
@@ -718,6 +745,7 @@ Resources:
           TaskDefinitionArn: !Ref NorthStarJobRunnerTaskDefinition
           TaskCount: 1
           LaunchType: FARGATE
+          TaskTimeoutInSeconds: 14400 # 4 hours timeout
           NetworkConfiguration:
             AwsvpcConfiguration:
               AssignPublicIp: DISABLED
@@ -745,6 +773,125 @@ Resources:
               Subnets: !Ref PrivateSubnetIds
               SecurityGroups: [!Ref NorthStarSecurityGroup]
 
+  NorthStarExternalContextAggregatorTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub 'northstar-external-context-aggregator-${Environment}'
+      NetworkMode: awsvpc
+      RequiresCompatibilities: ['FARGATE']
+      Cpu: '2048' # 2x resources for multi-threaded processing
+      Memory: '4096' # 2x resources for multi-threaded processing
+      ExecutionRoleArn: !GetAtt NorthStarTaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt NorthStarTaskRole.Arn
+      ContainerDefinitions:
+        - Name: northstar-external-context-aggregator
+          Image: !Ref ImageUri
+          Essential: true
+          Command:
+            ['python', '-m', 'app.workers.external_context_aggregator_worker']
+          Environment:
+            - Name: NODE_ENV
+              Value: production
+            - Name: TMPDIR
+              Value: /tmp
+            - Name: DDB_TABLE_NAME
+              Value: !Ref DdbTableName
+            - Name: ASSETS_BUCKET_NAME
+              Value: !Ref AssetsBucketName
+            - Name: COGNITO_USER_POOL_ID
+              Value: !Ref CognitoUserPoolId
+            - Name: COGNITO_CLIENT_ID
+              Value: !Ref CognitoClientId
+            - Name: COGNITO_REGION
+              Value: !Ref CognitoRegion
+            - Name: MAGIC_LINK_TABLE_NAME
+              Value: !Ref MagicLinkSessionsTableName
+            - Name: OPENAI_MODEL
+              Value: !Ref OpenAiModel
+            - Name: SLACK_ENABLED
+              Value: !If [UseSlackSecretArn, 'true', 'false']
+            - Name: SLACK_RFP_MACHINE_CHANNEL
+              Value: !Ref SlackRfpMachineChannel
+            - !If
+              - UseSlackSecretArn
+              - Name: SLACK_SECRET_ARN
+                Value: !Ref SlackSecretArn
+              - !Ref AWS::NoValue
+            - Name: NORTHSTAR_DAILY_REPORT_CHANNEL
+              Value: !Ref NorthStarDailyReportChannel
+            - !If
+              - UseOpenAiProjectId
+              - Name: OPENAI_PROJECT_ID
+                Value: !Ref OpenAiProjectId
+              - !Ref AWS::NoValue
+            - !If
+              - UseOpenAiOrganizationId
+              - Name: OPENAI_ORG_ID
+                Value: !Ref OpenAiOrganizationId
+              - !Ref AWS::NoValue
+            - Name: AGENT_MEMORY_TABLE_NAME
+              Value: !Ref AgentMemoryTable
+            - Name: OPENSEARCH_ENDPOINT
+              Value: !Sub 'https://${OpenSearchDomain.DomainEndpoint}'
+            - !If
+              - UseNewsApiKey
+              - Name: NEWS_API_KEY
+                Value: !Ref NewsApiKey
+              - !Ref AWS::NoValue
+            - !If
+              - UseOpenWeatherApiKey
+              - Name: OPENWEATHER_API_KEY
+                Value: !Ref OpenWeatherApiKey
+              - !Ref AWS::NoValue
+          Secrets: !If
+            - UseJwtSecretArn
+            - - Name: JWT_SECRET
+                ValueFrom: !Ref JwtSecretArn
+              - !If
+                - UseOpenAiApiKeySecretArn
+                - Name: OPENAI_API_KEY
+                  ValueFrom: !If
+                    - UseOpenAiApiKeySecretJsonKey
+                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
+                    - !Ref OpenAiApiKeySecretArn
+                - !Ref AWS::NoValue
+            - - !If
+                - UseOpenAiApiKeySecretArn
+                - Name: OPENAI_API_KEY
+                  ValueFrom: !If
+                    - UseOpenAiApiKeySecretJsonKey
+                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
+                    - !Ref OpenAiApiKeySecretArn
+                - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref NorthStarLogGroupExternalContextAggregator
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  ExternalContextAggregatorSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Name: !Sub 'northstar-external-context-aggregator-${Environment}'
+      FlexibleTimeWindow:
+        Mode: FLEXIBLE
+        MaximumWindowInMinutes: 240 # 4 hours max window
+      ScheduleExpression: 'rate(240 minutes)' # Every 4 hours
+      Target:
+        Arn: !Sub 'arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${EcsClusterName}'
+        RoleArn: !GetAtt SchedulerRole.Arn
+        EcsParameters:
+          TaskDefinitionArn: !Ref NorthStarExternalContextAggregatorTaskDefinition
+          TaskCount: 1
+          LaunchType: FARGATE
+          TaskTimeoutInSeconds: 14400 # 4 hours timeout
+          NetworkConfiguration:
+            AwsvpcConfiguration:
+              AssignPublicIp: DISABLED
+              Subnets: !Ref PrivateSubnetIds
+              SecurityGroups: [!Ref NorthStarSecurityGroup]
+
 Outputs:
   NorthStarAmbientTaskDefinitionArn:
     Value: !Ref NorthStarAmbientTaskDefinition
@@ -752,6 +899,8 @@ Outputs:
     Value: !Ref NorthStarJobRunnerTaskDefinition
   NorthStarDailyReportTaskDefinitionArn:
     Value: !Ref NorthStarDailyReportTaskDefinition
+  NorthStarExternalContextAggregatorTaskDefinitionArn:
+    Value: !Ref NorthStarExternalContextAggregatorTaskDefinition
   AgentMemoryTableName:
     Value: !Ref AgentMemoryTable
     Export:

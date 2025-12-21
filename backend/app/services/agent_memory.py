@@ -290,6 +290,105 @@ def add_procedural_memory(
     return memory
 
 
+def add_diagnostics_memory(
+    *,
+    scope_id: str = "GLOBAL",
+    diagnostics_data: dict[str, Any],
+    hours: int = 24,
+    source: str | None = None,
+) -> dict[str, Any]:
+    """
+    Store agent diagnostics (metrics and activity summary) in memory.
+    
+    Diagnostics are stored at GLOBAL scope by default so they can be retrieved
+    by any user querying agent activity.
+    
+    Args:
+        scope_id: Scope identifier (defaults to "GLOBAL" for agent-wide diagnostics)
+        diagnostics_data: Diagnostics data dict (from build_agent_diagnostics)
+        hours: Number of hours the diagnostics cover
+        source: Source system (e.g., "diagnostics_service", "agent_tool")
+    
+    Returns:
+        Created memory dict
+    """
+    # Extract summary text as content
+    content = diagnostics_data.get("summaryText", "")
+    if not content:
+        # Fallback: build content from diagnostics data
+        metrics = diagnostics_data.get("metrics", {})
+        content = f"Agent Diagnostics (last {hours}h): "
+        content += f"Operations: {metrics.get('count', 0)}, "
+        content += f"Success rate: {metrics.get('success_rate', 0.0):.1%}, "
+        content += f"Avg duration: {metrics.get('avg_duration_ms', 0)}ms"
+    
+    # Extract keywords from metrics and activities
+    keywords: list[str] = ["diagnostics", "metrics", "activity", "agent"]
+    metrics = diagnostics_data.get("metrics", {})
+    if metrics.get("count", 0) > 0:
+        keywords.append("active")
+        if metrics.get("success_rate", 0.0) > 0.9:
+            keywords.append("successful")
+        if metrics.get("success_rate", 1.0) < 0.7:
+            keywords.append("issues")
+    
+    # Add context-specific keywords
+    filters = diagnostics_data.get("filters", {})
+    if filters.get("userSub"):
+        keywords.append("user-specific")
+    if filters.get("rfpId"):
+        keywords.append("rfp-specific")
+        keywords.append(f"rfp-{filters.get('rfpId', '')[:10]}")
+    if filters.get("channelId"):
+        keywords.append("channel-specific")
+    
+    # Extract keywords from activities
+    activities = diagnostics_data.get("recentActivities", [])
+    for activity in activities[:10]:  # Top 10 activities
+        activity_type = str(activity.get("type", "")).lower()
+        if activity_type:
+            keywords.append(activity_type)
+        tool = str(activity.get("tool", "")).lower()
+        if tool:
+            keywords.append(tool)
+    
+    # Build tags
+    tags = ["diagnostics", "metrics", "agent-activity"]
+    if filters.get("rfpId"):
+        tags.append(f"rfp:{filters.get('rfpId')}")
+    if filters.get("userSub"):
+        tags.append(f"user:{filters.get('userSub')[:20]}")
+    
+    # Store full diagnostics data in metadata
+    metadata = {
+        "diagnostics": diagnostics_data,
+        "hours": hours,
+        "window": diagnostics_data.get("window", {}),
+    }
+    
+    # Create summary (first 500 chars of summary text)
+    summary = clip_text(content, max_chars=500)
+    
+    memory = create_memory(
+        memory_type=MemoryType.DIAGNOSTICS,
+        scope_id=scope_id,
+        content=content,
+        tags=tags,
+        keywords=keywords,
+        metadata=metadata,
+        summary=summary,
+        source=source or "diagnostics_service",
+    )
+    
+    # Index in OpenSearch (async, best-effort)
+    try:
+        index_memory(memory)
+    except Exception:
+        pass  # Non-critical
+    
+    return memory
+
+
 def compress_memory(
     *,
     user_sub: str,

@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
 from .agent_memory_db import (
+    MemoryType,
     list_memories_by_scope,
     list_memories_by_type,
     update_memory_access,
 )
 from .agent_memory_keywords import extract_keywords
 from .agent_memory_opensearch import search_memories
+from .agent_memory_scope_expansion import expand_scopes_contextually
 from ..observability.logging import get_logger
 
 log = get_logger("agent_memory_retrieval")
@@ -21,6 +24,7 @@ def _calculate_relevance_score(
     query_keywords: list[str],
     query_scope: str | None = None,
     query_type: str | None = None,
+    apply_provenance_trust: bool = True,
 ) -> float:
     """
     Calculate relevance score for a memory based on query parameters.
@@ -43,7 +47,7 @@ def _calculate_relevance_score(
     
     keyword_matches = sum(1 for qk in query_keywords_lower if qk in all_memory_terms)
     max_possible_matches = max(len(query_keywords_lower), 1)
-    keyword_score = min(keyword_matches / max_possible_matches, 1.0)
+    keyword_score = min(keyword_matches / max_possible_matches, 1.0) if query_keywords_lower else 0.5  # Default if no keywords
     
     # Recency (30% weight) - more recent = higher score
     created_at_str = memory.get("createdAt", "")
@@ -77,6 +81,15 @@ def _calculate_relevance_score(
         scope_score * 0.1
     ) * type_match
     
+    # Apply provenance trust weighting if enabled
+    if apply_provenance_trust:
+        try:
+            from .agent_memory_provenance import calculate_provenance_trust_weight
+            trust_weight = calculate_provenance_trust_weight(memory=memory)
+            final_score *= trust_weight
+        except Exception:
+            pass  # If provenance calculation fails, use score as-is
+    
     return min(max(final_score, 0.0), 1.0)
 
 
@@ -87,6 +100,7 @@ def retrieve_relevant_memories(
     query_text: str | None = None,
     limit: int = 20,
     use_opensearch: bool = True,
+    token_budget_tracker: Any | None = None,  # TokenBudgetTracker for budget-aware retrieval
 ) -> list[dict[str, Any]]:
     start_time = time.time()
     """
@@ -116,14 +130,34 @@ def retrieve_relevant_memories(
         query_keywords = extract_keywords(query_text, max_keywords=20)
     
     # Strategy 1: Simple scope query (use DynamoDB)
+    # If multiple memory types requested, query in parallel
     if scope_id and not query_text:
-        memory_type = memory_types[0] if memory_types and len(memory_types) == 1 else None
-        items, _ = list_memories_by_scope(
-            scope_id=scope_id,
-            memory_type=memory_type,
-            limit=min(limit * 2, 100),  # Get more candidates for scoring
-        )
-        candidates.extend(items)
+        if memory_types and len(memory_types) > 1:
+            # Parallel retrieval for multiple types
+            with ThreadPoolExecutor(max_workers=min(len(memory_types), 5)) as executor:
+                futures = {
+                    executor.submit(
+                        list_memories_by_scope,
+                        scope_id=scope_id,
+                        memory_type=mem_type,
+                        limit=min(limit * 2, 100),
+                    ): mem_type
+                    for mem_type in memory_types
+                }
+                for future in as_completed(futures):
+                    try:
+                        items, _ = future.result()
+                        candidates.extend(items)
+                    except Exception as e:
+                        log.warning("parallel_scope_retrieval_failed", error=str(e), memory_type=futures[future])
+        else:
+            memory_type = memory_types[0] if memory_types and len(memory_types) == 1 else None
+            items, _ = list_memories_by_scope(
+                scope_id=scope_id,
+                memory_type=memory_type,
+                limit=min(limit * 2, 100),  # Get more candidates for scoring
+            )
+            candidates.extend(items)
     
     # Strategy 2: Keyword/topic query (use OpenSearch)
     elif query_text and use_opensearch:
@@ -140,15 +174,47 @@ def retrieve_relevant_memories(
         # For now, we'll use what OpenSearch returns (may not have all fields)
         candidates.extend(opensearch_results)
     
-    # Strategy 3: Type-based query (use DynamoDB GSI2)
+    # Strategy 3: Type-based query (use DynamoDB GSI2) - parallel retrieval
     elif memory_types and not query_text:
-        for mem_type in memory_types:
-            items, _ = list_memories_by_type(
-                memory_type=mem_type,
-                scope_id=scope_id,
-                limit=min(limit * 2, 50),
-            )
-            candidates.extend(items)
+        # Parallel retrieval for multiple memory types
+        with ThreadPoolExecutor(max_workers=min(len(memory_types), 5)) as executor:
+            futures = {
+                executor.submit(
+                    list_memories_by_type,
+                    memory_type=mem_type,
+                    scope_id=scope_id,
+                    limit=min(limit * 2, 50),
+                ): mem_type
+                for mem_type in memory_types
+            }
+            for future in as_completed(futures):
+                try:
+                    items, _ = future.result()
+                    candidates.extend(items)
+                except Exception as e:
+                    log.warning("parallel_memory_retrieval_failed", error=str(e), memory_type=futures[future])
+    else:
+        # Fallback: query all types in parallel if no specific strategy
+        if not memory_types:
+            # Default memory types to query
+            memory_types = [MemoryType.EPISODIC, MemoryType.SEMANTIC, MemoryType.PROCEDURAL]
+        
+        with ThreadPoolExecutor(max_workers=min(len(memory_types), 5)) as executor:
+            futures = {
+                executor.submit(
+                    list_memories_by_type,
+                    memory_type=mem_type,
+                    scope_id=scope_id,
+                    limit=min(limit * 2, 50),
+                ): mem_type
+                for mem_type in memory_types
+            }
+            for future in as_completed(futures):
+                try:
+                    items, _ = future.result()
+                    candidates.extend(items)
+                except Exception as e:
+                    log.warning("parallel_memory_retrieval_failed", error=str(e), memory_type=futures[future])
     
     # Filter by memory type if specified
     if memory_types:
@@ -209,36 +275,129 @@ def get_memories_for_context(
     query_text: str | None = None,
     memory_types: list[str] | None = None,
     limit: int = 15,
+    include_global_diagnostics: bool = True,
+    channel_id: str | None = None,
+    thread_ts: str | None = None,
+    context: dict[str, Any] | None = None,
+    expand_scopes: bool = True,
 ) -> list[dict[str, Any]]:
     """
     Get relevant memories for agent context building.
-    
+
     This is a convenience function that determines the appropriate scope
-    and retrieves memories.
-    
+    and retrieves memories. Optionally includes GLOBAL scope diagnostics
+    memories when querying about agent activity.
+
     Args:
         user_sub: User identifier
         rfp_id: RFP identifier
         tenant_id: Tenant identifier
-        query_text: Optional search query
+        query_text: Optional search query (if contains agent/activity keywords, includes diagnostics)
         memory_types: Optional list of memory types to filter by
         limit: Maximum number of memories to return
-    
+        include_global_diagnostics: Whether to include GLOBAL scope diagnostics if query matches
+
     Returns:
         List of relevant memories
     """
-    # Determine scope
-    scope_id: str | None = None
+    # Determine primary scope
+    primary_scope_id: str | None = None
     if rfp_id:
-        scope_id = f"RFP#{rfp_id}"
+        primary_scope_id = f"RFP#{rfp_id}"
     elif user_sub:
-        scope_id = f"USER#{user_sub}"
+        primary_scope_id = f"USER#{user_sub}"
     elif tenant_id:
-        scope_id = f"TENANT#{tenant_id}"
+        primary_scope_id = f"TENANT#{tenant_id}"
+    elif channel_id:
+        if thread_ts:
+            primary_scope_id = f"THREAD#{channel_id}#{thread_ts}"
+        else:
+            primary_scope_id = f"CHANNEL#{channel_id}"
     
-    return retrieve_relevant_memories(
-        scope_id=scope_id,
-        memory_types=memory_types,
-        query_text=query_text,
-        limit=limit,
-    )
+    # Expand scopes contextually if enabled
+    scope_ids: list[str] = []
+    if expand_scopes:
+        scope_ids = expand_scopes_contextually(
+            primary_scope_id=primary_scope_id,
+            rfp_id=rfp_id,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_sub=user_sub,
+            tenant_id=tenant_id,
+            query_text=query_text,
+            context=context,
+        )
+    else:
+        if primary_scope_id:
+            scope_ids = [primary_scope_id]
+    
+    # If no scopes determined, use primary scope only
+    if not scope_ids and primary_scope_id:
+        scope_ids = [primary_scope_id]
+    
+    # Retrieve memories from all expanded scopes
+    all_memories: list[dict[str, Any]] = []
+    for scope_id in scope_ids:
+        scope_memories = retrieve_relevant_memories(
+            scope_id=scope_id,
+            memory_types=memory_types,
+            query_text=query_text,
+            limit=limit * 2,  # Get more per scope, will re-rank across scopes
+        )
+        all_memories.extend(scope_memories)
+    
+    # Re-rank all memories across scopes by relevance
+    # Apply cross-scope relevance scoring
+    query_keywords = extract_keywords(query_text, max_keywords=20) if query_text else []
+    scored_memories: list[tuple[float, dict[str, Any]]] = []
+    
+    for memory in all_memories:
+        score = _calculate_relevance_score(
+            memory=memory,
+            query_keywords=query_keywords,
+            query_scope=primary_scope_id,
+        )
+        # Bonus for primary scope matches
+        memory_scope = memory.get("scopeId", "")
+        if memory_scope == primary_scope_id:
+            score *= 1.2  # 20% boost for primary scope
+        scored_memories.append((score, memory))
+    
+    # Sort by score and deduplicate by memoryId
+    scored_memories.sort(key=lambda x: x[0], reverse=True)
+    seen_ids: set[str] = set()
+    memories: list[dict[str, Any]] = []
+    for score, memory in scored_memories:
+        memory_id = memory.get("memoryId")
+        if memory_id and memory_id not in seen_ids:
+            seen_ids.add(memory_id)
+            memories.append(memory)
+            if len(memories) >= limit:
+                break
+    
+    # If query text suggests agent activity diagnostics or real-world context, also include GLOBAL memories
+    if include_global_diagnostics and query_text:
+        query_lower = query_text.lower()
+        
+        # Check for agent activity keywords
+        activity_keywords = ["agent", "activity", "recent", "what", "diagnostics", "metrics", "doing", "been"]
+        # Check for real-world context keywords
+        real_world_keywords = ["news", "weather", "research", "current", "today", "recent events", "geopolitical", "business", "finance", "market"]
+        
+        if any(keyword in query_lower for keyword in activity_keywords + real_world_keywords):
+            # Also retrieve diagnostics and external context from GLOBAL scope
+            from .agent_memory_db import MemoryType
+            global_memories = retrieve_relevant_memories(
+                scope_id="GLOBAL",
+                memory_types=[MemoryType.DIAGNOSTICS, MemoryType.EXTERNAL_CONTEXT],
+                query_text=query_text,
+                limit=8,  # Limit global memories
+            )
+            # Combine and deduplicate by memory ID
+            seen_ids = {mem.get("memoryId") for mem in memories if mem.get("memoryId")}
+            for global_mem in global_memories:
+                if global_mem.get("memoryId") not in seen_ids:
+                    memories.append(global_mem)
+                    seen_ids.add(global_mem.get("memoryId"))
+    
+    return memories[:limit]

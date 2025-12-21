@@ -27,6 +27,7 @@ from ..tenant_memory_repo import list_blocks as tenant_memory_list
 from ..user_memory_repo import list_blocks as user_memory_list
 from ..workflow_tasks_repo import list_tasks_for_rfp
 from ..agent_memory_tools import get_memory_tools
+from .external_context_tools import EXTERNAL_CONTEXT_TOOLS
 from .allowlist import parse_csv, uniq, is_allowed_prefix
 from .aws_cognito import admin_get_user as cognito_admin_get_user
 from .aws_cognito import describe_user_pool as cognito_describe_user_pool
@@ -60,6 +61,7 @@ from ..browser_worker_client import (
 from .github_api import get_pull as github_get_pull
 from .github_api import list_check_runs as github_list_check_runs
 from .github_api import list_pulls as github_list_pulls
+from .slack_read import create_canvas as slack_create_canvas
 from .slack_read import get_thread as slack_get_thread
 from .slack_read import list_recent_messages as slack_list_recent_messages
 
@@ -553,6 +555,16 @@ def _slack_get_thread_tool(args: dict[str, Any]) -> dict[str, Any]:
         return slack_get_thread(channel=ch, thread_ts=ts, limit=limit)
     except Exception as e:
         return {"ok": False, "error": str(e) or "slack_get_thread_failed"}
+
+
+def _slack_create_canvas_tool(args: dict[str, Any]) -> dict[str, Any]:
+    ch = str(args.get("channel") or "").strip()
+    title = str(args.get("title") or "").strip()
+    markdown = str(args.get("markdown") or "").strip()
+    try:
+        return slack_create_canvas(channel=ch, title=title, markdown=markdown)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "slack_create_canvas_failed"}
 
 
 # --- Existing platform browsing tools ---
@@ -1097,6 +1109,7 @@ _memory_tools = get_memory_tools()
 
 READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
     **_memory_tools,
+    **EXTERNAL_CONTEXT_TOOLS,  # External context tools (news, weather, research, etc.)
     "slack_list_recent_messages": (
         tool_def(
             "slack_list_recent_messages",
@@ -1129,6 +1142,28 @@ READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
             },
         ),
         _slack_get_thread_tool,
+    ),
+    "slack_create_canvas": (
+        tool_def(
+            "slack_create_canvas",
+            "Create a Slack canvas in a channel. Canvases are rich documents that can contain markdown, tables, images, mentions, and more. The markdown supports Slack-specific elements like user mentions (![](@U123456)), channel mentions (![](#C123456)), emojis, links, lists, checkboxes, and tables. Use this to create project status pages, onboarding guides, newsletters, or any structured content in a channel.",
+            {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "minLength": 1, "maxLength": 40, "description": "The channel ID where the canvas should be created"},
+                    "title": {"type": "string", "minLength": 1, "maxLength": 255, "description": "The title of the canvas"},
+                    "markdown": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100000,
+                        "description": "Markdown content for the canvas. Supports standard markdown plus Slack-specific elements: user mentions (![](@U123456)), channel mentions (![](#C123456)), emojis, tables, checkboxes, links, lists, headings (h1-h3), code blocks, quotes, and more.",
+                    },
+                },
+                "required": ["channel", "title", "markdown"],
+                "additionalProperties": False,
+            },
+        ),
+        _slack_create_canvas_tool,
     ),
     "dynamodb_describe_table": (
         tool_def(
