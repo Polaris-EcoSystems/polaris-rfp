@@ -90,6 +90,15 @@ def _calculate_relevance_score(
         except Exception:
             pass  # If provenance calculation fails, use score as-is
     
+    # Apply importance scoring (integrate into relevance)
+    try:
+        from .agent_memory_consolidation import calculate_importance_score
+        importance = calculate_importance_score(memory=memory, base_access_count=access_count)
+        # Blend importance into relevance (20% weight for importance)
+        final_score = final_score * 0.8 + importance * 0.2
+    except Exception:
+        pass  # If importance calculation fails, use score as-is
+    
     return min(max(final_score, 0.0), 1.0)
 
 

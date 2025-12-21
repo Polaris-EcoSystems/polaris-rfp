@@ -37,6 +37,427 @@ from . import slack_agent as _sa
 log = get_logger("slack_operator_agent")
 
 
+def _detect_and_store_collaboration(
+    *,
+    channel_id: str,
+    thread_ts: str | None,
+    current_user_id: str,
+    current_slack_user_id: str | None,
+    rfp_id: str | None,
+    slack_team_id: str | None,
+    user_message: str,
+    agent_response: str,
+) -> None:
+    """
+    Detect collaboration patterns from thread participants and store COLLABORATION_CONTEXT memory.
+    
+    Checks if multiple users have interacted in the thread/channel and creates a collaboration memory.
+    """
+    if not thread_ts:
+        return  # Need thread to detect collaboration
+    
+    try:
+        # Get thread messages to find participants
+        result = slack_get_thread(channel=channel_id, thread_ts=thread_ts, limit=50)
+        if not result.get("ok"):
+            return
+        
+        messages = result.get("messages", [])
+        if not isinstance(messages, list) or len(messages) < 2:
+            return  # Need at least 2 messages for collaboration
+        
+        # Extract unique user IDs from thread (excluding bot messages)
+        participant_slack_ids: set[str] = set()
+        participant_cognito_ids: set[str] = set()
+        
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            msg_user = str(msg.get("user") or "").strip()
+            if not msg_user:
+                continue
+            
+            # Skip bot messages (typically start with 'B' in Slack)
+            if msg_user.startswith("B"):
+                continue
+            
+            participant_slack_ids.add(msg_user)
+            
+            # Try to resolve to cognito user ID
+            try:
+                from .slack_actor_context import resolve_actor_context
+                user_ctx = resolve_actor_context(slack_user_id=msg_user, force_refresh=False)
+                if user_ctx.user_sub:
+                    participant_cognito_ids.add(user_ctx.user_sub)
+            except Exception:
+                pass  # Can't resolve, use slack ID only
+        
+        # Add current user
+        participant_cognito_ids.add(current_user_id)
+        if current_slack_user_id:
+            participant_slack_ids.add(current_slack_user_id)
+        
+        # Only create collaboration memory if we have 2+ unique participants
+        if len(participant_cognito_ids) < 2 and len(participant_slack_ids) < 2:
+            return
+        
+        # Determine collaboration type based on message content
+        collaboration_type: str | None = None
+        msg_lower = (user_message + " " + agent_response).lower()
+        if any(term in msg_lower for term in ["review", "feedback", "approve", "comment"]):
+            collaboration_type = "review"
+        elif any(term in msg_lower for term in ["decision", "decide", "choose", "select"]):
+            collaboration_type = "decision_making"
+        elif any(term in msg_lower for term in ["design", "plan", "architecture"]):
+            collaboration_type = "design_session"
+        elif any(term in msg_lower for term in ["code", "implement", "develop"]):
+            collaboration_type = "code_collaboration"
+        else:
+            collaboration_type = "discussion"
+        
+        # Create collaboration context memory
+        from .agent_memory_collaboration import add_collaboration_context_memory
+        
+        participant_list = list(participant_cognito_ids) if participant_cognito_ids else list(participant_slack_ids)
+        content = f"Collaboration in thread: {user_message[:200]}"
+        if agent_response:
+            content += f"\nAgent response: {agent_response[:200]}"
+        
+        add_collaboration_context_memory(
+            participant_user_ids=participant_list,
+            content=content,
+            collaboration_type=collaboration_type,
+            success=True,  # Assume success if agent responded
+            context={
+                "channelId": channel_id,
+                "threadTs": thread_ts,
+                "messageCount": len(messages),
+            },
+            cognito_user_id=current_user_id,
+            slack_user_id=current_slack_user_id,
+            slack_channel_id=channel_id,
+            slack_thread_ts=thread_ts,
+            slack_team_id=slack_team_id,
+            rfp_id=rfp_id,
+            source="slack_operator",
+        )
+        
+        log.info(
+            "collaboration_memory_created",
+            participant_count=len(participant_list),
+            collaboration_type=collaboration_type,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+        )
+    except Exception as e:
+        log.warning("collaboration_detection_error", error=str(e))
+
+
+def _detect_and_store_temporal_events(
+    *,
+    user_message: str,
+    user_sub: str,
+    rfp_id: str | None,
+    channel_id: str | None,
+    thread_ts: str | None,
+    cognito_user_id: str | None,
+    slack_user_id: str | None,
+    slack_team_id: str | None,
+) -> None:
+    """
+    Detect temporal events (deadlines, meetings, milestones) from user message and store TEMPORAL_EVENT memory.
+    
+    Uses regex patterns to find dates and temporal references.
+    """
+    from datetime import datetime, timedelta, timezone
+    import re
+    
+    msg_lower = user_message.lower()
+    
+    # Patterns for temporal references
+    temporal_keywords = [
+        "deadline", "due", "due date", "by", "before", "after", "on",
+        "meeting", "call", "standup", "review", "milestone", "deliverable",
+        "submit", "submission", "presentation", "demo", "launch", "release",
+    ]
+    
+    # Check if message contains temporal keywords
+    has_temporal_keyword = any(keyword in msg_lower for keyword in temporal_keywords)
+    if not has_temporal_keyword:
+        return  # No temporal references found
+    
+    # Try to extract dates using various patterns
+    date_patterns = [
+        # MM/DD/YYYY or M/D/YYYY
+        r'\b(\d{1,2})/(\d{1,2})/(\d{4})\b',
+        # YYYY-MM-DD
+        r'\b(\d{4})-(\d{1,2})-(\d{1,2})\b',
+        # "January 15, 2024" or "Jan 15, 2024"
+        r'\b(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(\d{4})\b',
+        # "15 January 2024"
+        r'\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})\b',
+        # Relative dates: "tomorrow", "next week", "in 3 days"
+        r'\b(tomorrow|next week|next month|in (\d+) days?|in (\d+) weeks?)\b',
+    ]
+    
+    event_date: datetime | None = None
+    event_type: str | None = None
+    
+    # Determine event type from keywords
+    if any(term in msg_lower for term in ["deadline", "due", "due date", "submit", "submission"]):
+        event_type = "deadline"
+    elif any(term in msg_lower for term in ["meeting", "call", "standup"]):
+        event_type = "meeting"
+    elif any(term in msg_lower for term in ["milestone", "deliverable"]):
+        event_type = "milestone"
+    elif any(term in msg_lower for term in ["review", "demo", "presentation"]):
+        event_type = "review"
+    else:
+        event_type = "event"
+    
+    # Try to parse dates
+    for pattern in date_patterns:
+        matches = re.finditer(pattern, user_message, re.IGNORECASE)
+        for match in matches:
+            try:
+                groups = match.groups()
+                if len(groups) == 3:
+                    # Try MM/DD/YYYY format
+                    try:
+                        month, day, year = int(groups[0]), int(groups[1]), int(groups[2])
+                        # Check if it's MM/DD or DD/MM (US vs international)
+                        if month > 12:
+                            # Likely DD/MM/YYYY
+                            day, month = month, day
+                        event_date = datetime(year, month, day, tzinfo=timezone.utc)
+                        break
+                    except (ValueError, TypeError):
+                        pass
+            except Exception:
+                continue
+    
+    # If no explicit date found, try relative dates
+    if not event_date:
+        now = datetime.now(timezone.utc)
+        if "tomorrow" in msg_lower:
+            event_date = now + timedelta(days=1)
+        elif "next week" in msg_lower:
+            event_date = now + timedelta(weeks=1)
+        elif "next month" in msg_lower:
+            event_date = now + timedelta(days=30)
+        else:
+            # Look for "in X days/weeks"
+            relative_match = re.search(r'in (\d+) (days?|weeks?)', msg_lower)
+            if relative_match:
+                try:
+                    amount = int(relative_match.group(1))
+                    unit = relative_match.group(2)
+                    if "week" in unit:
+                        event_date = now + timedelta(weeks=amount)
+                    else:
+                        event_date = now + timedelta(days=amount)
+                except (ValueError, TypeError):
+                    pass
+    
+    # Only create temporal event if we found a date or strong temporal reference
+    if not event_date and not any(strong_term in msg_lower for strong_term in ["deadline", "due date", "meeting"]):
+        return  # Not enough temporal information
+    
+    # Use current time + 7 days as default if no date found but has strong temporal keyword
+    if not event_date:
+        event_date = datetime.now(timezone.utc) + timedelta(days=7)
+    
+    # Determine scope
+    scope_id = f"RFP#{rfp_id}" if rfp_id else f"USER#{user_sub}"
+    
+    # Create temporal event memory
+    from .agent_memory_temporal import add_temporal_event_memory
+    
+    event_at_iso = event_date.isoformat().replace("+00:00", "Z")
+    content = f"Temporal event mentioned: {user_message[:300]}"
+    
+    add_temporal_event_memory(
+        scope_id=scope_id,
+        content=content,
+        event_at=event_at_iso,
+        event_type=event_type,
+        rfp_id=rfp_id,
+        metadata={
+            "extractedFrom": user_message[:200],
+            "confidence": "medium" if event_date else "low",
+        },
+        cognito_user_id=cognito_user_id,
+        slack_user_id=slack_user_id,
+        slack_channel_id=channel_id,
+        slack_thread_ts=thread_ts,
+        slack_team_id=slack_team_id,
+        source="slack_operator",
+    )
+    
+    log.info(
+        "temporal_event_memory_created",
+        event_type=event_type,
+        event_at=event_at_iso,
+        scope_id=scope_id,
+    )
+
+
+def _link_memories_after_interaction(
+    *,
+    user_sub: str,
+    rfp_id: str | None,
+    channel_id: str | None,
+    thread_ts: str | None,
+) -> None:
+    """
+    Link memories after an interaction to create relationship graph.
+    
+    Links:
+    - Episodic memory → RFP memory (if rfp_id present)
+    - Episodic memory → User memories
+    - Episodic memory → Collaboration context (if collaboration detected)
+    - Episodic memory → Temporal events (if temporal events detected)
+    """
+    try:
+        from .agent_memory_db import list_memories_by_scope
+        from .agent_memory_relationships import add_relationship
+        
+        # Get the most recent episodic memory for this user
+        scope_id = f"USER#{user_sub}"
+        memories, _ = list_memories_by_scope(
+            scope_id=scope_id,
+            memory_type="EPISODIC",
+            limit=1,
+        )
+        
+        if not memories:
+            return  # No episodic memory to link
+        
+        episodic_memory = memories[0]
+        episodic_id = episodic_memory.get("memoryId")
+        episodic_type = episodic_memory.get("memoryType")
+        episodic_scope = episodic_memory.get("scopeId")
+        episodic_created = episodic_memory.get("createdAt")
+        
+        if not all([episodic_id, episodic_type, episodic_scope, episodic_created]):
+            return
+        
+        # Link to RFP if present
+        if rfp_id:
+            rfp_scope = f"RFP#{rfp_id}"
+            rfp_memories, _ = list_memories_by_scope(
+                scope_id=rfp_scope,
+                memory_type="EPISODIC",  # Try to find related RFP episodic memories
+                limit=1,
+            )
+            if rfp_memories:
+                rfp_mem = rfp_memories[0]
+                rfp_mem_id = rfp_mem.get("memoryId")
+                rfp_mem_type = rfp_mem.get("memoryType")
+                rfp_mem_scope = rfp_mem.get("scopeId")
+                rfp_mem_created = rfp_mem.get("createdAt")
+                
+                if all([rfp_mem_id, rfp_mem_type, rfp_mem_scope, rfp_mem_created]):
+                    if (isinstance(episodic_id, str) and isinstance(episodic_type, str) and 
+                        isinstance(episodic_scope, str) and isinstance(episodic_created, str) and
+                        isinstance(rfp_mem_id, str) and isinstance(rfp_mem_type, str) and
+                        isinstance(rfp_mem_scope, str) and isinstance(rfp_mem_created, str)):
+                        add_relationship(
+                            from_memory_id=episodic_id,
+                            from_memory_type=episodic_type,
+                            from_scope_id=episodic_scope,
+                            from_created_at=episodic_created,
+                            to_memory_id=rfp_mem_id,
+                            to_memory_type=rfp_mem_type,
+                            to_scope_id=rfp_mem_scope,
+                            to_created_at=rfp_mem_created,
+                            relationship_type="part_of",
+                            bidirectional=True,
+                        )
+        
+        # Link to collaboration context if present
+        if channel_id and thread_ts:
+            # Try to find recent collaboration memories
+            # (This is a simplified approach - full implementation would query by participants)
+            try:
+                from .agent_memory_db import list_memories_by_type
+                collab_memories, _ = list_memories_by_type(
+                    memory_type="COLLABORATION_CONTEXT",
+                    scope_id=None,  # Search across scopes
+                    limit=5,
+                )
+                # Find collaboration memory with matching channel/thread
+                for collab_mem in collab_memories:
+                    metadata = collab_mem.get("metadata", {})
+                    if (metadata.get("channelId") == channel_id and 
+                        metadata.get("threadTs") == thread_ts):
+                        collab_id = collab_mem.get("memoryId")
+                        collab_type = collab_mem.get("memoryType")
+                        collab_scope = collab_mem.get("scopeId")
+                        collab_created = collab_mem.get("createdAt")
+                        
+                        if all([collab_id, collab_type, collab_scope, collab_created]):
+                            if (isinstance(episodic_id, str) and isinstance(episodic_type, str) and 
+                                isinstance(episodic_scope, str) and isinstance(episodic_created, str) and
+                                isinstance(collab_id, str) and isinstance(collab_type, str) and
+                                isinstance(collab_scope, str) and isinstance(collab_created, str)):
+                                add_relationship(
+                                    from_memory_id=episodic_id,
+                                    from_memory_type=episodic_type,
+                                    from_scope_id=episodic_scope,
+                                    from_created_at=episodic_created,
+                                    to_memory_id=collab_id,
+                                    to_memory_type=collab_type,
+                                    to_scope_id=collab_scope,
+                                    to_created_at=collab_created,
+                                    relationship_type="part_of",
+                                    bidirectional=True,
+                                )
+                                break
+            except Exception:
+                pass  # Non-critical
+        
+        # Link to temporal events if present
+        try:
+            from .agent_memory_temporal import get_upcoming_events
+            temporal_events = get_upcoming_events(
+                user_sub=user_sub,
+                rfp_id=rfp_id,
+                days_ahead=7,
+                limit=1,
+            )
+            if temporal_events:
+                temp_mem = temporal_events[0]
+                temp_id = temp_mem.get("memoryId")
+                temp_type = temp_mem.get("memoryType")
+                temp_scope = temp_mem.get("scopeId")
+                temp_created = temp_mem.get("createdAt")
+                
+                if all([temp_id, temp_type, temp_scope, temp_created]):
+                    if (isinstance(episodic_id, str) and isinstance(episodic_type, str) and 
+                        isinstance(episodic_scope, str) and isinstance(episodic_created, str) and
+                        isinstance(temp_id, str) and isinstance(temp_type, str) and
+                        isinstance(temp_scope, str) and isinstance(temp_created, str)):
+                        add_relationship(
+                            from_memory_id=episodic_id,
+                            from_memory_type=episodic_type,
+                            from_scope_id=episodic_scope,
+                            from_created_at=episodic_created,
+                            to_memory_id=temp_id,
+                            to_memory_type=temp_type,
+                            to_scope_id=temp_scope,
+                            to_created_at=temp_created,
+                            relationship_type="temporal_sequence",
+                            bidirectional=True,
+                        )
+        except Exception:
+            pass  # Non-critical
+        
+        log.info("memory_relationships_created", episodic_id=episodic_id)
+    except Exception as e:
+        log.warning("memory_linking_error", error=str(e))
+
+
 # Slack bot token scopes - capabilities the agent has
 SLACK_BOT_SCOPES = """
 You have full org-wide Slack permissions. Key capabilities:
@@ -55,7 +476,7 @@ You do NOT need permission to access channels - you have full org-wide access. Y
 # Agent Jobs System Documentation
 AGENT_JOBS_SYSTEM_DOCS = """
 Agent Jobs System Architecture:
-- Jobs are executed by NorthStar Job Runner, an ECS task that runs every 15 minutes
+- Jobs are executed by NorthStar Job Runner, an ECS task that runs every 4 hours
 - Jobs are queued with a `due_at` ISO timestamp (e.g., "2024-01-15T10:30:00Z")
 - Jobs execute asynchronously; results are stored in the job record after completion
 - Jobs can be scoped to an RFP (via scope.rfpId) or be global (no rfpId in scope)
@@ -202,6 +623,112 @@ class SlackOperatorResult:
     meta: dict[str, Any] | None = None
 
 
+def _generate_metaprompt(
+    *,
+    question: str,
+    rfp_id: str | None,
+    user_id: str | None,
+    comprehensive_ctx: str | None,
+    model: str,
+    client: Any,
+) -> str:
+    """
+    Generate a metaprompt by analyzing the user's request.
+    
+    The metaprompt helps the agent:
+    1. Understand what the user is really asking for
+    2. Determine the type of operation (query, action, multi-step workflow)
+    3. Identify relevant tools and skills needed
+    4. Assess complexity and whether multi-turn loops are needed
+    5. Identify what information might be missing
+    
+    Returns a formatted metaprompt string for inclusion in the system prompt.
+    """
+    if not question or not question.strip():
+        return ""
+    
+    try:
+        metaprompt_system = "\n".join([
+            "You are analyzing a user's request to generate a metaprompt that will guide an AI agent.",
+            "Your job is to think deeply about what the user is asking and determine:",
+            "1. What is the user's true intent/goal?",
+            "2. What type of operation is this? (query, action, multi-step workflow, information gathering, etc.)",
+            "3. What tools/skills are most relevant? (RFP browsing, state management, job scheduling, team member lookup, etc.)",
+            "4. Is this a simple request (can be answered in 1-2 steps) or complex (requires multi-turn iteration)?",
+            "5. What information might be needed that isn't immediately available?",
+            "6. Are there team members, RFPs, or other entities that should be considered?",
+            "",
+            "Context available:",
+            f"- RFP scope: {rfp_id or 'none (global operations allowed)'}",
+            f"- User ID: {user_id or 'unknown'}",
+            f"- Available context: {'Yes (comprehensive context provided)' if comprehensive_ctx else 'Limited'}",
+            "",
+            "User's question:",
+            question,
+            "",
+            "Generate a concise metaprompt (2-4 sentences) that captures your analysis.",
+            "Format it as a thinking/analysis section that will guide the agent's approach.",
+        ])
+        
+        # Use a quick, low-cost call to generate the metaprompt
+        from ..ai.client import call_text
+        
+        metaprompt_text, _ = call_text(
+            purpose="metaprompt_generation",
+            messages=[
+                {"role": "system", "content": metaprompt_system},
+                {"role": "user", "content": "Analyze this request and generate the metaprompt."},
+            ],
+            temperature=0.3,
+            max_tokens=300,
+        )
+        
+        return metaprompt_text.strip() if metaprompt_text else ""
+    except Exception as e:
+        log.warning("metaprompt_generation_failed", error=str(e), question=question[:100])
+        return ""  # Non-critical: continue without metaprompt if generation fails
+
+
+def _extract_relevant_tool_categories(metaprompt: str) -> str:
+    """
+    Extract relevant tool categories from the metaprompt to help guide tool selection.
+    
+    Returns a formatted string listing relevant tool categories.
+    """
+    if not metaprompt:
+        return ""
+    
+    # Simple keyword-based extraction (could be enhanced with LLM call if needed)
+    metaprompt_lower = metaprompt.lower()
+    
+    relevant_categories: list[str] = []
+    
+    # Check for different operation types
+    if any(phrase in metaprompt_lower for phrase in ["rfp", "opportunity", "proposal"]):
+        relevant_categories.append("- RFP/Proposal Browsing (list_rfps, search_rfps, get_rfp, list_proposals)")
+        relevant_categories.append("- Opportunity State Management (opportunity_load, opportunity_patch, journal_append)")
+    
+    if any(phrase in metaprompt_lower for phrase in ["job", "schedule", "queue", "background"]):
+        relevant_categories.append("- Agent Jobs (schedule_job, agent_job_list, agent_job_get, job_plan)")
+    
+    if any(phrase in metaprompt_lower for phrase in ["team", "member", "biography", "bio", "capability"]):
+        relevant_categories.append("- Team Member Lookup (get_team_member, list_team_members)")
+    
+    if any(phrase in metaprompt_lower for phrase in ["slack", "message", "thread", "channel"]):
+        relevant_categories.append("- Slack Operations (slack_get_thread, slack_list_recent_messages, slack_post_summary)")
+    
+    if any(phrase in metaprompt_lower for phrase in ["read", "query", "search", "find", "lookup"]):
+        relevant_categories.append("- Read Tools (all read tools from READ_TOOLS registry)")
+    
+    if any(phrase in metaprompt_lower for phrase in ["complex", "multi-step", "workflow", "iterative"]):
+        relevant_categories.append("- Multi-step workflows may be needed - plan carefully and iterate")
+    
+    if not relevant_categories:
+        return "- All tool categories may be relevant"
+    
+    return "\n".join(relevant_categories)
+
+
 def _extract_rfp_id(text: str) -> str | None:
     t = str(text or "")
     m = re.search(r"\b(rfp_[a-zA-Z0-9-]{6,})\b", t)
@@ -236,6 +763,28 @@ def _operations_requiring_rfp_scope(question: str) -> bool | None:
         "schedule a job",
         "create a job",
         "queue a job",
+    ]):
+        return False
+    
+    # Questions about the bot itself, its capabilities, tools, or general help
+    if any(phrase in q_lower for phrase in [
+        "what tools",
+        "what skills",
+        "what capabilities",
+        "what can you",
+        "what are you",
+        "how can you",
+        "what do you",
+        "available to you",
+        "available tools",
+        "your capabilities",
+        "your skills",
+        "your tools",
+        "help me",
+        "how do you",
+        "what memories",
+        "types of memories",
+        "what types",
     ]):
         return False
     
@@ -903,11 +1452,43 @@ def run_slack_operator_for_mention(
         # Check if this operation requires RFP scope
         requires_rfp = _operations_requiring_rfp_scope(q)
         
+        # Try delegating to conversational agent for non-RFP questions or unclear cases
         if requires_rfp is False:
-            # This operation clearly doesn't require RFP scope - proceed without it
-            pass  # Continue to operator agent with rfp_id=None
-        else:
-            # Try delegating to conversational agent first (or ask for RFP if required)
+            # This operation clearly doesn't require RFP scope - delegate to conversational agent
+            try:
+                from .slack_web import chat_post_message_result
+                from .slack_actor_context import resolve_actor_context
+
+                ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
+                display_name = ctx.display_name
+                email = ctx.email
+                user_profile = ctx.user_profile
+
+                ans = _sa.run_slack_agent_question(
+                    question=q,
+                    user_id=user_id,
+                    user_display_name=display_name,
+                    user_email=email,
+                    user_profile=user_profile,
+                    channel_id=ch,
+                    thread_ts=th,
+                )
+                txt = str(ans.text or "").strip() or "No answer."
+                chat_post_message_result(
+                    text=txt,
+                    channel=ch,
+                    thread_ts=th,
+                    blocks=ans.blocks,
+                    unfurl_links=False,
+                )
+                return SlackOperatorResult(did_post=True, text=txt, meta={"scoped": False, "delegated": "slack_agent"})
+            except Exception as e:
+                # Log the error but continue to operator agent without RFP (don't ask for RFP)
+                log.warning("slack_agent_delegation_failed", error=str(e), question=q[:100])
+                # Continue to operator agent with rfp_id=None - don't ask for RFP
+                pass
+        elif requires_rfp is None:
+            # Unclear - try delegating to conversational agent first
             # This keeps @mentions responsive without requiring thread binding.
             try:
                 from .slack_web import chat_post_message_result
@@ -936,12 +1517,18 @@ def run_slack_operator_for_mention(
                     unfurl_links=False,
                 )
                 return SlackOperatorResult(did_post=True, text=txt, meta={"scoped": False, "delegated": "slack_agent"})
-            except Exception:
-                # Fall through to the binding prompt if anything goes wrong.
+            except Exception as e:
+                # Fall through to the binding prompt if delegation fails
+                log.warning("slack_agent_delegation_failed", error=str(e), question=q[:100])
                 pass
+        else:
+            # requires_rfp is True - this clearly needs RFP scope, so ask for it
+            pass
 
-        # Ask to include an explicit id or bind the thread; keep it short.
-        msg = (
+        # Only ask for RFP binding if requires_rfp is True or delegation failed for unclear case
+        if requires_rfp is True or (requires_rfp is None):
+            # Ask to include an explicit id or bind the thread; keep it short.
+            msg = (
             "Which RFP is this about?\n"
             "- include an id like `rfp_...` in your message, or\n"
             "- bind this thread once with: `@polaris link rfp_...`"
@@ -978,6 +1565,8 @@ def run_slack_operator_for_mention(
     )
     
     # Build comprehensive context with query-aware retrieval
+    # Note: token_budget_tracker is None for slack operator (not a long-running job)
+    # Memory retrieval will work without it, but won't be budget-aware
     comprehensive_ctx = build_comprehensive_context(
         user_profile=actor_ctx.user_profile if actor_ctx else None,
         user_display_name=actor_ctx.display_name if actor_ctx else None,
@@ -988,7 +1577,38 @@ def run_slack_operator_for_mention(
         rfp_id=rfp_id,
         user_query=q,  # Pass user query for query-aware memory retrieval
         max_total_chars=50000,
+        token_budget_tracker=None,  # Slack operator doesn't use token budgets (not long-running)
     )
+    
+    # Build team member awareness context if the query mentions team members or capabilities
+    team_awareness_ctx = ""
+    if q and any(phrase in q.lower() for phrase in ["team", "member", "biography", "bio", "capability", "skill", "expertise", "who can", "who has"]):
+        try:
+            from . import content_repo
+            
+            # Get team members list for awareness
+            team_members = content_repo.list_team_members(limit=50)
+            if team_members:
+                team_summary_lines: list[str] = []
+                team_summary_lines.append("Team Member Awareness:")
+                team_summary_lines.append(f"- Total team members in system: {len(team_members)}")
+                # Include key team members (first 10) with their positions
+                for tm in team_members[:10]:
+                    if isinstance(tm, dict):
+                        tm_name = str(tm.get("nameWithCredentials") or tm.get("name") or "").strip()
+                        tm_position = str(tm.get("position") or "").strip()
+                        tm_id = str(tm.get("memberId") or "").strip()
+                        if tm_name and tm_id:
+                            summary = f"  - {tm_name}"
+                            if tm_position:
+                                summary += f" ({tm_position})"
+                            summary += f" [ID: {tm_id}]"
+                            team_summary_lines.append(summary)
+                team_summary_lines.append("- Use `get_team_member` or `list_team_members` tools to fetch detailed information about specific team members.")
+                team_awareness_ctx = "\n".join(team_summary_lines)
+        except Exception as e:
+            log.warning("team_awareness_context_build_failed", error=str(e))
+            team_awareness_ctx = ""
     
     # Also build individual components for context complexity estimation
     rfp_state_context = build_rfp_state_context(rfp_id=rfp_id, journal_limit=10, events_limit=10) if rfp_id else ""
@@ -1000,10 +1620,35 @@ def run_slack_operator_for_mention(
         limit=5,
     ) if rfp_id else ""
 
+    # Generate metaprompt: analyze the user's request to determine approach, relevant tools, and complexity
+    metaprompt = _generate_metaprompt(
+        question=q,
+        rfp_id=rfp_id,
+        user_id=user_id,
+        comprehensive_ctx=comprehensive_ctx,
+        model=model,
+        client=client,
+    )
+    
+    # Extract relevant tool categories from metaprompt
+    relevant_tool_categories = _extract_relevant_tool_categories(metaprompt)
+    
     system = "\n".join(
         [
-            "You are Polaris Operator, a Slack-connected agent for an RFP→Proposal→Contracting platform.",
+            "You are Polaris Operator, a general-purpose Slack-connected agent for an RFP→Proposal→Contracting platform.",
             "You are stateless: you MUST reconstruct context by calling tools every invocation.",
+            "",
+            "Your Capabilities:",
+            "- You have awareness of team members, RFPs, proposals, opportunities, and platform state",
+            "- You can read and write platform data, schedule jobs, and execute multi-step workflows",
+            "- You can handle both simple queries and complex multi-turn operations",
+            "- You are aware of user preferences, team member profiles, and collaboration patterns",
+            "",
+            "Metaprompt Analysis (your thinking about this request):",
+            metaprompt if metaprompt else "- Analyzing user request...",
+            "",
+            "Relevant Tool Categories for this request:",
+            relevant_tool_categories if relevant_tool_categories else "- All tools available",
             "",
             "Slack Permissions:",
             SLACK_BOT_SCOPES.strip(),
@@ -1032,6 +1677,8 @@ def run_slack_operator_for_mention(
             "- Use `agent_job_list` to check job status when users ask about scheduled/running jobs.",
             "- When users ask about their resume, check the user context for resume S3 keys. For PDF or DOCX files, use `extract_resume_text` to extract text content. For plain text files, use `s3_get_object_text`. For binary files that need downloading, use `s3_presign_get` to get a download URL.",
             "- When users ask about their professional background, check both user context (job titles, certifications) and linked team member information (biography, bioProfiles) if available. Use `get_team_member` tool to fetch full team member details if needed.",
+            "- For complex requests: Break down into steps, gather information incrementally, and iterate. Use multi-turn loops to work through the problem systematically.",
+            "- Team awareness: You have access to team member profiles, biographies, and project-specific bios. Use `get_team_member` or `list_team_members` when users ask about team capabilities or need to match team members to projects.",
             "",
             "Runtime context:",
             f"- channel: {ch}",
@@ -1052,6 +1699,10 @@ def run_slack_operator_for_mention(
     # Add comprehensive context (includes all context layers)
     if comprehensive_ctx:
         system += "\n\n" + comprehensive_ctx + "\n"
+    
+    # Add team member awareness if relevant
+    if team_awareness_ctx:
+        system += "\n\n" + team_awareness_ctx + "\n"
 
     input0 = f"{system}\n\nUSER_MESSAGE:\n{q}"
 
@@ -1295,6 +1946,7 @@ def run_slack_operator_for_mention(
                 pass
         
         # Store episodic memory for this interaction (best-effort, non-blocking)
+        # Also detect collaboration patterns and temporal events, and link memories
         if actor_user_sub:
             try:
                 from .agent_memory_hooks import store_episodic_memory_from_agent_interaction
@@ -1312,6 +1964,7 @@ def run_slack_operator_for_mention(
                 except Exception:
                     slack_team_id_for_memory = None  # Use defaults if resolution fails
                 
+                # Store episodic memory
                 store_episodic_memory_from_agent_interaction(
                     user_sub=actor_user_sub,
                     user_message=q,
@@ -1331,6 +1984,47 @@ def run_slack_operator_for_mention(
                     rfp_id=rfp_id,
                     source="slack_operator",
                 )
+                
+                # Detect and store collaboration context if multiple users in thread
+                try:
+                    _detect_and_store_collaboration(
+                        channel_id=ch,
+                        thread_ts=th,
+                        current_user_id=cognito_user_id_for_memory,
+                        current_slack_user_id=slack_user_id_for_memory,
+                        rfp_id=rfp_id,
+                        slack_team_id=slack_team_id_for_memory,
+                        user_message=q,
+                        agent_response=text or "Action completed",
+                    )
+                except Exception as e:
+                    log.warning("collaboration_detection_failed", error=str(e))
+                
+                # Detect and store temporal events from user message
+                try:
+                    _detect_and_store_temporal_events(
+                        user_message=q,
+                        user_sub=actor_user_sub,
+                        rfp_id=rfp_id,
+                        channel_id=ch,
+                        thread_ts=th,
+                        cognito_user_id=cognito_user_id_for_memory,
+                        slack_user_id=slack_user_id_for_memory,
+                        slack_team_id=slack_team_id_for_memory,
+                    )
+                except Exception as e:
+                    log.warning("temporal_event_detection_failed", error=str(e))
+                
+                # Link memories (episodic → RFP, users, collaboration contexts)
+                try:
+                    _link_memories_after_interaction(
+                        user_sub=actor_user_sub,
+                        rfp_id=rfp_id,
+                        channel_id=ch,
+                        thread_ts=th,
+                    )
+                except Exception as e:
+                    log.warning("memory_linking_failed", error=str(e))
             except Exception:
                 pass  # Non-critical
         
@@ -1338,10 +2032,40 @@ def run_slack_operator_for_mention(
 
     prev_id: str | None = None
     recent_tools: list[str] = []  # Track recent tool calls for complexity detection
+    conversation_state: dict[str, Any] = {}  # Track conversation state for multi-turn loops
     start_time = time.time()
+    
+    # Determine if this is likely a complex request based on metaprompt
+    is_complex_request = any(phrase in metaprompt.lower() for phrase in [
+        "complex", "multi-step", "workflow", "iterative", "multiple", "requires"
+    ]) if metaprompt else False
+    
+    # Adjust max_steps for complex requests
+    effective_max_steps = max(1, int(max_steps))
+    if is_complex_request:
+        effective_max_steps = max(effective_max_steps, 12)  # Allow more steps for complex requests
+    
     while True:
         steps += 1
-        if steps > max(1, int(max_steps)):
+        if steps > effective_max_steps:
+            # For complex requests that hit step limit, provide a summary
+            if is_complex_request and steps > max_steps:
+                try:
+                    from .slack_web import chat_post_message_result
+                    summary_msg = (
+                        f"I've been working through your request ({steps-1} steps so far). "
+                        "This appears to be a complex multi-step operation. "
+                        "Would you like me to continue, or would you prefer to break this down into smaller parts?"
+                    )
+                    chat_post_message_result(
+                        text=summary_msg,
+                        channel=ch,
+                        thread_ts=th,
+                        unfurl_links=False,
+                    )
+                    did_post = True
+                except Exception:
+                    pass
             break
 
         # Get tuning with complexity awareness (including context complexity)
@@ -1379,6 +2103,14 @@ def run_slack_operator_for_mention(
         if prev_id:
             kwargs["previous_response_id"] = prev_id
             kwargs["input"] = []
+            # For multi-turn loops, add conversation state context
+            if conversation_state and is_complex_request:
+                state_summary = f"\n\nConversation state (step {steps}):\n"
+                state_summary += f"- Previous tools used: {', '.join(recent_tools[-5:]) if recent_tools else 'none'}\n"
+                state_summary += f"- Steps completed: {steps - 1}\n"
+                state_summary += "- Continue working through the request systematically.\n"
+                # Note: We can't directly modify input for Responses API, but we can add this to the system context
+                # For now, the previous_response_id should carry the context
         else:
             kwargs["input"] = input0
 
@@ -1409,6 +2141,20 @@ def run_slack_operator_for_mention(
         tool_calls = _sa._extract_tool_calls(resp)
         if not tool_calls:
             text = _sa._responses_text(resp).strip()
+            # Check if the agent is indicating it needs more information or wants to continue
+            # For complex requests, allow the agent to continue even if it says something
+            if is_complex_request and text and any(phrase in text.lower() for phrase in [
+                "need more", "gather", "let me", "i'll", "checking", "looking", "searching", "working", "analyzing"
+            ]):
+                # Agent is working through the problem - continue the loop
+                # Add the agent's thinking to conversation state
+                conversation_state[f"step_{steps}_thinking"] = text
+                # For Responses API, we need to continue with the same response_id
+                # The agent's text indicates it wants to continue, so we'll let it proceed
+                # by not breaking and allowing the loop to continue
+                # However, we need to actually call tools, so we'll treat this as needing more work
+                # For now, break but log that we detected continuation intent
+                log.info("complex_request_continuation_detected", step=steps, text_preview=text[:100])
             break
 
         outputs: list[dict[str, Any]] = []
@@ -1422,7 +2168,7 @@ def run_slack_operator_for_mention(
             except Exception:
                 args = {}
 
-            # Track tool for complexity detection
+            # Track tool for complexity detection and conversation state
             if name:
                 recent_tools.append(name)
                 # Keep only last 10 tools to avoid unbounded growth
@@ -1433,6 +2179,14 @@ def run_slack_operator_for_mention(
             if proto_err is not None:
                 outputs.append(_sa._tool_output_item(call_id, _sa._safe_json(proto_err)))
                 continue
+            
+            # Track tool calls in conversation state for multi-turn awareness (after protocol check)
+            if name:
+                tool_call_count = len([t for t in recent_tools if t == name])
+                conversation_state[f"step_{steps}_tool_{tool_call_count}"] = {
+                    "tool": name,
+                    "args_keys": list(args.keys()) if isinstance(args, dict) else [],
+                }
 
             if name in ("slack_post_summary", "slack_ask_clarifying_question"):
                 did_post = True

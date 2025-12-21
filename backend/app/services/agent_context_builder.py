@@ -654,6 +654,8 @@ def build_comprehensive_context(
         rfp_id=rfp_id,
         query_text=query_text,
         limit=15,  # Get more memories for better relevance
+        channel_id=channel_id,  # Pass channel for scope expansion
+        thread_ts=thread_ts,    # Pass thread for scope expansion
     )
     if memory_ctx:
         context_parts.append(memory_ctx)
