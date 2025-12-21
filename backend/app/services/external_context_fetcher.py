@@ -214,7 +214,7 @@ def fetch_arxiv_research(*, query: str, max_results: int = 10, sort_by: str = "r
     
     # arXiv API (no auth required)
     url = "http://export.arxiv.org/api/query"
-    params = {
+    params: dict[str, str | int] = {
         "search_query": query,
         "start": 0,
         "max_results": min(max_results, 100),

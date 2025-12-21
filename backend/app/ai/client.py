@@ -145,12 +145,12 @@ def _models_to_try(purpose: str) -> list[str]:
 class AiMeta:
     purpose: str
     model: str
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    total_tokens: int | None = None
     attempts: int
     used_response_format: str | None
     response_id: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 def _client(*, timeout_s: int = 60) -> Any:

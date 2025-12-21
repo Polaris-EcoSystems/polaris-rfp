@@ -154,8 +154,10 @@ def get_upcoming_events(
     )
     
     # Filter to upcoming events
+    from datetime import timedelta
+    
     now_dt = datetime.now(timezone.utc)
-    cutoff_dt = now_dt.replace(hour=23, minute=59, second=59) + datetime.timedelta(days=days_ahead)
+    cutoff_dt = now_dt.replace(hour=23, minute=59, second=59) + timedelta(days=days_ahead)
     
     upcoming: list[dict[str, Any]] = []
     for memory in memories:

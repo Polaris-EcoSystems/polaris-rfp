@@ -83,14 +83,20 @@ def run_external_context_aggregation_and_reschedule(
             except Exception as e:
                 log.warning("external_context_report_slack_exception", error=str(e))
         
-        # Log event
-        append_event(
-            event_type="external_context_aggregated",
-            metadata={
-                "report": report,
-                "hours": hours,
-            },
-        )
+        # Log event (using a global scope since this is not RFP-specific)
+        try:
+            append_event(
+                rfp_id="GLOBAL",
+                type="external_context_aggregated",
+                tool="external_context_aggregator_scheduler",
+                payload={
+                    "report": report,
+                    "hours": hours,
+                },
+            )
+        except Exception:
+            # Non-critical: event logging failure shouldn't break aggregation
+            pass
         
         # Reschedule next run
         next_due = next_aggregation_due_iso(hours=reschedule_hours)

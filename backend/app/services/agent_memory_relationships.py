@@ -95,15 +95,18 @@ def add_relationship(
             current_relationship_types = {}
         current_relationship_types[to_memory_id] = relationship_type
         
+        # Update memory with related IDs in metadata
+        from_metadata = from_memory.get("metadata", {})
+        from_metadata["relationshipTypes"] = current_relationship_types
+        
         update_memory(
             memory_id=from_memory_id,
             memory_type=from_memory_type,
             scope_id=from_scope_id,
             created_at=from_created_at,
-            related_memory_ids=current_related,
             metadata={
-                **from_memory.get("metadata", {}),
-                "relationshipTypes": current_relationship_types,
+                **from_metadata,
+                "relatedMemoryIds": current_related,
             },
         )
         
@@ -121,15 +124,18 @@ def add_relationship(
             
             to_current_relationship_types[from_memory_id] = reverse_relationship_type
             
+            # Update memory with related IDs in metadata
+            to_metadata = to_memory.get("metadata", {})
+            to_metadata["relationshipTypes"] = to_current_relationship_types
+            
             update_memory(
                 memory_id=to_memory_id,
                 memory_type=to_memory_type,
                 scope_id=to_scope_id,
                 created_at=to_created_at,
-                related_memory_ids=to_current_related,
                 metadata={
-                    **to_memory.get("metadata", {}),
-                    "relationshipTypes": to_current_relationship_types,
+                    **to_metadata,
+                    "relatedMemoryIds": to_current_related,
                 },
             )
         

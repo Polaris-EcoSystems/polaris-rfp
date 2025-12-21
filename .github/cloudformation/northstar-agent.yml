@@ -745,7 +745,6 @@ Resources:
           TaskDefinitionArn: !Ref NorthStarJobRunnerTaskDefinition
           TaskCount: 1
           LaunchType: FARGATE
-          TaskTimeoutInSeconds: 14400 # 4 hours timeout
           NetworkConfiguration:
             AwsvpcConfiguration:
               AssignPublicIp: DISABLED
@@ -885,7 +884,6 @@ Resources:
           TaskDefinitionArn: !Ref NorthStarExternalContextAggregatorTaskDefinition
           TaskCount: 1
           LaunchType: FARGATE
-          TaskTimeoutInSeconds: 14400 # 4 hours timeout
           NetworkConfiguration:
             AwsvpcConfiguration:
               AssignPublicIp: DISABLED

@@ -394,10 +394,15 @@ def get_memories_for_context(
                 limit=8,  # Limit global memories
             )
             # Combine and deduplicate by memory ID
-            seen_ids = {mem.get("memoryId") for mem in memories if mem.get("memoryId")}
+            seen_ids: set[str] = set()
+            for mem in memories:
+                mem_id = mem.get("memoryId")
+                if mem_id and isinstance(mem_id, str):
+                    seen_ids.add(mem_id)
             for global_mem in global_memories:
-                if global_mem.get("memoryId") not in seen_ids:
+                mem_id = global_mem.get("memoryId")
+                if mem_id and isinstance(mem_id, str) and mem_id not in seen_ids:
                     memories.append(global_mem)
-                    seen_ids.add(global_mem.get("memoryId"))
+                    seen_ids.add(mem_id)
     
     return memories[:limit]
