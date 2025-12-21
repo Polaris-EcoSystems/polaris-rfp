@@ -7,6 +7,7 @@ from ..ai.context import clip_text
 from .agent_events_repo import list_recent_events
 from .agent_jobs_repo import list_jobs_by_scope
 from .agent_journal_repo import list_recent_entries
+from .agent_memory_retrieval import get_memories_for_context
 from .opportunity_state_repo import get_state
 from .rfps_repo import get_rfp_by_id, list_rfps
 
@@ -457,6 +458,61 @@ def build_cross_thread_context(
         return ""
 
 
+def build_memory_context(
+    *,
+    user_sub: str | None = None,
+    rfp_id: str | None = None,
+    tenant_id: str | None = None,
+    query_text: str | None = None,
+    limit: int = 10,
+) -> str:
+    """
+    Build memory context from the new structured memory system.
+    
+    Args:
+        user_sub: User identifier
+        rfp_id: RFP identifier
+        tenant_id: Tenant identifier
+        query_text: Optional search query to filter memories
+        limit: Maximum number of memories to include
+    
+    Returns:
+        Formatted memory context string
+    """
+    try:
+        memories = get_memories_for_context(
+            user_sub=user_sub,
+            rfp_id=rfp_id,
+            tenant_id=tenant_id,
+            query_text=query_text,
+            limit=limit,
+        )
+        
+        if not memories:
+            return ""
+        
+        lines: list[str] = []
+        lines.append("Relevant agent memories:")
+        
+        for mem in memories[:limit]:
+            mem_type = mem.get("memoryType", "")
+            summary = mem.get("summary") or mem.get("content", "")
+            created_at = mem.get("createdAt", "")
+            
+            # Format: [TYPE] summary (created: date)
+            line = f"  [{mem_type}] {clip_text(summary, max_chars=200)}"
+            if created_at:
+                # Extract date part from ISO timestamp
+                date_part = created_at.split("T")[0] if "T" in created_at else created_at[:10]
+                line += f" (from {date_part})"
+            lines.append(line)
+        
+        return "\n".join(lines)
+    except Exception:
+        # Best-effort: if memory retrieval fails, return empty string
+        return ""
+
+
 def build_comprehensive_context(
     *,
     user_profile: dict[str, Any] | None = None,
@@ -474,14 +530,20 @@ def build_comprehensive_context(
     Context layers (in priority order):
     1. User profile and preferences
     2. Thread conversation history
-    3. RFP state (OpportunityState, journal, events)
-    4. Related RFPs
-    5. Recent agent jobs
-    6. Cross-thread context
+    3. Relevant agent memories (new structured memory system)
+    4. RFP state (OpportunityState, journal, events)
+    5. Related RFPs
+    6. Recent agent jobs
+    7. Cross-thread context
     
     Returns a formatted string optimized for inclusion in system prompts.
     """
     context_parts: list[str] = []
+    
+    # Extract user_sub from profile
+    user_sub: str | None = None
+    if user_profile:
+        user_sub = str(user_profile.get("_id") or user_profile.get("userSub") or "").strip() or None
     
     # 1. User context (highest priority)
     user_ctx = build_user_context(
@@ -505,26 +567,44 @@ def build_comprehensive_context(
         context_parts.append(thread_ctx)
         context_parts.append("")
     
-    # 3. RFP state context (if RFP is known)
+    # 3. Agent memories (new structured memory system)
+    # Extract keywords from thread context for memory search
+    query_text: str | None = None
+    if thread_ctx:
+        # Extract key terms from recent thread messages for memory search
+        # For now, we'll just search with user/rfp scope
+        pass
+    
+    memory_ctx = build_memory_context(
+        user_sub=user_sub,
+        rfp_id=rfp_id,
+        query_text=query_text,
+        limit=10,
+    )
+    if memory_ctx:
+        context_parts.append(memory_ctx)
+        context_parts.append("")
+    
+    # 4. RFP state context (if RFP is known)
     if rfp_id:
         rfp_ctx = build_rfp_state_context(rfp_id=rfp_id, journal_limit=10, events_limit=10)
         if rfp_ctx:
             context_parts.append(rfp_ctx)
             context_parts.append("")
         
-        # 4. Related RFPs
+        # 5. Related RFPs
         related_ctx = build_related_rfps_context(rfp_id=rfp_id, limit=5)
         if related_ctx:
             context_parts.append(related_ctx)
             context_parts.append("")
         
-        # 5. Recent jobs
+        # 6. Recent jobs
         jobs_ctx = build_recent_jobs_context(rfp_id=rfp_id, limit=10)
         if jobs_ctx:
             context_parts.append(jobs_ctx)
             context_parts.append("")
         
-        # 6. Cross-thread context
+        # 7. Cross-thread context
         cross_thread_ctx = build_cross_thread_context(
             rfp_id=rfp_id,
             current_channel_id=channel_id,
@@ -540,13 +620,15 @@ def build_comprehensive_context(
     
     # Apply smart truncation if needed
     if len(full_context) > max_total_chars:
-        # Prioritize: keep user context and thread context, truncate others
+        # Prioritize: keep user context, thread context, and memory context, truncate others
         if user_ctx:
             user_ctx_len = len(user_ctx) + 50  # Add some overhead
-            remaining = max_total_chars - user_ctx_len - len(thread_ctx)
+            memory_ctx_len = len(memory_ctx) + 50
+            remaining = max_total_chars - user_ctx_len - len(thread_ctx) - memory_ctx_len
             if remaining > 0:
-                # Keep user + thread, truncate rest
+                # Keep user + thread + memory, truncate rest
                 truncated = full_context[:max_total_chars - 200] + "\n\n[Context truncated for length...]"
                 return truncated
     
     return full_context
+

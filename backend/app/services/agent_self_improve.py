@@ -60,6 +60,8 @@ def _failure_facts(*, since_iso: str, limit: int = 400) -> list[dict[str, Any]]:
 def run_perch_time_once(*, hours: int = 6, reschedule_minutes: int | None = 60) -> dict[str, Any]:
     """
     Use recent durable telemetry (AgentEvent) to propose small improvements.
+    
+    Also runs job learning to extract patterns from completed jobs and update memory.
 
     This does NOT mutate production state directly. It only emits an AgentEvent
     that a human (or approval-gated pipeline) can act on.
@@ -99,12 +101,28 @@ def run_perch_time_once(*, hours: int = 6, reschedule_minutes: int | None = 60) 
         )
         report = parsed.model_dump()
 
+    # Run job learning to extract patterns from completed jobs
+    job_learning_result = None
     try:
+        from .agent_job_learning import update_memory_from_job_outcomes
+        job_learning_result = update_memory_from_job_outcomes()
+    except Exception:
+        # Don't fail the whole perch_time run if job learning fails
+        pass
+    
+    try:
+        payload = {"hours": h, "since": since, "factsCount": len(facts), "report": report}
+        if job_learning_result:
+            payload["jobLearning"] = {
+                "patternsAnalyzed": job_learning_result.get("patterns_analyzed", 0),
+                "bestPracticesFound": job_learning_result.get("best_practices_found", 0),
+                "storedCount": job_learning_result.get("stored_count", 0),
+            }
         append_event(
             rfp_id="rfp_perch_time",
             type="agent_perch_time_report",
             tool="agent_self_improve",
-            payload={"hours": h, "since": since, "factsCount": len(facts), "report": report},
+            payload=payload,
             created_by="system",
             correlation_id=None,
         )

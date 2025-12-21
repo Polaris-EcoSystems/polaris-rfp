@@ -86,7 +86,7 @@ Agent Operations:
 - `agent_perch_time` / `telemetry_self_improve` - Run self-improvement/analysis tasks
   * Scope: Global
   * Payload: {"hours": 6, "rescheduleMinutes": 60} (optional)
-  * Behavior: Analyzes telemetry/logs, may reschedule itself
+  * Behavior: Analyzes telemetry/logs, extracts patterns from completed jobs, updates procedural memory with successful workflows and failure patterns, may reschedule itself
 
 Notifications:
 - `slack_nudge` - Send a Slack notification message
@@ -141,6 +141,16 @@ AI Agent Workloads:
   * Scope: Optional
   * Payload: {"operation": "...", "targets": [...]}
   * Behavior: Performs maintenance operations, checkpoints progress
+
+- `ai_agent_execute` - Universal job executor (can handle any user request)
+  * Scope: Optional (can include rfpId for context)
+  * Payload: {"request": "User's request/goal", "context": {...}, "execution_plan": {...}}
+  * Behavior: Uses AI to plan and execute any user request. Automatically plans execution steps, handles failures with self-healing, and learns from outcomes. Supports checkpointing for long-running operations.
+  * Examples:
+    - "Find me a web development RFP in the next 24 hours"
+    - "Search state/local procurement portals for website redesign opportunities"
+    - "Download and upload RFP PDFs matching specific criteria"
+  * Note: This is an open-ended job type that can handle virtually any request using available tools
 """
 
 
@@ -169,6 +179,7 @@ Agent Jobs:
 - agent_job_list - List jobs with filtering (status, jobType, rfpId)
 - agent_job_get - Get job details by ID
 - agent_job_query_due - Query due/overdue queued jobs
+- job_plan - Plan a job execution for a user request (returns execution plan before scheduling)
 
 Infrastructure/AWS Tools:
 - dynamodb_* - Query/describe DynamoDB tables
@@ -196,6 +207,67 @@ def _extract_rfp_id(text: str) -> str | None:
     if not m:
         return None
     return str(m.group(1)).strip() or None
+
+
+def _operations_requiring_rfp_scope(question: str) -> bool | None:
+    """
+    Detect if the user's question requires an RFP scope.
+    
+    Returns:
+    - True if the question clearly requires RFP-scoped operations
+    - False if it's clearly a global operation (job scheduling, querying, etc.)
+    - None if unclear (should allow delegation)
+    """
+    q_lower = str(question or "").lower().strip()
+    
+    # Explicit indicators that this is NOT about an existing RFP
+    if any(phrase in q_lower for phrase in [
+        "isn't about an existing rfp",
+        "is not about an existing rfp",
+        "not about a specific rfp",
+        "not about an rfp",
+        "not tied to an rfp",
+        "new rfp",
+        "search for",
+        "find a new",
+        "north star",
+        "runner job",
+        "schedule a job",
+        "create a job",
+        "queue a job",
+    ]):
+        return False
+    
+    # Operations that typically don't require RFP scope
+    if any(phrase in q_lower for phrase in [
+        "schedule job",
+        "agent job",
+        "job list",
+        "job status",
+        "query jobs",
+        "runner",
+    ]):
+        # But check if they mention an RFP - if so, it might be scoped
+        if _extract_rfp_id(question):
+            return True
+        return False
+    
+    # Operations that clearly require RFP scope
+    if any(phrase in q_lower for phrase in [
+        "opportunity",
+        "journal",
+        "state",
+        "patch",
+        "update rfp",
+        "rfp review",
+        "seed tasks",
+        "assign task",
+        "complete task",
+    ]):
+        return True
+    
+    # Default: assume it might need RFP scope (conservative)
+    return None  # None means "unclear, allow delegation"
 
 
 def _fetch_thread_history(*, channel_id: str, thread_ts: str, limit: int = 50) -> str:
@@ -416,6 +488,28 @@ def _agent_job_get_tool(args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "job": job}
     except Exception as e:
         return {"ok": False, "error": str(e) or "job_get_failed"}
+
+
+def _job_plan_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Plan a job execution for a user request."""
+    from .agent_job_planner import plan_job_execution
+    
+    request = str(args.get("request") or "").strip()
+    if not request:
+        return {"ok": False, "error": "missing_request"}
+    
+    context = args.get("context") if isinstance(args.get("context"), dict) else {}
+    rfp_id = str(args.get("rfpId") or "").strip() or None
+    
+    try:
+        result = plan_job_execution(
+            request=request,
+            context=context,
+            rfp_id=rfp_id,
+        )
+        return result
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "planning_failed"}
 
 
 def _agent_job_query_due_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -646,6 +740,23 @@ OPERATOR_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
         ),
         _agent_job_query_due_tool,
     ),
+    "job_plan": (
+        _tool_def(
+            "job_plan",
+            "Plan a job execution for a user request. Returns execution plan with steps, tools, and estimates. Use this before scheduling a job to verify the plan is correct.",
+            {
+                "type": "object",
+                "properties": {
+                    "request": {"type": "string", "description": "User's request/goal", "maxLength": 2000},
+                    "context": {"type": "object", "description": "Additional context (rfpId, channelId, etc.)"},
+                    "rfpId": {"type": "string", "maxLength": 120},
+                },
+                "required": ["request"],
+                "additionalProperties": False,
+            },
+        ),
+        _job_plan_tool,
+    ),
     "create_change_proposal": (
         _tool_def(
             "create_change_proposal",
@@ -788,38 +899,45 @@ def run_slack_operator_for_mention(
             rfp_id = None
 
     if not rfp_id:
-        # No RFP scope: delegate to the conversational read-only Slack agent.
-        # This keeps @mentions responsive without requiring thread binding.
-        try:
-            from .slack_web import chat_post_message_result
-            from .slack_actor_context import resolve_actor_context
+        # Check if this operation requires RFP scope
+        requires_rfp = _operations_requiring_rfp_scope(q)
+        
+        if requires_rfp is False:
+            # This operation clearly doesn't require RFP scope - proceed without it
+            pass  # Continue to operator agent with rfp_id=None
+        else:
+            # Try delegating to conversational agent first (or ask for RFP if required)
+            # This keeps @mentions responsive without requiring thread binding.
+            try:
+                from .slack_web import chat_post_message_result
+                from .slack_actor_context import resolve_actor_context
 
-            ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
-            display_name = ctx.display_name
-            email = ctx.email
-            user_profile = ctx.user_profile
+                ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
+                display_name = ctx.display_name
+                email = ctx.email
+                user_profile = ctx.user_profile
 
-            ans = _sa.run_slack_agent_question(
-                question=q,
-                user_id=user_id,
-                user_display_name=display_name,
-                user_email=email,
-                user_profile=user_profile,
-                channel_id=ch,
-                thread_ts=th,
-            )
-            txt = str(ans.text or "").strip() or "No answer."
-            chat_post_message_result(
-                text=txt,
-                channel=ch,
-                thread_ts=th,
-                blocks=ans.blocks,
-                unfurl_links=False,
-            )
-            return SlackOperatorResult(did_post=True, text=txt, meta={"scoped": False, "delegated": "slack_agent"})
-        except Exception:
-            # Fall through to the binding prompt if anything goes wrong.
-            pass
+                ans = _sa.run_slack_agent_question(
+                    question=q,
+                    user_id=user_id,
+                    user_display_name=display_name,
+                    user_email=email,
+                    user_profile=user_profile,
+                    channel_id=ch,
+                    thread_ts=th,
+                )
+                txt = str(ans.text or "").strip() or "No answer."
+                chat_post_message_result(
+                    text=txt,
+                    channel=ch,
+                    thread_ts=th,
+                    blocks=ans.blocks,
+                    unfurl_links=False,
+                )
+                return SlackOperatorResult(did_post=True, text=txt, meta={"scoped": False, "delegated": "slack_agent"})
+            except Exception:
+                # Fall through to the binding prompt if anything goes wrong.
+                pass
 
         # Ask to include an explicit id or bind the thread; keep it short.
         msg = (
@@ -834,9 +952,11 @@ def run_slack_operator_for_mention(
             chat_post_message_result(text=msg, channel=ch, thread_ts=th, unfurl_links=False)
         except Exception:
             pass
-        return SlackOperatorResult(did_post=True, text=msg, meta={"scoped": False})
-
-    ensure_state_exists(rfp_id=rfp_id)
+            return SlackOperatorResult(did_post=True, text=msg, meta={"scoped": False})
+    
+    # If we have rfp_id, ensure state exists. Otherwise, proceed without it for global operations.
+    if rfp_id:
+        ensure_state_exists(rfp_id=rfp_id)
 
     model = settings.openai_model_for("slack_agent")
     client = _client(timeout_s=75)
@@ -898,10 +1018,15 @@ def run_slack_operator_for_mention(
             "Critical rules:",
             "- Do not treat Slack chat history as truth. Use platform tools + OpportunityState + Journal + Events.",
             "- However, use the thread conversation history below to remember previous context in this thread (channel names, permissions, user preferences, etc.).",
+            "- RFP Scope: Some operations require an RFP scope (opportunity_load, opportunity_patch, journal_append, event_append). Others can be global (schedule_job, agent_job_*, read tools).",
+            "- When the user explicitly states something is NOT about an existing RFP (e.g., 'create a job to search for new RFPs'), proceed without requiring RFP binding.",
             "- Default to silence. If you need to communicate, use `slack_post_summary` (or `slack_ask_clarifying_question` only when blocking).",
-            "- Before posting, update durable artifacts: call `opportunity_patch` and/or `journal_append` so the system remembers.",
+            "- Before posting in RFP-scoped context, update durable artifacts: call `opportunity_patch` and/or `journal_append` so the system remembers.",
             "- Never invent IDs, dates, or commitments. Cite tool output or ask a single clarifying question.",
             "- For code changes: first call `create_change_proposal` (stores a patch + rationale). Then propose an approval-gated action `self_modify_open_pr` with the `proposalId`.",
+            "- Use `schedule_job` to queue jobs for the North Star runner. Jobs can have global scope ({} or {\"env\": \"production\"}) or RFP scope ({\"rfpId\": \"rfp_...\"}).",
+            "- For open-ended user requests (e.g., 'find me a web development RFP', 'search for opportunities'), use job type `ai_agent_execute` with payload `{\"request\": \"user's request\"}`. This universal executor will plan and execute any request using available tools.",
+            "- Use `job_plan` to preview an execution plan before scheduling a job (helps verify the plan is correct).",
             "- Use `agent_job_list` to check job status when users ask about scheduled/running jobs.",
             "- When users ask about their resume, check the user context for resume S3 keys. For PDF or DOCX files, use `extract_resume_text` to extract text content. For plain text files, use `s3_get_object_text`. For binary files that need downloading, use `s3_presign_get` to get a download URL.",
             "- When users ask about their professional background, check both user context (job titles, certifications) and linked team member information (biography, bioProfiles) if available. Use `get_team_member` tool to fetch full team member details if needed.",
@@ -910,8 +1035,13 @@ def run_slack_operator_for_mention(
             f"- channel: {ch}",
             f"- thread_ts: {th}",
             f"- slack_user_id: {str(user_id or '').strip() or '(unknown)'}",
-            f"- rfp_id_scope: {rfp_id}",
+            f"- rfp_id_scope: {rfp_id or '(none - global operations allowed)'}",
             f"- correlation_id: {corr or '(none)'}",
+            "",
+            "When rfp_id_scope is '(none - global operations allowed)':",
+            "- You can use schedule_job, agent_job_*, and read tools without RFP scope.",
+            "- You can use slack_post_summary without RFP scope (just omit rfpId or use a placeholder).",
+            "- Do NOT try to use opportunity_load, opportunity_patch, journal_append, or event_append without RFP scope.",
         ]
     )
     
@@ -930,14 +1060,30 @@ def run_slack_operator_for_mention(
     def _inject_and_enforce(*, tool_name: str, tool_args: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
         """
         Enforce the operator run protocol:
-          - First: opportunity_load
+          - First: opportunity_load (for RFP-scoped operations)
           - Before speaking (slack_post_summary / slack_ask_clarifying_question): write durable artifacts
 
         Also inject correlationId into relevant tool args for traceability.
+        
+        Note: Some tools don't require RFP scope (schedule_job, agent_job_*, read tools).
         """
         nonlocal did_load, did_patch, did_journal
         name = str(tool_name or "").strip()
         args2 = tool_args if isinstance(tool_args, dict) else {}
+
+        # Tools that don't require RFP scope (can be used without opportunity_load)
+        tools_not_requiring_rfp = {
+            "opportunity_load",  # This IS the load operation
+            _sa.ACTION_TOOL_NAME,  # propose_action can be global
+            "schedule_job",  # Can schedule global jobs
+            "agent_job_list",  # Can query jobs without RFP
+            "agent_job_get",  # Job lookup by ID
+            "agent_job_query_due",  # Query due jobs globally
+            "job_plan",  # Job planning tool (doesn't require RFP)
+            "create_change_proposal",  # Can be global
+        }
+        # Also allow all read tools (they're in READ_TOOLS and don't modify state)
+        is_read_tool = name in _sa.READ_TOOLS
 
         # Correlation id propagation (best-effort)
         if corr and isinstance(args2, dict):
@@ -951,16 +1097,19 @@ def run_slack_operator_for_mention(
                     meta["correlationId"] = corr
                 args2["meta"] = meta
 
-        # Load-first protocol (do not allow tool usage without state reconstruction).
-        if name not in ("opportunity_load", _sa.ACTION_TOOL_NAME) and not did_load:
-            return args2, {
-                "ok": False,
-                "error": "protocol_missing_opportunity_load",
-                "hint": "Call opportunity_load first to reconstruct context before using other tools.",
-            }
+        # Load-first protocol (only for RFP-scoped operations).
+        # Skip if no RFP scope OR if tool doesn't require it.
+        if rfp_id and name not in tools_not_requiring_rfp and not is_read_tool and not did_load:
+            # RFP-scoped operation that requires state reconstruction
+            if name not in ("opportunity_load",):
+                return args2, {
+                    "ok": False,
+                    "error": "protocol_missing_opportunity_load",
+                    "hint": "Call opportunity_load first to reconstruct context before using other RFP-scoped tools.",
+                }
 
-        # Write-it-down protocol: before posting/asking, ensure we wrote durable artifacts.
-        if name in ("slack_post_summary", "slack_ask_clarifying_question") and not (did_patch or did_journal):
+        # Write-it-down protocol: before posting/asking in RFP-scoped context, ensure we wrote durable artifacts.
+        if rfp_id and name in ("slack_post_summary", "slack_ask_clarifying_question") and not (did_patch or did_journal):
             return args2, {
                 "ok": False,
                 "error": "protocol_missing_state_write",
@@ -1118,6 +1267,47 @@ def run_slack_operator_for_mention(
                 did_post = True
             except Exception:
                 pass
+        
+        # Store episodic memory for this interaction (best-effort, non-blocking)
+        if actor_user_sub:
+            try:
+                from .agent_memory_hooks import store_episodic_memory_from_agent_interaction
+                # Resolve full actor context for provenance
+                slack_user_id_for_memory = user_id
+                cognito_user_id_for_memory = actor_user_sub  # actor_user_sub should be cognito sub
+                try:
+                    from .slack_actor_context import resolve_actor_context
+                    actor_ctx = resolve_actor_context(slack_user_id=user_id, force_refresh=False)
+                    if actor_ctx.user_sub:
+                        cognito_user_id_for_memory = actor_ctx.user_sub
+                    if actor_ctx.slack_user_id:
+                        slack_user_id_for_memory = actor_ctx.slack_user_id
+                    slack_team_id_for_memory = actor_ctx.slack_team_id
+                except Exception:
+                    slack_team_id_for_memory = None  # Use defaults if resolution fails
+                
+                store_episodic_memory_from_agent_interaction(
+                    user_sub=actor_user_sub,
+                    user_message=q,
+                    agent_response=text or "Action completed",
+                    context={
+                        "rfpId": rfp_id,
+                        "channelId": ch,
+                        "threadTs": th,
+                        "steps": steps,
+                        "didPost": did_post,
+                    },
+                    cognito_user_id=cognito_user_id_for_memory,
+                    slack_user_id=slack_user_id_for_memory,
+                    slack_channel_id=ch,
+                    slack_thread_ts=th,
+                    slack_team_id=slack_team_id_for_memory,
+                    rfp_id=rfp_id,
+                    source="slack_operator",
+                )
+            except Exception:
+                pass  # Non-critical
+        
         return SlackOperatorResult(did_post=did_post, text=None, meta={"steps": steps, "response_format": "chat_tools"})
 
     prev_id: str | None = None

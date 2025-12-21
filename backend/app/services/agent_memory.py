@@ -1,63 +1,50 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from ..ai.context import clip_text
-from .user_profiles_repo import get_user_profile
+from .agent_memory_db import MemoryType, create_memory, list_memories_by_scope
+from .agent_memory_keywords import extract_entities, extract_keywords, extract_tags
+from .agent_memory_opensearch import index_memory
+from .agent_memory_retrieval import get_memories_for_context, retrieve_relevant_memories
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-class MemoryType:
-    """Memory type constants."""
-    EPISODIC = "episodic"  # Specific conversations, decisions, outcomes
-    SEMANTIC = "semantic"  # User preferences, working patterns, domain knowledge
-    PROCEDURAL = "procedural"  # Successful workflows, tool usage patterns
-
-
 def get_user_memory(*, user_sub: str) -> dict[str, Any]:
     """
     Retrieve structured memory for a user.
     Returns a dict with episodic, semantic, and procedural memory.
+    
+    This is a convenience function that queries the new memory database.
     """
-    profile = get_user_profile(user_sub=user_sub)
-    if not profile:
-        return {
-            "episodic": [],
-            "semantic": {},
-            "procedural": [],
-        }
+    scope_id = f"USER#{user_sub}"
     
-    # Extract memory from user profile
-    memory_summary = str(profile.get("aiMemorySummary") or "").strip()
-    preferences = profile.get("aiPreferences")
-    prefs = preferences if isinstance(preferences, dict) else {}
+    # Get recent memories of each type
+    episodic_items, _ = list_memories_by_scope(scope_id=scope_id, memory_type=MemoryType.EPISODIC, limit=20)
+    semantic_items, _ = list_memories_by_scope(scope_id=scope_id, memory_type=MemoryType.SEMANTIC, limit=50)
+    procedural_items, _ = list_memories_by_scope(scope_id=scope_id, memory_type=MemoryType.PROCEDURAL, limit=20)
     
-    # Semantic memory from preferences
-    semantic: dict[str, Any] = {}
-    for key, value in prefs.items():
-        if isinstance(value, (str, int, float, bool)) or value is None:
-            semantic[key] = value
-    
-    # Episodic and procedural memory would be stored separately in a future enhancement
-    # For now, we parse the memory_summary for episodic memories
-    episodic: list[dict[str, Any]] = []
-    if memory_summary:
-        # Simple parsing: treat memory_summary as a single episodic entry
-        # In a full implementation, this would be stored as structured entries
-        episodic.append({
-            "content": memory_summary,
-            "timestamp": profile.get("updatedAt") or _now_iso(),
-            "type": MemoryType.EPISODIC,
-        })
+    # Convert semantic memories to dict format (key-value pairs)
+    semantic_dict: dict[str, Any] = {}
+    for mem in semantic_items:
+        content = mem.get("content", "")
+        # Try to parse semantic memory content (may be JSON or key-value format)
+        # For now, use content as-is or extract from metadata
+        metadata = mem.get("metadata", {})
+        if isinstance(metadata, dict) and "key" in metadata and "value" in metadata:
+            semantic_dict[metadata["key"]] = metadata["value"]
+        elif content:
+            # Fallback: use content as both key and value indicator
+            semantic_dict[content[:100]] = content
     
     return {
-        "episodic": episodic,
-        "semantic": semantic,
-        "procedural": [],
+        "episodic": episodic_items,
+        "semantic": semantic_dict,
+        "procedural": procedural_items,
     }
 
 
@@ -66,23 +53,76 @@ def add_episodic_memory(
     user_sub: str,
     content: str,
     context: dict[str, Any] | None = None,
-) -> None:
+    # Provenance fields
+    cognito_user_id: str | None = None,
+    slack_user_id: str | None = None,
+    slack_channel_id: str | None = None,
+    slack_thread_ts: str | None = None,
+    slack_team_id: str | None = None,
+    rfp_id: str | None = None,
+    source: str | None = None,
+) -> dict[str, Any]:
     """
-    Add an episodic memory (specific conversation, decision, outcome).
-    This updates the user profile's aiMemorySummary.
-    """
-    profile = get_user_profile(user_sub=user_sub)
-    if not profile:
-        return
+    Add an episodic memory (specific conversation, decision, outcome) with full provenance.
     
-    # Update profile (this would need to be done via the profile update mechanism)
-    # For now, this is a placeholder - actual implementation would update the profile
-    # The actual update should be done via the user profile update endpoint/action
-    # existing_memory = str(profile.get("aiMemorySummary") or "").strip()
-    # new_memory = clip_text(content, max_chars=2000)
-    # timestamp = _now_iso()
-    # memory_entry = f"[{timestamp}] {new_memory}"
-    # combined = f"{existing_memory}\n{memory_entry}" if existing_memory else memory_entry
+    Args:
+        user_sub: User identifier (Cognito sub)
+        content: Memory content
+        context: Optional context dict (conversationContext, userMessage, agentAction, outcome, etc.)
+        cognito_user_id: Cognito user identifier (for traceability - typically same as user_sub)
+        slack_user_id: Slack user ID if memory originated from Slack
+        slack_channel_id: Slack channel ID where memory originated
+        slack_thread_ts: Slack thread timestamp where memory originated
+        slack_team_id: Slack team ID
+        rfp_id: RFP identifier if memory is related to an RFP
+        source: Source system (e.g., "slack_agent", "slack_operator", "api", "migration")
+    
+    Returns:
+        Created memory dict
+    """
+    scope_id = f"USER#{user_sub}"
+    
+    # Extract keywords and tags
+    keywords = extract_keywords(content)
+    tags = extract_tags(content, metadata=context)
+    entities = extract_entities(content)
+    keywords.extend(entities)
+    
+    # Build metadata from context
+    metadata: dict[str, Any] = {}
+    if context:
+        metadata.update(context)
+    
+    # Create summary (first 500 chars)
+    summary = clip_text(content, max_chars=500)
+    
+    # Use cognito_user_id if not provided (assume user_sub is cognito sub)
+    final_cognito_user_id = cognito_user_id or user_sub
+    
+    memory = create_memory(
+        memory_type=MemoryType.EPISODIC,
+        scope_id=scope_id,
+        content=content,
+        tags=tags,
+        keywords=keywords,
+        metadata=metadata if metadata else None,
+        summary=summary,
+        cognito_user_id=final_cognito_user_id,
+        slack_user_id=slack_user_id,
+        slack_channel_id=slack_channel_id,
+        slack_thread_ts=slack_thread_ts,
+        slack_team_id=slack_team_id,
+        rfp_id=rfp_id,
+        source=source,
+    )
+    
+    # Index in OpenSearch (async, best-effort)
+    try:
+        index_memory(memory)
+    except Exception:
+        pass  # Non-critical
+    
+    return memory
 
 
 def update_semantic_memory(
@@ -90,14 +130,75 @@ def update_semantic_memory(
     user_sub: str,
     key: str,
     value: Any,
-) -> None:
+    # Provenance fields
+    cognito_user_id: str | None = None,
+    slack_user_id: str | None = None,
+    slack_channel_id: str | None = None,
+    slack_thread_ts: str | None = None,
+    slack_team_id: str | None = None,
+    rfp_id: str | None = None,
+    source: str | None = None,
+) -> dict[str, Any]:
     """
-    Update semantic memory (preferences, patterns, knowledge).
-    This updates the user profile's aiPreferences.
+    Update semantic memory (preferences, patterns, knowledge) with full provenance.
+    
+    Args:
+        user_sub: User identifier (Cognito sub)
+        key: Preference/keyword
+        value: Preference value or knowledge fact
+        cognito_user_id: Cognito user identifier (for traceability - typically same as user_sub)
+        slack_user_id: Slack user ID if memory originated from Slack
+        slack_channel_id: Slack channel ID where memory originated
+        slack_thread_ts: Slack thread timestamp where memory originated
+        slack_team_id: Slack team ID
+        rfp_id: RFP identifier if memory is related to an RFP
+        source: Source system (e.g., "slack_agent", "slack_operator", "api", "migration")
+    
+    Returns:
+        Created/updated memory dict
     """
-    # This would update the user profile's aiPreferences
-    # Actual implementation would use the profile update mechanism
-    pass
+    scope_id = f"USER#{user_sub}"
+    
+    # Format content as key-value pair
+    content = f"{key}: {value}"
+    
+    keywords = extract_keywords(f"{key} {value}")
+    tags = extract_tags(content)
+    tags.append("preference")
+    
+    metadata = {
+        "key": key,
+        "value": value,
+        "lastValidatedAt": _now_iso(),
+    }
+    
+    # Use cognito_user_id if not provided (assume user_sub is cognito sub)
+    final_cognito_user_id = cognito_user_id or user_sub
+    
+    memory = create_memory(
+        memory_type=MemoryType.SEMANTIC,
+        scope_id=scope_id,
+        content=content,
+        tags=tags,
+        keywords=keywords,
+        metadata=metadata,
+        summary=f"{key}: {value}",
+        cognito_user_id=final_cognito_user_id,
+        slack_user_id=slack_user_id,
+        slack_channel_id=slack_channel_id,
+        slack_thread_ts=slack_thread_ts,
+        slack_team_id=slack_team_id,
+        rfp_id=rfp_id,
+        source=source,
+    )
+    
+    # Index in OpenSearch
+    try:
+        index_memory(memory)
+    except Exception:
+        pass
+    
+    return memory
 
 
 def add_procedural_memory(
@@ -106,14 +207,87 @@ def add_procedural_memory(
     workflow: str,
     success: bool,
     context: dict[str, Any] | None = None,
-) -> None:
+    # Provenance fields
+    cognito_user_id: str | None = None,
+    slack_user_id: str | None = None,
+    slack_channel_id: str | None = None,
+    slack_thread_ts: str | None = None,
+    slack_team_id: str | None = None,
+    rfp_id: str | None = None,
+    source: str | None = None,
+) -> dict[str, Any]:
     """
-    Add a procedural memory (successful workflow, tool usage pattern).
-    This would be stored separately from the profile in a future enhancement.
+    Add a procedural memory (successful workflow, tool usage pattern) with full provenance.
+    
+    Args:
+        user_sub: User identifier (Cognito sub)
+        workflow: Workflow description or name
+        success: Whether the workflow was successful
+        context: Optional context (toolSequence, successCriteria, etc.)
+        cognito_user_id: Cognito user identifier (for traceability - typically same as user_sub)
+        slack_user_id: Slack user ID if memory originated from Slack
+        slack_channel_id: Slack channel ID where memory originated
+        slack_thread_ts: Slack thread timestamp where memory originated
+        slack_team_id: Slack team ID
+        rfp_id: RFP identifier if memory is related to an RFP
+        source: Source system (e.g., "slack_agent", "slack_operator", "api", "migration")
+    
+    Returns:
+        Created memory dict
     """
-    # Future: Store procedural memories in a separate table/index
-    # For now, this is a placeholder
-    pass
+    scope_id = f"USER#{user_sub}"
+    
+    content = f"Workflow: {workflow}\nSuccess: {success}"
+    if context:
+        tool_sequence = context.get("toolSequence")
+        if tool_sequence:
+            content += f"\nTools: {', '.join(str(t) for t in tool_sequence)}"
+        success_criteria = context.get("successCriteria")
+        if success_criteria:
+            content += f"\nCriteria: {success_criteria}"
+    
+    keywords = extract_keywords(content)
+    tags = extract_tags(content, metadata=context)
+    tags.append("workflow")
+    if success:
+        tags.append("success")
+    else:
+        tags.append("failure")
+    
+    metadata = {
+        "workflowName": workflow,
+        "success": success,
+    }
+    if context:
+        metadata.update(context)
+    
+    # Use cognito_user_id if not provided (assume user_sub is cognito sub)
+    final_cognito_user_id = cognito_user_id or user_sub
+    
+    memory = create_memory(
+        memory_type=MemoryType.PROCEDURAL,
+        scope_id=scope_id,
+        content=content,
+        tags=tags,
+        keywords=keywords,
+        metadata=metadata,
+        summary=f"Workflow: {workflow} ({'success' if success else 'failure'})",
+        cognito_user_id=final_cognito_user_id,
+        slack_user_id=slack_user_id,
+        slack_channel_id=slack_channel_id,
+        slack_thread_ts=slack_thread_ts,
+        slack_team_id=slack_team_id,
+        rfp_id=rfp_id,
+        source=source,
+    )
+    
+    # Index in OpenSearch
+    try:
+        index_memory(memory)
+    except Exception:
+        pass
+    
+    return memory
 
 
 def compress_memory(
@@ -124,46 +298,22 @@ def compress_memory(
     """
     Compress old memories by summarizing them.
     Returns a summary of old memories that can replace detailed entries.
+    
+    This is a wrapper around the compression module.
     """
-    memory = get_user_memory(user_sub=user_sub)
-    episodic = memory.get("episodic", [])
+    from .agent_memory_compression import compress_old_memories
     
-    if not episodic:
-        return ""
+    scope_id = f"USER#{user_sub}"
+    result = compress_old_memories(
+        scope_id=scope_id,
+        memory_type=MemoryType.EPISODIC,
+        days_old=days_old,
+    )
     
-    # Filter old memories
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days_old)
-    old_memories: list[dict[str, Any]] = []
-    recent_memories: list[dict[str, Any]] = []
-    
-    for mem in episodic:
-        if not isinstance(mem, dict):
-            continue
-        timestamp_str = str(mem.get("timestamp") or "")
-        try:
-            mem_time = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            if mem_time < cutoff:
-                old_memories.append(mem)
-            else:
-                recent_memories.append(mem)
-        except Exception:
-            # If we can't parse timestamp, keep it as recent
-            recent_memories.append(mem)
-    
-    if not old_memories:
-        return ""
-    
-    # Summarize old memories (in a full implementation, this would use AI)
-    summary_parts: list[str] = []
-    for mem in old_memories[:10]:  # Limit to 10 for summary
-        content = str(mem.get("content") or "").strip()
-        if content:
-            summary_parts.append(clip_text(content, max_chars=200))
-    
-    if summary_parts:
-        return f"Summary of older memories: {'; '.join(summary_parts)}"
-    
-    return ""
+    compressed_count = result.get("compressed_count", 0)
+    if compressed_count > 0:
+        return f"Compressed {compressed_count} memories"
+    return "No memories to compress"
 
 
 def search_memory(
@@ -176,45 +326,36 @@ def search_memory(
     """
     Search user memory for relevant entries.
     Returns a list of matching memory entries.
+    
+    Args:
+        user_sub: User identifier
+        query: Search query text
+        memory_types: Optional list of memory types to search (None = all)
+        limit: Maximum number of results
+    
+    Returns:
+        List of matching memory entries
     """
-    memory = get_user_memory(user_sub=user_sub)
-    query_lower = query.lower()
-    results: list[dict[str, Any]] = []
+    scope_id = f"USER#{user_sub}"
     
-    types_to_search = memory_types or [MemoryType.EPISODIC, MemoryType.SEMANTIC, MemoryType.PROCEDURAL]
+    # Convert memory type strings to constants if needed
+    type_constants: list[str] | None = None
+    if memory_types:
+        type_constants = []
+        for mt in memory_types:
+            if hasattr(MemoryType, mt.upper()):
+                type_constants.append(getattr(MemoryType, mt.upper()))
+            else:
+                type_constants.append(mt.upper())
     
-    # Search episodic memory
-    if MemoryType.EPISODIC in types_to_search:
-        episodic = memory.get("episodic", [])
-        for mem in episodic:
-            if not isinstance(mem, dict):
-                continue
-            content = str(mem.get("content") or "").strip().lower()
-            if query_lower in content:
-                results.append({
-                    "type": MemoryType.EPISODIC,
-                    "content": mem.get("content"),
-                    "timestamp": mem.get("timestamp"),
-                })
-                if len(results) >= limit:
-                    break
+    results = retrieve_relevant_memories(
+        scope_id=scope_id,
+        memory_types=type_constants,
+        query_text=query,
+        limit=limit,
+    )
     
-    # Search semantic memory
-    if MemoryType.SEMANTIC in types_to_search and len(results) < limit:
-        semantic = memory.get("semantic", {})
-        for key, value in semantic.items():
-            key_lower = str(key).lower()
-            value_str = str(value).lower()
-            if query_lower in key_lower or query_lower in value_str:
-                results.append({
-                    "type": MemoryType.SEMANTIC,
-                    "key": key,
-                    "value": value,
-                })
-                if len(results) >= limit:
-                    break
-    
-    return results[:limit]
+    return results
 
 
 def format_memory_for_context(
@@ -225,27 +366,51 @@ def format_memory_for_context(
     """
     Format user memory for inclusion in agent context.
     Returns a formatted string optimized for prompts.
+    
+    Args:
+        user_sub: User identifier
+        max_chars: Maximum characters to return
+    
+    Returns:
+        Formatted memory context string
     """
-    memory = get_user_memory(user_sub=user_sub)
+    memories = get_memories_for_context(
+        user_sub=user_sub,
+        limit=10,
+    )
+    
+    if not memories:
+        return ""
+    
     lines: list[str] = []
     
-    # Semantic memory (preferences)
-    semantic = memory.get("semantic", {})
+    # Group by type
+    episodic = [m for m in memories if m.get("memoryType") == MemoryType.EPISODIC]
+    semantic = [m for m in memories if m.get("memoryType") == MemoryType.SEMANTIC]
+    procedural = [m for m in memories if m.get("memoryType") == MemoryType.PROCEDURAL]
+    
+    # Format semantic memories (preferences)
     if semantic:
         lines.append("User preferences (semantic memory):")
-        for key, value in list(semantic.items())[:10]:  # Limit to 10 keys
-            lines.append(f"  - {key}: {value}")
+        for mem in semantic[:10]:
+            summary = mem.get("summary") or mem.get("content", "")
+            lines.append(f"  - {clip_text(summary, max_chars=100)}")
         lines.append("")
     
-    # Episodic memory (recent conversations/decisions)
-    episodic = memory.get("episodic", [])
+    # Format episodic memories (recent conversations/decisions)
     if episodic:
         lines.append("Recent memories (episodic):")
-        for mem in episodic[-5:]:  # Last 5 memories
-            if isinstance(mem, dict):
-                content = str(mem.get("content") or "").strip()
-                if content:
-                    lines.append(f"  - {clip_text(content, max_chars=300)}")
+        for mem in episodic[:5]:
+            summary = mem.get("summary") or mem.get("content", "")
+            lines.append(f"  - {clip_text(summary, max_chars=200)}")
+        lines.append("")
+    
+    # Format procedural memories (workflows)
+    if procedural:
+        lines.append("Known workflows (procedural):")
+        for mem in procedural[:3]:
+            summary = mem.get("summary") or mem.get("content", "")
+            lines.append(f"  - {clip_text(summary, max_chars=150)}")
         lines.append("")
     
     formatted = "\n".join(lines).strip()

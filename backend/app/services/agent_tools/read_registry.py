@@ -26,6 +26,7 @@ from ..skills_store import get_skill_body_text as skills_get_body_text
 from ..tenant_memory_repo import list_blocks as tenant_memory_list
 from ..user_memory_repo import list_blocks as user_memory_list
 from ..workflow_tasks_repo import list_tasks_for_rfp
+from ..agent_memory_tools import get_memory_tools
 from .allowlist import parse_csv, uniq, is_allowed_prefix
 from .aws_cognito import admin_get_user as cognito_admin_get_user
 from .aws_cognito import describe_user_pool as cognito_describe_user_pool
@@ -1091,7 +1092,11 @@ def _github_list_check_runs_tool(args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(e) or "github_failed"}
 
 
+# Merge memory tools into the registry
+_memory_tools = get_memory_tools()
+
 READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
+    **_memory_tools,
     "slack_list_recent_messages": (
         tool_def(
             "slack_list_recent_messages",
@@ -1442,7 +1447,7 @@ READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
     "memory_search": (
         tool_def(
             "memory_search",
-            "Search user+tenant memory blocks by keyword (bounded).",
+            "[LEGACY] Search user+tenant memory blocks by keyword (bounded). For new structured agent memories, use agent_memory_search.",
             {
                 "type": "object",
                 "properties": {

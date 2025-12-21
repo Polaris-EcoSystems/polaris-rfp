@@ -636,10 +636,49 @@ def run_slack_agent_question(
                 out = (completion.choices[0].message.content or "").strip()
                 if not out:
                     raise AiUpstreamError("empty_model_response")
-                return SlackAgentAnswer(
+                answer = SlackAgentAnswer(
                     text=out,
                     meta={"model": model, "steps": steps, "response_format": "chat_tools"},
                 )
+                
+                # Store episodic memory for this interaction (best-effort, non-blocking)
+                user_sub_from_profile = str(user_profile.get("_id") or user_profile.get("userSub") or "").strip() if user_profile else None
+                if user_sub_from_profile:
+                    try:
+                        from .agent_memory_hooks import store_episodic_memory_from_agent_interaction
+                        # Resolve full actor context for provenance
+                        slack_user_id_for_memory = user_id
+                        cognito_user_id_for_memory = user_sub_from_profile  # user_sub should be cognito sub
+                        try:
+                            from .slack_actor_context import resolve_actor_context
+                            actor_ctx = resolve_actor_context(slack_user_id=user_id, force_refresh=False)
+                            if actor_ctx.user_sub:
+                                cognito_user_id_for_memory = actor_ctx.user_sub
+                            if actor_ctx.slack_user_id:
+                                slack_user_id_for_memory = actor_ctx.slack_user_id
+                        except Exception:
+                            pass  # Use defaults if resolution fails
+                        
+                        store_episodic_memory_from_agent_interaction(
+                            user_sub=user_sub_from_profile,
+                            user_message=q,
+                            agent_response=out,
+                            context={
+                                "channelId": channel_id,
+                                "threadTs": thread_ts,
+                                "steps": steps,
+                                "model": model,
+                            },
+                            cognito_user_id=cognito_user_id_for_memory,
+                            slack_user_id=slack_user_id_for_memory,
+                            slack_channel_id=channel_id,
+                            slack_thread_ts=thread_ts,
+                            source="slack_agent",
+                        )
+                    except Exception:
+                        pass  # Non-critical
+                
+                return answer
 
             # Add the assistant tool call message (required by tool protocol)
             try:

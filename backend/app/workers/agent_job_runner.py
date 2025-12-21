@@ -414,6 +414,81 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     completed += 1
                     continue
 
+                if job_type == "ai_agent_execute":
+                    # Universal job executor - can handle any request
+                    from ..services.agent_universal_executor import execute_universal_job
+                    
+                    # Check if resuming from checkpoint
+                    checkpoint_id = str(job.get("checkpointId") or "").strip() or None
+                    resume = bool(checkpoint_id)
+                    
+                    # Execute with timeout handling
+                    job_start_time = time.time()
+                    max_duration = 25 * 60  # 25 minutes (safety margin for ECS task)
+                    
+                    try:
+                        result = execute_universal_job(
+                            job_id=jid,
+                            payload=payload,
+                            rfp_id=rid,
+                            resume=resume,
+                        )
+                        
+                        # Result is a dict, not OrchestrationResult
+                        if not isinstance(result, dict):
+                            fail_job(job_id=jid, error="universal_job_execution_failed: invalid_result_type")
+                            failed += 1
+                            continue
+                        
+                        # Check if we're approaching timeout
+                        elapsed = time.time() - job_start_time
+                        if elapsed > (max_duration - 60):  # 1 minute before timeout
+                            # Save checkpoint and mark job as checkpointed
+                            from ..services.agent_checkpoint import get_latest_checkpoint
+                            latest_checkpoint = get_latest_checkpoint(rfp_id=rid or "rfp_universal_job", job_id=jid)
+                            checkpoint_id = str(latest_checkpoint.get("eventId") or "").strip() if latest_checkpoint else None
+                            mark_checkpointed(job_id=jid, checkpoint_id=checkpoint_id)
+                            # Reschedule job for next run
+                            next_due = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+                            create_job(
+                                job_type="ai_agent_execute",
+                                scope=job.get("scope", {}),
+                                due_at=next_due,
+                                payload=payload,
+                            )
+                            completed += 1
+                            continue
+                        
+                        if result.get("ok"):
+                            complete_job(job_id=jid, result=result)
+                        else:
+                            fail_job(job_id=jid, error=str(result.get("error") or "universal_job_execution_failed"))
+                        completed += 1
+                    except Exception as e:
+                        # On error, try to checkpoint if possible
+                        try:
+                            from ..services.agent_checkpoint import get_latest_checkpoint
+                            latest_checkpoint = get_latest_checkpoint(rfp_id=rid or "rfp_universal_job", job_id=jid)
+                            checkpoint_id = str(latest_checkpoint.get("eventId") or "").strip() if latest_checkpoint else None
+                            if checkpoint_id:
+                                mark_checkpointed(job_id=jid, checkpoint_id=checkpoint_id)
+                                # Reschedule for retry
+                                next_due = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+                                create_job(
+                                    job_type="ai_agent_execute",
+                                    scope=job.get("scope", {}),
+                                    due_at=next_due,
+                                    payload=payload,
+                                )
+                                completed += 1
+                            else:
+                                fail_job(job_id=jid, error=str(e) or "universal_job_execution_failed")
+                                failed += 1
+                        except Exception:
+                            fail_job(job_id=jid, error=str(e) or "universal_job_execution_failed")
+                            failed += 1
+                    continue
+
                 raise RuntimeError(f"unknown_job_type:{job_type or 'unknown'}")
             except Exception as e:
                 failed += 1

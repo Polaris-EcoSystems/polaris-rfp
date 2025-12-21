@@ -386,3 +386,125 @@ def should_retry_with_adjusted_params(
     adjusted["max_tokens"] = max(500, 2000 - (attempt * 500))
     
     return True, adjusted
+
+
+def adaptive_retry_with_alternatives(
+    primary_fn: Callable[[], T],
+    alternatives: list[Callable[[], T]],
+    context: dict[str, Any] | None = None,
+    *,
+    max_retries: int = 3,
+) -> T:
+    """
+    Try primary function, then try alternatives if primary fails.
+    Learn from which alternative succeeds.
+    
+    Args:
+        primary_fn: Primary function to try first
+        alternatives: List of alternative functions to try if primary fails
+        context: Optional context dict for logging/learning
+        max_retries: Maximum retries for primary before trying alternatives
+    
+    Returns:
+        Result from primary or first successful alternative
+    
+    Raises:
+        Last exception if all attempts fail
+    """
+    last_exc: Exception | None = None
+    
+    # Try primary with retries
+    try:
+        return retry_with_classification(
+            primary_fn,
+            max_retries=max_retries,
+        )
+    except Exception as e:
+        last_exc = e
+        classification = classify_error(e)
+        
+        # Only try alternatives if error suggests it would help
+        if not classification.retryable:
+            # Try alternatives for non-retryable errors
+            pass
+        else:
+            # For retryable errors, only try alternatives if we've exhausted retries
+            # (retry_with_classification already did retries)
+            pass
+    
+    # Try alternatives
+    for i, alt_fn in enumerate(alternatives):
+        try:
+            result = alt_fn()
+            log.info(
+                "adaptive_retry_alternative_succeeded",
+                alternative_index=i,
+                context=context,
+            )
+            # TODO: Store success pattern in memory for learning
+            return result
+        except Exception as alt_exc:
+            last_exc = alt_exc
+            log.warning(
+                "adaptive_retry_alternative_failed",
+                alternative_index=i,
+                error=str(alt_exc)[:200],
+            )
+            continue
+    
+    # All attempts failed
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("adaptive_retry_with_alternatives: all attempts failed")
+
+
+def analyze_failure_and_recover(
+    error: Exception,
+    context: dict[str, Any],
+    job_id: str,
+) -> dict[str, Any]:
+    """
+    Analyze failure, determine recovery strategy, execute recovery.
+    Store analysis for future learning.
+    
+    Args:
+        error: The exception that occurred
+        context: Context about the failure (step, tool, args, etc.)
+        job_id: Job ID for tracking
+    
+    Returns:
+        Dict with recovery result
+    """
+    classification = classify_error(error)
+    
+    recovery_strategies: list[str] = []
+    
+    # Determine recovery strategies based on error type
+    if classification.category == ErrorCategory.RATE_LIMIT:
+        recovery_strategies.append("wait_and_retry")
+    elif classification.category == ErrorCategory.NETWORK:
+        recovery_strategies.append("retry_with_backoff")
+    elif classification.category == ErrorCategory.RESOURCE:
+        recovery_strategies.append("simplify_operation")
+    elif classification.category == ErrorCategory.VALIDATION:
+        recovery_strategies.append("refine_approach")
+    
+    log.info(
+        "failure_analysis",
+        job_id=job_id,
+        error_category=classification.category.value,
+        error=str(error)[:200],
+        recovery_strategies=recovery_strategies,
+        context_keys=list(context.keys())[:10],
+    )
+    
+    # TODO: Store failure analysis in memory for learning
+    # TODO: Execute automatic recovery based on strategies
+    
+    return {
+        "analyzed": True,
+        "error_category": classification.category.value,
+        "retryable": classification.retryable,
+        "recovery_strategies": recovery_strategies,
+        "recovered": False,  # Placeholder - actual recovery not implemented yet
+    }

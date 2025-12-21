@@ -26,6 +26,12 @@ class Settings(BaseSettings):
     assets_bucket_name: str | None = Field(
         default=None, validation_alias="ASSETS_BUCKET_NAME"
     )
+    agent_memory_table_name: str | None = Field(
+        default=None, validation_alias="AGENT_MEMORY_TABLE_NAME"
+    )
+    opensearch_endpoint: str | None = Field(
+        default=None, validation_alias="OPENSEARCH_ENDPOINT"
+    )
 
     # Contracting async jobs (SQS + worker)
     contracting_jobs_queue_url: str | None = Field(
