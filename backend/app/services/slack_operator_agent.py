@@ -905,16 +905,20 @@ def _operations_requiring_rfp_scope(question: str) -> bool | None:
         return False
     
     # Operations that clearly require RFP scope
+    # Only return True for specific phrases that unambiguously indicate RFP-scoped write operations
+    # (opportunity_patch, journal_append, event_append require RFP scope)
     if any(phrase in q_lower for phrase in [
-        "opportunity",
-        "journal",
-        "state",
-        "patch",
-        "update rfp",
-        "rfp review",
-        "seed tasks",
-        "assign task",
-        "complete task",
+        "journal entry",  # Adding journal entries
+        "add to journal",  # Adding to journal
+        "append journal",  # Appending to journal
+        "opportunity state",  # OpportunityState operations
+        "update opportunity",  # Updating OpportunityState
+        "patch opportunity",  # Patching OpportunityState
+        "update the opportunity",  # Updating OpportunityState
+        "update opportunity state",  # Updating OpportunityState
+        "patch the opportunity",  # Patching OpportunityState
+        "update rfp",  # Explicit RFP update
+        "update the rfp",  # Explicit RFP update
     ]):
         return True
     

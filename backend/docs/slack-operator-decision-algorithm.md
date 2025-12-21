@@ -80,27 +80,63 @@ Result: `rfp_id` may be `None` (global operations allowed)
 
 ### Step 5: RFP Scope Requirement Detection
 
-Calls `_operations_requiring_rfp_scope(question)` which analyzes the question text:
+Calls `_operations_requiring_rfp_scope(question)` which analyzes the question text using **keyword/phrase matching** in order of priority:
 
-**Returns `False` (no RFP scope needed) for:**
+### Evaluation Order (Priority-Based):
+
+**1. First: Check for explicit "False" indicators** (returns early)
 
 - "new rfp", "brand new", "it's new"
 - "upload the file", "upload this", "can you upload"
 - "search for", "find a new"
-- "schedule a job", "create a job"
 - Bot capability questions ("what can you", "what tools")
-- General queries ("what is", "tell me about", "list", "search")
+- If matched → Returns `False` immediately
 
-**Returns `True` (requires RFP scope) for:**
+**2. Second: Check for job-related operations** (special case)
 
-- "opportunity", "journal", "state", "patch"
-- "update rfp", "rfp review"
-- "seed tasks", "assign task", "complete task"
+- "schedule job", "agent job", "job list", "job status", "query jobs", "runner"
+- **Exception:** If job-related phrase found AND question contains RFP ID (`rfp_...`)
+  - Returns `True` (RFP-scoped job operation)
+- Otherwise → Returns `False` (global job operation)
 
-**Returns `None` (unclear) for:**
+**3. Third: Check for explicit "True" indicators** (RFP-scoped write operation keywords)
 
-- Mentions "rfp", "proposal", "opportunity", "bid" but doesn't match above patterns
-- Default case if no clear indicators
+- **Highly specific phrases that ALWAYS return `True` (very conservative):**
+  - "journal entry" / "add to journal" / "append journal" → `journal_append` requires RFP
+  - "opportunity state" / "update opportunity" / "patch opportunity" → `opportunity_patch` requires RFP
+  - "update rfp" / "update the rfp" → Explicit RFP update operations
+- **Key principle:** Only matches phrases that unambiguously indicate write operations on OpportunityState or Journal (which require `opportunity_load` first)
+- **Removed from True indicators:**
+  - ❌ "opportunity" (too broad - could be read-only queries)
+  - ❌ "journal" (too broad - could be asking "what's in the journal?")
+  - ❌ "state" (too broad - could mean any state)
+  - ❌ "patch" (too broad - could be code patches)
+  - ❌ "rfp review" (read-only, doesn't require RFP scope)
+  - ❌ "seed tasks" / "assign task" / "complete task" (too ambiguous, could be global operations)
+- If matched → Returns `True` immediately
+
+**4. Fourth: Check for RFP-related terms** (ambiguous case)
+
+- If question contains: "rfp", "proposal", "opportunity", or "bid"
+- **Sub-check:** Is it a general query?
+  - If contains: "what is", "tell me about", "show me", "list", "search"
+  - → Returns `False` (general query, no binding needed)
+- Otherwise → Returns `None` (unclear, might need RFP scope)
+
+**5. Default: No matches found**
+
+- Returns `False` (treat as general question, no RFP scope required)
+
+### Key Points:
+
+- **`True` is returned ONLY when:**
+
+  1. Question contains explicit RFP-scoped operation keywords (step 3), OR
+  2. Question mentions job operations AND contains an RFP ID (step 2 exception)
+
+- **The function is conservative:** It only returns `True` when there are clear indicators that an RFP-scoped tool will be needed (`opportunity_load`, `opportunity_patch`, `journal_append`, `event_append`)
+
+- **Default is `False`:** If no clear indicators are found, it assumes a global operation (read-only queries, job scheduling, etc.)
 
 ### Step 6: Decision Tree
 
