@@ -130,7 +130,7 @@ def create_app() -> FastAPI:
     app.include_router(contracting_router, prefix="/api")
     app.include_router(contract_templates_router, prefix="/api")
     app.include_router(client_portal_router, prefix="/api")
-    app.include_router(agents_router, prefix="/api")
+    app.include_router(agents_router, prefix="/api/agents")
 
     # Instrument after routers/middleware are attached.
     instrument_app(app)

@@ -35,7 +35,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-@router.get("/agents/infrastructure")
+@router.get("/infrastructure")
 def get_infrastructure_info() -> dict[str, Any]:
     """
     Get agent infrastructure information.
@@ -79,7 +79,7 @@ def get_infrastructure_info() -> dict[str, Any]:
     }
 
 
-@router.get("/agents/jobs")
+@router.get("/jobs")
 def list_jobs(
     request: Request,
     limit: int = 50,
@@ -119,7 +119,7 @@ def list_jobs(
     }
 
 
-@router.get("/agents/jobs/{job_id}")
+@router.get("/jobs/{job_id}")
 def get_job_detail(job_id: str) -> dict[str, Any]:
     """Get detailed information about a specific agent job."""
     jid = str(job_id or "").strip()
@@ -133,7 +133,7 @@ def get_job_detail(job_id: str) -> dict[str, Any]:
     return {"ok": True, "job": job}
 
 
-@router.post("/agents/jobs")
+@router.post("/jobs")
 def create_job_endpoint(request: Request, body: dict = Body(...)) -> dict[str, Any]:
     """
     Create a new agent job.
@@ -178,7 +178,7 @@ def create_job_endpoint(request: Request, body: dict = Body(...)) -> dict[str, A
     return {"ok": True, "job": job}
 
 
-@router.put("/agents/jobs/{job_id}")
+@router.put("/jobs/{job_id}")
 def update_job_endpoint(job_id: str, request: Request, body: dict = Body(...)) -> dict[str, Any]:
     """
     Update an agent job. Only allowed for queued or checkpointed jobs.
@@ -231,7 +231,7 @@ def update_job_endpoint(job_id: str, request: Request, body: dict = Body(...)) -
     return {"ok": True, "job": updated}
 
 
-@router.delete("/agents/jobs/{job_id}")
+@router.delete("/jobs/{job_id}")
 def delete_job_endpoint(job_id: str) -> dict[str, Any]:
     """
     Delete an agent job permanently. Only works for cancelled, completed, or failed jobs.
@@ -251,7 +251,7 @@ def delete_job_endpoint(job_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail="Failed to delete job")
 
 
-@router.post("/agents/jobs/{job_id}/cancel")
+@router.post("/jobs/{job_id}/cancel")
 def cancel_job_endpoint(job_id: str) -> dict[str, Any]:
     """
     Cancel a job (mark as cancelled). Only works for queued or checkpointed jobs.
@@ -267,7 +267,7 @@ def cancel_job_endpoint(job_id: str) -> dict[str, Any]:
     return {"ok": True, "job": cancelled}
 
 
-@router.get("/agents/activity")
+@router.get("/activity")
 def get_recent_activity(
     hours: int = 24,
     limit: int = 100,
@@ -315,7 +315,7 @@ def get_recent_activity(
     }
 
 
-@router.get("/agents/metrics")
+@router.get("/metrics")
 def get_metrics(
     hours: int = 24,
     operation_type: str | None = None,
@@ -342,7 +342,7 @@ def get_metrics(
     }
 
 
-@router.get("/agents/diagnostics")
+@router.get("/diagnostics")
 def get_diagnostics(
     hours: int = 24,
     rfp_id: str | None = None,
@@ -364,7 +364,7 @@ def get_diagnostics(
     return {"ok": True, **diagnostics}
 
 
-@router.get("/agents/workers")
+@router.get("/workers")
 def get_workers_summary() -> dict[str, Any]:
     """
     Get summary information about worker processes.
