@@ -93,10 +93,24 @@ def handle_event_callback(*, payload: dict[str, Any], background_tasks: Any) -> 
         return SlackDispatchResult(ok=True, response_json={"ok": True})
 
     # DM support - handle direct messages to the bot
+    # Only process DMs (channel_type == "im") that are not bot messages
     if ev_type == "message" and str(ev.get("channel_type") or "").strip() == "im":
+        # Skip bot messages to avoid loops (bot messages have subtype="bot_message" or user_id starting with "B")
+        subtype = str(ev.get("subtype") or "").strip()
+        if subtype == "bot_message":
+            return SlackDispatchResult(ok=True, response_json={"ok": True})
+        
+        user_id = str(ev.get("user") or "").strip() or None
+        # Skip if user_id is missing or is a bot (bot IDs start with "B")
+        if not user_id or user_id.startswith("B"):
+            return SlackDispatchResult(ok=True, response_json={"ok": True})
+        
+        # Only process if agent is enabled
+        if not is_slack_configured() or not bool(settings.slack_agent_enabled):
+            return SlackDispatchResult(ok=True, response_json={"ok": True})
+        
         # Extract message details
         channel = str(ev.get("channel") or "").strip() or None
-        user_id = str(ev.get("user") or "").strip() or None
         thread_ts = str(ev.get("thread_ts") or ev.get("ts") or "").strip() or None
         text = str(ev.get("text") or "").strip()
         text = re.sub(r"<@[^>]+>", "", text).strip()
@@ -107,7 +121,12 @@ def handle_event_callback(*, payload: dict[str, Any], background_tasks: Any) -> 
         if user_id and not slack_allow(key=f"slack_agent_user:{user_id}", limit=8, per_seconds=60):
             return SlackDispatchResult(ok=True, response_json={"ok": True})
         
+        # Add reaction to show we're processing
+        if channel and thread_ts:
+            background_tasks.add_task(ack_reaction, channel=channel, timestamp=thread_ts, emoji="eyes")
+        
         # Handle DM the same way as mentions - use the operator agent
+        # DMs are treated as a continuous conversation per user
         background_tasks.add_task(
             run_slack_operator_for_mention,
             question=text,

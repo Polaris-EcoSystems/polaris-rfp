@@ -2419,6 +2419,29 @@ def run_slack_operator_for_mention(
         build_cross_thread_context,
         build_comprehensive_context,
     )
+    from .user_agent_context import build_user_agent_context
+    
+    # Build user-specific agent context (ties together all interactions with this user)
+    # This creates a "user agent" that has robust context on the user
+    user_agent_ctx = ""
+    if actor_user_sub or user_id:
+        try:
+            user_agent_ctx = build_user_agent_context(
+                slack_user_id=user_id,
+                user_sub=actor_user_sub,
+                user_profile=actor_ctx.user_profile if actor_ctx else None,
+                user_display_name=actor_ctx.display_name if actor_ctx else None,
+                user_email=actor_ctx.email if actor_ctx else None,
+                channel_id=ch,
+                thread_ts=th,
+                current_query=q,
+                rfp_id=rfp_id,
+                include_recent_interactions=True,
+                include_preferences=True,
+                include_work_patterns=True,
+            )
+        except Exception as e:
+            log.warning("user_agent_context_build_failed", user_id=user_id, error=str(e))
     
     # Build comprehensive context with query-aware retrieval
     # Note: token_budget_tracker is None for slack operator (not a long-running job)
@@ -2578,6 +2601,9 @@ def run_slack_operator_for_mention(
         except Exception:
             pass
     
+    # Determine if this is a DM or a channel mention
+    is_dm = ch and ch.startswith("D")  # DM channels start with "D" in Slack
+    
     system = "\n".join(
         [
             "You are Polaris Operator, a general-purpose Slack-connected agent for an RFP→Proposal→Contracting platform.",
@@ -2588,6 +2614,8 @@ def run_slack_operator_for_mention(
             "- You can read and write platform data, schedule jobs, and execute multi-step workflows",
             "- You can handle both simple queries and complex multi-turn operations",
             "- You are aware of user preferences, team member profiles, and collaboration patterns",
+            "- You maintain rich context about each user across all conversations (DMs, mentions, threads)",
+            "- Each user has their own 'agent' with persistent context that grows over time",
             "- You can self-introspect your environment: use infrastructure_config_summary for complete pre-loaded config, ecs_metadata_introspect to discover cluster/service info, logs_discover_for_ecs to find log groups, logs_list_available to see accessible log groups, github_discover_config to find GitHub repo configuration",
             "- When troubleshooting infrastructure issues, ALWAYS start by using introspection tools (infrastructure_config_summary, ecs_metadata_introspect, logs_discover_for_ecs, logs_list_available, github_discover_config) rather than asking users for configuration details",
             "- infrastructure_config_summary provides pre-loaded configuration (GitHub repos, ECS clusters/services, log groups, DynamoDB tables, S3 buckets, etc.) - use this for fast access to static infrastructure metadata",
@@ -2648,9 +2676,20 @@ def run_slack_operator_for_mention(
             "Runtime context:",
             f"- channel: {ch}",
             f"- thread_ts: {th}",
+            f"- is_dm: {is_dm}",
             f"- slack_user_id: {str(user_id or '').strip() or '(unknown)'}",
             f"- rfp_id_scope: {rfp_id or '(none - global operations allowed)'}",
             f"- correlation_id: {corr or '(none)'}",
+            "",
+            "User Context:",
+            "- You have access to USER_AGENT_CONTEXT below, which includes:",
+            "  * Recent interactions with this user across all channels/threads",
+            "  * User preferences, facts, and patterns learned over time",
+            "  * Work patterns and successful procedures for this user",
+            "  * Related context from other conversations",
+            "- Use this context to provide personalized, consistent responses",
+            "- Remember what you've discussed with this user before",
+            "- Build on previous conversations to provide continuity",
             "",
             "When rfp_id_scope is '(none - global operations allowed)':",
             "- You can use schedule_job, agent_job_*, and read tools without RFP scope.",
@@ -2660,6 +2699,12 @@ def run_slack_operator_for_mention(
             SLACK_FORMATTING_GUIDE.strip(),
         ]
     )
+    
+    # Add user-specific agent context (ties together all user interactions)
+    # This is added first to give the agent rich context about the user
+    if user_agent_ctx:
+        system += "\n\n=== USER_AGENT_CONTEXT (Rich Context About This User) ===\n"
+        system += user_agent_ctx + "\n"
     
     # Add comprehensive context (includes all context layers)
     if comprehensive_ctx:
@@ -3083,18 +3128,30 @@ def run_slack_operator_for_mention(
                 except Exception:
                     slack_team_id_for_memory = None  # Use defaults if resolution fails
                 
+                # Store episodic memory with enhanced context
+                # Include conversation type (DM vs mention) and user-specific context
+                memory_context = {
+                    "rfpId": rfp_id,
+                    "channelId": ch,
+                    "threadTs": th,
+                    "steps": steps,
+                    "didPost": did_post,
+                    "isDm": is_dm,
+                    "conversationType": "dm" if is_dm else "mention",
+                    "toolsUsed": tool_names[:10] if tool_names else [],  # Track which tools were used
+                    "maxSteps": max_steps,
+                }
+                
+                # Add RFP context if available
+                if rfp_id:
+                    memory_context["rfpScope"] = True
+                
                 # Store episodic memory
                 store_episodic_memory_from_agent_interaction(
                     user_sub=actor_user_sub,
                     user_message=q,
                     agent_response=text or "Action completed",
-                    context={
-                        "rfpId": rfp_id,
-                        "channelId": ch,
-                        "threadTs": th,
-                        "steps": steps,
-                        "didPost": did_post,
-                    },
+                    context=memory_context,
                     cognito_user_id=cognito_user_id_for_memory,
                     slack_user_id=slack_user_id_for_memory,
                     slack_channel_id=ch,

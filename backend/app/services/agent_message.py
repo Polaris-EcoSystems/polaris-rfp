@@ -60,7 +60,10 @@ class AgentMessage:
     - Reliable tracking and debugging
     - Support for retry and resumption
     """
-    # Message identification
+    # Required fields (must come before fields with defaults)
+    intent: str  # What the user wants (e.g., "answer_question", "update_rfp")
+    
+    # Message identification (fields with defaults)
     request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     correlation_id: str | None = None  # Links related requests
     parent_request_id: str | None = None  # For handoff chains
@@ -68,8 +71,7 @@ class AgentMessage:
     # User context (immutable)
     user_identity: UserIdentity | None = None
     
-    # Request details
-    intent: str  # What the user wants (e.g., "answer_question", "update_rfp")
+    # Payload and context information
     payload: dict[str, Any] = field(default_factory=dict)
     
     # Context information
@@ -111,11 +113,11 @@ class AgentMessage:
             user_identity = UserIdentity(**data["user_identity"])
         
         return cls(
+            intent=data.get("intent", ""),
             request_id=data.get("request_id", str(uuid.uuid4())),
             correlation_id=data.get("correlation_id"),
             parent_request_id=data.get("parent_request_id"),
             user_identity=user_identity,
-            intent=data.get("intent", ""),
             payload=data.get("payload", {}),
             channel_id=data.get("channel_id"),
             thread_ts=data.get("thread_ts"),
@@ -133,11 +135,11 @@ class AgentMessage:
         Preserves user context and creates a parent-child relationship.
         """
         return AgentMessage(
+            intent=intent or self.intent,
             request_id=str(uuid.uuid4()),
             correlation_id=self.correlation_id or self.request_id,
             parent_request_id=self.request_id,
             user_identity=self.user_identity,
-            intent=intent or self.intent,
             payload=payload or self.payload,
             channel_id=self.channel_id,
             thread_ts=self.thread_ts,

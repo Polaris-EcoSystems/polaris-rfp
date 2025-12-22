@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 
 def test_execute_action_update_user_profile_autolinks_from_slack(monkeypatch):
     """
@@ -32,14 +30,25 @@ def test_execute_action_update_user_profile_autolinks_from_slack(monkeypatch):
 
     monkeypatch.setattr(sae, "upsert_user_profile", _fake_upsert)
 
-    # Patch resolve_actor_context at its module import location.
-    from app.services import slack_actor_context as sac
+    # Patch identity_service.resolve_from_slack at its module import location.
+    from app.services import identity_service as ids
+    from app.services.identity_service import UserIdentity
 
-    monkeypatch.setattr(
-        sac,
-        "resolve_actor_context",
-        lambda **kwargs: SimpleNamespace(user_sub="sub_123", email="wes.ladd@polariseco.com"),
-    )
+    def _fake_resolve_from_slack(*, slack_user_id: str | None, **kwargs):
+        if slack_user_id == "U072S0H9318":
+            return UserIdentity(
+                user_sub="sub_123",
+                email="wes.ladd@polariseco.com",
+                display_name=None,
+                user_profile=None,
+                slack_user=None,
+                slack_team_id=None,
+                slack_enterprise_id=None,
+                slack_user_id=slack_user_id,
+            )
+        return UserIdentity()
+
+    monkeypatch.setattr(ids, "resolve_from_slack", _fake_resolve_from_slack)
 
     res = sae.execute_action(
         action_id="sa_test",
