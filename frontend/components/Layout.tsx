@@ -303,18 +303,7 @@ export default function Layout({ children }: LayoutProps) {
     [pathname, t],
   )
 
-  const accountNav: NavItem[] = useMemo(
-    () => [
-      {
-        id: 'profile',
-        label: t('nav.profile'),
-        href: '/profile',
-        icon: UserCircleIcon,
-        current: pathname === '/profile',
-      },
-    ],
-    [pathname, t],
-  )
+  const accountNav: NavItem[] = useMemo(() => [], [pathname, t])
 
   const toolsHasCurrent = toolsNav.some((x) => x.current)
   const toolsVisible = toolsOpen || toolsHasCurrent
@@ -484,15 +473,6 @@ export default function Layout({ children }: LayoutProps) {
               ))}
             </div>
           ) : null}
-        </div>
-
-        <div className="space-y-2">
-          <div className="px-3 text-[11px] font-semibold tracking-wider text-gray-400 uppercase">
-            {t('nav.account')}
-          </div>
-          {accountNav.map((item) => (
-            <NavLink key={item.id} item={item} />
-          ))}
         </div>
       </nav>
 
