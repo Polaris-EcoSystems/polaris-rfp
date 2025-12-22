@@ -84,7 +84,7 @@ def _get_credentials_diagnostics() -> dict[str, Any]:
     
     # Slack
     try:
-        from ..services.slack_secrets import get_bot_token
+        from .slack_web import get_bot_token
         token_present = bool(get_bot_token())
         
         # Try to validate token works
