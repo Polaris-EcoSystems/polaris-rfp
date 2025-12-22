@@ -25,6 +25,7 @@ def _calculate_relevance_score(
     query_scope: str | None = None,
     query_type: str | None = None,
     apply_provenance_trust: bool = True,
+    use_importance: bool = True,
 ) -> float:
     """
     Calculate relevance score for a memory based on query parameters.
@@ -110,6 +111,8 @@ def retrieve_relevant_memories(
     limit: int = 20,
     use_opensearch: bool = True,
     token_budget_tracker: Any | None = None,  # TokenBudgetTracker for budget-aware retrieval
+    min_importance: float | None = None,  # Minimum importance score filter
+    use_importance: bool = True,  # Whether to use importance in relevance scoring
 ) -> list[dict[str, Any]]:
     start_time = time.time()
     """
@@ -229,16 +232,53 @@ def retrieve_relevant_memories(
     if memory_types:
         candidates = [c for c in candidates if c.get("memoryType") in memory_types]
     
+    # Filter by importance if specified
+    if min_importance is not None:
+        try:
+            from .agent_memory_consolidation import calculate_importance_score
+            filtered_candidates: list[dict[str, Any]] = []
+            for memory in candidates:
+                importance = calculate_importance_score(memory=memory)
+                if importance >= min_importance:
+                    filtered_candidates.append(memory)
+            candidates = filtered_candidates
+        except Exception:
+            pass  # If importance calculation fails, skip filtering
+    
     # Calculate relevance scores
     scored_memories: list[tuple[float, dict[str, Any]]] = []
+    query_matched_memory_ids: set[str] = set()
+    
+    # First pass: calculate scores and identify query-matched memories
     for memory in candidates:
         score = _calculate_relevance_score(
             memory=memory,
             query_keywords=query_keywords,
             query_scope=scope_id,
             query_type=memory_types[0] if memory_types else None,
+            use_importance=use_importance,
         )
         scored_memories.append((score, memory))
+        
+        # If score is high, mark as query-matched
+        if score > 0.5:
+            memory_id = memory.get("memoryId")
+            if memory_id:
+                query_matched_memory_ids.add(memory_id)
+    
+    # Second pass: boost scores for memories related to query-matched memories
+    if query_matched_memory_ids:
+        for i, (score, memory) in enumerate(scored_memories):
+            memory_id = memory.get("memoryId")
+            if memory_id in query_matched_memory_ids:
+                continue  # Already query-matched
+            
+            # Check if this memory has relationships to query-matched memories
+            related_ids = memory.get("relatedMemoryIds", [])
+            if related_ids and any(rid in query_matched_memory_ids for rid in related_ids):
+                # Boost score by 20% if related to query-matched memory
+                boosted_score = score * 1.2
+                scored_memories[i] = (min(boosted_score, 1.0), memory)
     
     # Sort by score (descending) and return top N
     scored_memories.sort(key=lambda x: x[0], reverse=True)
@@ -365,6 +405,7 @@ def get_memories_for_context(
             memory=memory,
             query_keywords=query_keywords,
             query_scope=primary_scope_id,
+            use_importance=True,  # Always use importance in context building
         )
         # Bonus for primary scope matches
         memory_scope = memory.get("scopeId", "")

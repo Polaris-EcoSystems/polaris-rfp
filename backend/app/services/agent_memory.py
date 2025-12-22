@@ -514,3 +514,265 @@ def format_memory_for_context(
     
     formatted = "\n".join(lines).strip()
     return clip_text(formatted, max_chars=max_chars)
+
+
+def _calculate_text_similarity(text1: str, text2: str) -> float:
+    """
+    Calculate similarity between two text strings using keyword overlap.
+    
+    Uses Jaccard similarity on keyword sets for a simple but effective measure.
+    
+    Args:
+        text1: First text
+        text2: Second text
+    
+    Returns:
+        Similarity score (0.0 to 1.0, higher is more similar)
+    """
+    if not text1 or not text2:
+        return 0.0
+    
+    # Extract keywords from both texts
+    keywords1 = set(extract_keywords(text1, max_keywords=50))
+    keywords2 = set(extract_keywords(text2, max_keywords=50))
+    
+    if not keywords1 and not keywords2:
+        # Fallback to simple word overlap if no keywords
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        if not words1 and not words2:
+            return 1.0 if text1 == text2 else 0.0
+        intersection = len(words1 & words2)
+        union = len(words1 | words2)
+        return intersection / union if union > 0 else 0.0
+    
+    # Jaccard similarity on keywords
+    intersection = len(keywords1 & keywords2)
+    union = len(keywords1 | keywords2)
+    return intersection / union if union > 0 else 0.0
+
+
+def find_similar_memories(
+    *,
+    user_sub: str,
+    content: str,
+    memory_type: str | None = None,
+    similarity_threshold: float = 0.3,
+    limit: int = 5,
+    scope_id: str | None = None,
+) -> list[tuple[dict[str, Any], float]]:
+    """
+    Find memories similar to the given content using keyword/tag overlap.
+    
+    Args:
+        user_sub: User identifier
+        content: Content to find similar memories for
+        memory_type: Optional memory type to filter by
+        similarity_threshold: Minimum similarity score (0.0 to 1.0)
+        limit: Maximum number of results
+        scope_id: Optional scope override (defaults to USER#{user_sub})
+    
+    Returns:
+        List of (memory_dict, similarity_score) tuples, sorted by similarity (highest first)
+    """
+    if not scope_id:
+        scope_id = f"USER#{user_sub}"
+    
+    # Get candidate memories
+    memory_types = [memory_type] if memory_type else None
+    candidates = retrieve_relevant_memories(
+        scope_id=scope_id,
+        memory_types=memory_types,
+        query_text=content,
+        limit=limit * 3,  # Get more candidates for similarity scoring
+    )
+    
+    # Calculate similarity scores
+    scored: list[tuple[dict[str, Any], float]] = []
+    content_keywords = set(extract_keywords(content, max_keywords=50))
+    
+    for memory in candidates:
+        # Calculate similarity using keyword overlap
+        memory_keywords = set(memory.get("keywords", []))
+        memory_tags = set(memory.get("tags", []))
+        all_memory_terms = memory_keywords | memory_tags
+        
+        # Keyword overlap similarity
+        if content_keywords and all_memory_terms:
+            intersection = len(content_keywords & all_memory_terms)
+            union = len(content_keywords | all_memory_terms)
+            keyword_similarity = intersection / union if union > 0 else 0.0
+        else:
+            keyword_similarity = 0.0
+        
+        # Also calculate text similarity on content
+        memory_content = memory.get("content", "")
+        text_similarity = _calculate_text_similarity(content, memory_content)
+        
+        # Combined similarity (weighted average)
+        combined_similarity = (keyword_similarity * 0.6 + text_similarity * 0.4)
+        
+        if combined_similarity >= similarity_threshold:
+            scored.append((memory, combined_similarity))
+    
+    # Sort by similarity (descending) and return top N
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored[:limit]
+
+
+def find_memory_to_update(
+    *,
+    user_sub: str,
+    content: str,
+    memory_type: str | None = None,
+    similarity_threshold: float = 0.7,
+) -> dict[str, Any] | None:
+    """
+    Find an existing memory that should be updated with new content.
+    
+    This is a convenience function that finds the most similar memory
+    above the similarity threshold, suitable for updating.
+    
+    Args:
+        user_sub: User identifier
+        content: New content to potentially update with
+        memory_type: Optional memory type to filter by
+        similarity_threshold: Minimum similarity to consider for update (default 0.7)
+    
+    Returns:
+        Most similar memory dict if found above threshold, None otherwise
+    """
+    similar = find_similar_memories(
+        user_sub=user_sub,
+        content=content,
+        memory_type=memory_type,
+        similarity_threshold=similarity_threshold,
+        limit=1,
+    )
+    
+    if similar and len(similar) > 0:
+        return similar[0][0]  # Return the memory dict (first element of first tuple)
+    
+    return None
+
+
+def update_existing_memory(
+    *,
+    memory_id: str,
+    memory_type: str,
+    scope_id: str,
+    created_at: str,
+    content: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    reason: str = "Information update",
+    user_sub: str | None = None,
+) -> dict[str, Any]:
+    """
+    Update an existing memory with new information.
+    Tracks update history and reasons.
+    
+    Args:
+        memory_id: Memory identifier
+        memory_type: Memory type
+        scope_id: Scope identifier
+        created_at: Original creation timestamp
+        content: New content (optional)
+        metadata: New metadata to merge (optional)
+        reason: Reason for the update
+        user_sub: User identifier (for provenance)
+    
+    Returns:
+        Updated memory dict
+    
+    Raises:
+        ValueError: If memory not found or update is not significant
+    """
+    from .agent_memory_db import get_memory, update_memory
+    
+    # Get existing memory
+    existing = get_memory(
+        memory_id=memory_id,
+        memory_type=memory_type,
+        scope_id=scope_id,
+        created_at=created_at,
+    )
+    
+    if not existing:
+        raise ValueError(f"Memory not found: {memory_id}")
+    
+    # Check if update is significant (if content is being updated)
+    if content is not None:
+        existing_content = existing.get("content", "")
+        similarity = _calculate_text_similarity(existing_content, content)
+        if similarity > 0.95:
+            raise ValueError("No significant change detected (similarity > 0.95)")
+    
+    # Merge metadata intelligently
+    existing_metadata = existing.get("metadata", {})
+    if not isinstance(existing_metadata, dict):
+        existing_metadata = {}
+    
+    # Get or initialize update history
+    update_history = existing_metadata.get("updateHistory", [])
+    if not isinstance(update_history, list):
+        update_history = []
+    
+    # Add update entry to history
+    update_entry = {
+        "timestamp": _now_iso(),
+        "reason": reason,
+        "previousContent": existing.get("content", "")[:200] if content is not None else None,
+    }
+    update_history.append(update_entry)
+    
+    # Merge new metadata with existing
+    merged_metadata = dict(existing_metadata)
+    if metadata:
+        # Deep merge for nested dicts, but allow overwriting for top-level keys
+        for key, value in metadata.items():
+            if key == "updateHistory":
+                continue  # Don't overwrite update history
+            if isinstance(value, dict) and isinstance(merged_metadata.get(key), dict):
+                merged_metadata[key] = {**merged_metadata[key], **value}
+            else:
+                merged_metadata[key] = value
+    
+    # Update updateHistory in merged metadata
+    merged_metadata["updateHistory"] = update_history
+    
+    # Update keywords and tags if content changed
+    new_tags = None
+    new_keywords = None
+    new_summary = None
+    
+    if content is not None:
+        new_keywords = extract_keywords(content)
+        new_tags = extract_tags(content, metadata=merged_metadata)
+        entities = extract_entities(content)
+        new_keywords.extend(entities)
+        new_summary = clip_text(content, max_chars=500)
+    
+    # Update the memory
+    updated = update_memory(
+        memory_id=memory_id,
+        memory_type=memory_type,
+        scope_id=scope_id,
+        created_at=created_at,
+        content=content,
+        tags=new_tags,
+        keywords=new_keywords,
+        metadata=merged_metadata,
+        summary=new_summary,
+    )
+    
+    if not updated:
+        raise ValueError("Failed to update memory")
+    
+    # Re-index in OpenSearch (best-effort)
+    try:
+        from .agent_memory_opensearch import index_memory
+        index_memory(updated)
+    except Exception:
+        pass  # Non-critical
+    
+    return updated

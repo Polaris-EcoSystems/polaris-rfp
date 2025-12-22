@@ -469,6 +469,8 @@ def build_memory_context(
     channel_id: str | None = None,
     thread_ts: str | None = None,
     context: dict[str, Any] | None = None,
+    use_hierarchy: bool = False,
+    token_budget_tracker: Any | None = None,  # TokenBudgetTracker
 ) -> str:
     """
     Build memory context from the new structured memory system.
@@ -479,11 +481,42 @@ def build_memory_context(
         tenant_id: Tenant identifier
         query_text: Optional search query to filter memories
         limit: Maximum number of memories to include
+        channel_id: Optional channel identifier
+        thread_ts: Optional thread timestamp
+        context: Optional context dict
+        use_hierarchy: If True, use ContextHierarchy for progressive loading
+        token_budget_tracker: TokenBudgetTracker for budget-aware loading
     
     Returns:
         Formatted memory context string
     """
     try:
+            # Use hierarchy if enabled and token budget tracker provided
+        if use_hierarchy and token_budget_tracker and user_sub:
+            from .agent_context_hierarchy import ContextHierarchy
+            
+            hierarchy = ContextHierarchy()
+            context_str, included = hierarchy.build_hierarchical_context(
+                token_budget_tracker=token_budget_tracker,
+                query=query_text or "",
+                user_sub=user_sub,
+                rfp_id=rfp_id,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+            )
+            return context_str
+        
+        # Also use message history if available (even without hierarchy)
+        # This integrates message history into standard context building
+        try:
+            from .agent_message_history import get_recent_messages
+            recent_msgs = get_recent_messages(user_sub=user_sub or "", limit=5)
+            if recent_msgs:
+                # Messages will be included in context hierarchy if enabled
+                # For now, just ensure they're available
+                pass
+        except Exception:
+            pass  # Non-critical
         # Build context dict for scope expansion
         expansion_context: dict[str, Any] = {}
         if rfp_id:

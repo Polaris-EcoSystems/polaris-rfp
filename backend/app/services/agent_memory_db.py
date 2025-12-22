@@ -30,6 +30,7 @@ class MemoryType:
     COLLABORATION_CONTEXT = "COLLABORATION_CONTEXT"  # Team interaction patterns and collaboration context
     TEMPORAL_EVENT = "TEMPORAL_EVENT"  # Time-indexed events and milestones
     ERROR_LOG = "ERROR_LOG"  # Tool/function call errors for debugging and learning
+    MEMORY_BLOCK = "MEMORY_BLOCK"  # Durable, editable memory blocks
 
 
 def _get_memory_table() -> DynamoTable:
@@ -381,6 +382,68 @@ def update_memory(
         return_values="ALL_NEW",
     )
     return _normalize_memory(updated)
+
+
+def find_memory_by_id(
+    *,
+    memory_id: str,
+    scope_ids: list[str] | None = None,
+    memory_types: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """
+    Find a memory by its ID across multiple scopes.
+    
+    This is less efficient than get_memory() but useful when you only have the memory_id.
+    Searches across provided scopes or common scopes if not specified.
+    
+    Args:
+        memory_id: Memory identifier to find
+        scope_ids: Optional list of scope IDs to search (if None, searches common scopes)
+        memory_types: Optional list of memory types to search (if None, searches all types)
+    
+    Returns:
+        Memory dict if found, None otherwise
+    """
+    if not memory_id:
+        return None
+    
+    # Default scopes to search if not provided
+    if not scope_ids:
+        scope_ids = []  # Will search by type only if no scopes provided
+    
+    # Default memory types if not provided
+    if not memory_types:
+        memory_types = [
+            MemoryType.EPISODIC,
+            MemoryType.SEMANTIC,
+            MemoryType.PROCEDURAL,
+            MemoryType.MEMORY_BLOCK,
+        ]
+    
+    # Search by type across all scopes (or globally if no scopes)
+    for memory_type in memory_types:
+        if scope_ids:
+            # Search in specific scopes
+            for scope_id in scope_ids:
+                memories, _ = list_memories_by_scope(
+                    scope_id=scope_id,
+                    memory_type=memory_type,
+                    limit=100,
+                )
+                for mem in memories:
+                    if mem.get("memoryId") == memory_id:
+                        return mem
+        else:
+            # Search by type globally
+            memories, _ = list_memories_by_type(
+                memory_type=memory_type,
+                limit=100,
+            )
+            for mem in memories:
+                if mem.get("memoryId") == memory_id:
+                    return mem
+    
+    return None
 
 
 def delete_memory(*, memory_id: str, memory_type: str, scope_id: str, created_at: str) -> None:

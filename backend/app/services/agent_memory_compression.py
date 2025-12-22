@@ -28,6 +28,7 @@ def compress_old_memories(
     days_old: int = 30,
     min_access_count: int = 0,
     max_memories_per_compression: int = 10,
+    use_compaction_settings: bool = True,
 ) -> dict[str, Any]:
     """
     Compress old memories by summarizing them into a single compressed memory.
@@ -51,6 +52,15 @@ def compress_old_memories(
     """
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_old)
     
+    # Get compaction settings if enabled
+    settings = None
+    if use_compaction_settings:
+        try:
+            from .agent_memory_compaction_settings import get_compaction_settings
+            settings = get_compaction_settings(scope_id=scope_id)
+        except Exception:
+            pass  # Fall back to manual filtering
+    
     # Get old memories
     all_memories, _ = list_memories_by_scope(
         scope_id=scope_id,
@@ -58,7 +68,7 @@ def compress_old_memories(
         limit=100,
     )
     
-    # Filter: old and low access count
+    # Filter: old and low access count, and low importance
     old_memories: list[dict[str, Any]] = []
     for mem in all_memories:
         created_at_str = mem.get("createdAt", "")
@@ -67,17 +77,35 @@ def compress_old_memories(
         
         try:
             created_at = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
-            if created_at.replace(tzinfo=timezone.utc) >= cutoff_date.replace(tzinfo=timezone.utc):
-                continue  # Too recent
+            days_old_mem = (datetime.now(timezone.utc) - created_at.replace(tzinfo=timezone.utc)).days
+            
+            if settings:
+                # Use compaction settings
+                if not settings.should_compress(memory=mem, days_old=days_old_mem):
+                    continue
+            else:
+                # Manual filtering (backward compatible)
+                if created_at.replace(tzinfo=timezone.utc) >= cutoff_date.replace(tzinfo=timezone.utc):
+                    continue  # Too recent
+                
+                access_count = mem.get("accessCount", 0)
+                if access_count > min_access_count:
+                    continue  # Too frequently accessed
+                
+                # Skip already compressed memories
+                if mem.get("compressed", False):
+                    continue
+                
+                # Check importance - skip compression if importance is high
+                try:
+                    from .agent_memory_consolidation import calculate_importance_score
+                    importance = calculate_importance_score(memory=mem, base_access_count=access_count)
+                    if importance > 0.5:  # Skip compression if importance > 0.5
+                        continue
+                except Exception:
+                    pass  # If importance calculation fails, continue with compression
+        
         except Exception:
-            continue
-        
-        access_count = mem.get("accessCount", 0)
-        if access_count > min_access_count:
-            continue  # Too frequently accessed
-        
-        # Skip already compressed memories
-        if mem.get("compressed", False):
             continue
         
         old_memories.append(mem)

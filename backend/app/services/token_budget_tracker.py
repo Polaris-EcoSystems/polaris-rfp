@@ -117,6 +117,19 @@ class TokenBudgetTracker:
         """Check if we can afford an estimated token cost."""
         return self.remaining_tokens() >= estimated_tokens
     
+    def estimate_tokens(self, text: str) -> int:
+        """Estimate token count for text."""
+        return count_tokens(text, model=self.model)
+    
+    def can_add(self, text: str) -> bool:
+        """Check if we can add text without exceeding budget."""
+        estimated = self.estimate_tokens(text)
+        return self.can_afford(estimated)
+    
+    def remaining(self) -> int:
+        """Alias for remaining_tokens() for convenience."""
+        return self.remaining_tokens()
+    
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict for checkpointing."""
         return {
