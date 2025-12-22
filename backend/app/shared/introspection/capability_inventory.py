@@ -285,13 +285,8 @@ def get_inventory() -> CapabilityInventory:
     if _inventory is None:
         _inventory = CapabilityInventory()
         try:
-            _inventory._load_all_capabilities()
+            from .auto_discovery import discover_all_capabilities
+            discover_all_capabilities(_inventory)
         except Exception as e:
             log.warning("failed_to_load_capabilities", error=str(e))
     return _inventory
-
-
-def _load_all_capabilities(self: CapabilityInventory) -> None:
-    """Load all capabilities from tools, skills, domains, repositories."""
-    from .auto_discovery import discover_all_capabilities
-    discover_all_capabilities(self)

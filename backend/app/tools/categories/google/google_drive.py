@@ -235,7 +235,7 @@ def create_google_doc(*, title: str, content: str | None = None, folder_id: str 
         service = build('drive', 'v3', credentials=credentials)
         
         # Create document metadata
-        file_metadata = {
+        file_metadata: dict[str, Any] = {
             'name': title.strip(),
             'mimeType': 'application/vnd.google-apps.document',
         }
@@ -313,7 +313,7 @@ def create_google_folder(*, name: str, parent_folder_id: str | None = None) -> d
         credentials = _get_google_credentials(use_api_key=False)
         service = build('drive', 'v3', credentials=credentials)
         
-        file_metadata = {
+        file_metadata: dict[str, Any] = {
             'name': name.strip(),
             'mimeType': 'application/vnd.google-apps.folder',
         }
@@ -392,7 +392,7 @@ def upload_file_to_drive(
                 mime_type = 'application/octet-stream'
         
         # File metadata
-        file_metadata = {
+        file_metadata: dict[str, Any] = {
             'name': name.strip(),
         }
         

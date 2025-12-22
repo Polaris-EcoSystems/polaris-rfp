@@ -49,8 +49,7 @@ class SkillExecutor:
             if not s3_key:
                 return {"ok": False, "error": "Skill body not found"}
             
-            version = skill_index.get("version", 1)
-            body_text = get_skill_body_text(key=s3_key, version=version)
+            body_text = get_skill_body_text(key=s3_key)
             
             if not body_text:
                 return {"ok": False, "error": "Could not load skill body"}

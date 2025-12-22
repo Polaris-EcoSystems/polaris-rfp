@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.opportunity_state_repo import _merge_state, default_state
+from app.repositories.rfp.opportunity_state_repo import _merge_state, default_state
 
 
 def test_commitments_are_add_only():

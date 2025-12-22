@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from . import s3_assets
+from ...services import s3_assets
 
 
 def skill_body_key(*, skill_id: str, version: int) -> str:

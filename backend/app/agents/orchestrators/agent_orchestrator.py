@@ -73,7 +73,11 @@ class AgentOrchestrator:
         """
         agent = self.get_tool_agent(category)
         if not agent:
-            return {"ok": False, "error": f"Tool agent for category {category} not found"}
+            return AgentResponse(
+                text=f"Tool agent for category {category} not found",
+                errors=[f"tool_agent_not_found: {category}"],
+                metadata={"category": category, "tool_name": tool_name},
+            )
         
         # Create request
         request = AgentRequest(
@@ -95,9 +99,13 @@ class AgentOrchestrator:
                 metadata={"category": category, "tool_name": tool_name},
             )
         
+        result = {}
+        if response.metadata:
+            result = response.metadata.get("result", {})
+        
         return AgentResponse(
             text=f"Tool {tool_name} executed successfully",
-            metadata={"category": category, "tool_name": tool_name, "result": response.metadata.get("result", {})},
+            metadata={"category": category, "tool_name": tool_name, "result": result},
         )
     
     async def invoke_skill_agent(

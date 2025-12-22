@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
-from .agent_memory_db import (
+from ..core.agent_memory_db import (
     MemoryType,
     list_memories_by_scope,
     list_memories_by_type,

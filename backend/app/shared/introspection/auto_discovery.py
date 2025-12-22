@@ -62,8 +62,10 @@ def discover_tools(inventory: CapabilityInventory) -> None:
 def discover_skills(inventory: CapabilityInventory) -> None:
     """Discover and register all skills."""
     try:
-        from ...skills.registry.skills_repo import list_skills
-        skills = list_skills(limit=1000)
+        from ...skills.registry.skills_repo import search_skills
+        # Search with empty query to get all skills
+        skills_result = search_skills(query="", limit=1000)
+        skills = skills_result.get("data", []) if isinstance(skills_result, dict) else []
         
         for skill in skills:
             skill_id = skill.get("skillId") or skill.get("_id") or ""
