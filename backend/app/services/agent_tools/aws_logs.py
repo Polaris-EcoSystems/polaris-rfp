@@ -178,28 +178,45 @@ def list_available_log_groups(*, prefix: str | None = None, limit: int = 50) -> 
     
     This provides introspection capability - agent can discover what log groups exist
     that it might be able to access.
+    
+    Uses pre-loaded infrastructure config when available for faster access.
     """
     lim = max(1, min(200, int(limit or 50)))
     prefix_filter = str(prefix or "").strip() or None
     
-    # First, return allowlisted log groups
+    # Try to use pre-loaded config first
+    try:
+        from ..agent_infrastructure_config import get_infrastructure_config
+        config = get_infrastructure_config()
+        infra_summary = config.get_summary()
+        log_groups_config = infra_summary.get("cloudWatchLogs", {})
+        preloaded_groups = log_groups_config.get("logGroups", [])
+        source = "preloaded"
+    except Exception:
+        preloaded_groups = []
+        source = "runtime"
+    
+    # Merge with allowlist (preloaded should include allowlist, but be safe)
     allowed = _allowed_log_groups()
+    all_groups = list(set(preloaded_groups + allowed))
+    
     result_log_groups: list[str] = []
     
     if prefix_filter:
-        result_log_groups = [lg for lg in allowed if lg.startswith(prefix_filter)]
+        result_log_groups = [lg for lg in all_groups if lg.startswith(prefix_filter)][:lim]
     else:
-        result_log_groups = allowed[:lim]
+        result_log_groups = all_groups[:lim]
     
     result: dict[str, Any] = {
         "ok": True,
         "logGroups": result_log_groups,
-        "source": "allowlist",
+        "source": source,
         "count": len(result_log_groups),
+        "totalAvailable": len(all_groups),
     }
     
     # If we have space and a prefix, try to query CloudWatch Logs API for matching groups
-    # (This helps discover log groups that match patterns even if not explicitly allowlisted)
+    # (Runtime discovery to find groups that may have been created after startup)
     if prefix_filter and len(result_log_groups) < lim:
         try:
             logs = logs_client()
@@ -226,9 +243,10 @@ def list_available_log_groups(*, prefix: str | None = None, limit: int = 50) -> 
                 result["logGroups"] = result_log_groups + discovered
                 result["count"] = len(result["logGroups"])
                 result["discovered"] = discovered
-                result["hint"] = f"Discovered {len(discovered)} additional log groups matching prefix '{prefix_filter}'"
+                result["source"] = f"{source}+runtime_discovery"
+                result["hint"] = f"Discovered {len(discovered)} additional log groups matching prefix '{prefix_filter}' at runtime"
         except Exception:
-            # Non-fatal - just return what we have from allowlist
+            # Non-fatal - just return what we have from pre-loaded config/allowlist
             pass
     
     return result

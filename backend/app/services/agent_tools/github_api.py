@@ -20,11 +20,60 @@ def _allowed_repos() -> list[str]:
 def _require_allowed_repo(repo: str | None) -> str:
     r = str(repo or "").strip() or str(settings.github_repo or "").strip()
     if not r:
-        raise ValueError("missing_repo")
+        # Provide helpful error message with available options
+        allowed = [x for x in _allowed_repos() if x]
+        if allowed:
+            raise ValueError(f"missing_repo - configured repos: {', '.join(allowed)}. Use one of these or set GITHUB_REPO env var.")
+        raise ValueError("missing_repo - GITHUB_REPO not configured. Set GITHUB_REPO environment variable or provide repo parameter.")
     allowed = [x for x in _allowed_repos() if x]
     if allowed and r not in allowed:
-        raise ValueError("repo_not_allowed")
+        raise ValueError(f"repo_not_allowed - {r} not in allowlist. Allowed: {', '.join(allowed)}")
     return r
+
+
+def discover_github_config() -> dict[str, Any]:
+    """
+    Discover GitHub repository configuration from settings/environment.
+    This helps the agent self-introspect what GitHub repo it should use.
+    
+    Uses pre-loaded infrastructure config when available for faster access.
+    """
+    # Try to use pre-loaded config first
+    try:
+        from ..agent_infrastructure_config import get_infrastructure_config
+        config = get_infrastructure_config()
+        infra_summary = config.get_summary()
+        github_info = infra_summary.get("github", {})
+        
+        repo = github_info.get("repo")
+        allowed_repos = github_info.get("allowedRepos", [])
+        token_configured = github_info.get("tokenConfigured", False)
+    except Exception:
+        # Fall back to runtime query if pre-loaded config not available
+        repo = str(settings.github_repo or "").strip() or None
+        allowed_repos = _allowed_repos()
+        token_configured = bool(_token())
+    
+    result: dict[str, Any] = {
+        "ok": True,
+        "githubRepo": repo,
+        "allowedRepos": allowed_repos,
+        "tokenConfigured": token_configured,
+        "source": "preloaded" if "config" in locals() else "runtime",
+    }
+    
+    if repo:
+        result["suggestion"] = f"Use repo '{repo}' for GitHub operations. This is configured in GITHUB_REPO."
+    elif allowed_repos:
+        result["suggestion"] = f"Use one of these allowed repos: {', '.join(allowed_repos)}"
+    else:
+        result["suggestion"] = "No GitHub repo configured. Set GITHUB_REPO environment variable or provide repo parameter in tool calls."
+        result["error"] = "missing_github_repo_config"
+    
+    if not token_configured:
+        result["warning"] = "GitHub token not configured (GITHUB_TOKEN or GH_TOKEN). GitHub API calls will fail."
+    
+    return result
 
 
 def _token() -> str:
@@ -199,7 +248,24 @@ def list_check_runs(*, repo: str | None, ref: str, filter: str = "latest") -> di
 
 
 def create_issue(*, repo: str | None, title: str, body: str | None = None) -> dict[str, Any]:
-    r = _require_allowed_repo(repo)
+    try:
+        r = _require_allowed_repo(repo)
+    except ValueError as e:
+        # Provide helpful error message with discovery info
+        config = discover_github_config()
+        error_msg = str(e)
+        if "missing_repo" in error_msg:
+            suggestion = config.get("suggestion", "Set GITHUB_REPO environment variable or provide repo parameter.")
+            return {
+                "ok": False,
+                "error": "missing_repo",
+                "message": error_msg,
+                "suggestion": suggestion,
+                "configuredRepo": config.get("githubRepo"),
+                "allowedRepos": config.get("allowedRepos", []),
+            }
+        return {"ok": False, "error": str(e)}
+    
     owner, name = _split_repo(r)
     t = str(title or "").strip()
     if not t:

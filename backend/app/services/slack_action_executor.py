@@ -134,13 +134,13 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
         # This removes the need for manual "link Slack user id" for basic personalization.
         if not user_sub and actor_slack:
             try:
-                from .slack_actor_context import resolve_actor_context
+                from .identity_service import resolve_from_slack
 
-                ctx = resolve_actor_context(slack_user_id=actor_slack, slack_team_id=None, slack_enterprise_id=None)
-                if ctx.email:
-                    email_for_write = str(ctx.email).strip().lower() or None
-                if ctx.user_sub:
-                    user_sub = str(ctx.user_sub).strip() or None
+                identity = resolve_from_slack(slack_user_id=actor_slack)
+                if identity.email:
+                    email_for_write = str(identity.email).strip().lower() or None
+                if identity.user_sub:
+                    user_sub = str(identity.user_sub).strip() or None
                     if not profile:
                         if user_sub:
                             profile = get_user_profile(user_sub=user_sub)

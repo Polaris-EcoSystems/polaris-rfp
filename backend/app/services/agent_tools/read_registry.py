@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 import tempfile
+from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable
 
@@ -62,6 +64,7 @@ from ..browser_worker_client import (
 from .github_api import get_pull as github_get_pull
 from .github_api import list_check_runs as github_list_check_runs
 from .github_api import list_pulls as github_list_pulls
+from .github_api import discover_github_config as github_discover_config
 from .slack_read import create_canvas as slack_create_canvas
 from .slack_read import get_thread as slack_get_thread
 from .slack_read import list_recent_messages as slack_list_recent_messages
@@ -107,7 +110,21 @@ def _slim_value(v: Any, *, depth: int = 0, max_depth: int = 3) -> Any:
     """
     Best-effort payload slimming for tool outputs.
     Prevents huge DynamoDB/S3 blobs from flooding the model context.
+    Also ensures JSON serializability by converting datetime/Decimal to strings.
     """
+    # Handle common non-serializable types first
+    if isinstance(v, datetime):
+        try:
+            return v.isoformat().replace("+00:00", "Z")
+        except Exception:
+            return str(v)
+    if isinstance(v, Decimal):
+        # Convert Decimal to float for JSON serialization
+        try:
+            return float(v)
+        except (ValueError, OverflowError):
+            return str(v)
+    
     if depth >= max_depth:
         if isinstance(v, str):
             return clip_text(v, max_chars=600)
@@ -639,7 +656,9 @@ def _get_rfp_tool(args: dict[str, Any]) -> dict[str, Any]:
     r2 = dict(r)
     r2["rawText"] = clip_text(raw, max_chars=9000)
     r2["url"] = _rfp_url(rid)
-    return {"ok": True, "rfp": r2}
+    # Ensure all values are JSON-serializable (handles datetime, Decimal, etc.)
+    r2_slim = _slim_value(r2, depth=0, max_depth=3)
+    return {"ok": True, "rfp": r2_slim if isinstance(r2_slim, dict) else r2}
 
 
 def _list_proposals_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -1134,6 +1153,25 @@ def _github_list_check_runs_tool(args: dict[str, Any]) -> dict[str, Any]:
         return github_list_check_runs(repo=repo, ref=ref, filter=flt)
     except Exception as e:
         return {"ok": False, "error": str(e) or "github_failed"}
+
+
+def _github_discover_config_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Discover GitHub repository configuration from settings/environment."""
+    try:
+        return github_discover_config()
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "github_config_discovery_failed"}
+
+
+def _infrastructure_config_summary_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Get complete infrastructure configuration summary (pre-loaded at startup)."""
+    try:
+        from ..agent_infrastructure_config import get_infrastructure_config
+        config = get_infrastructure_config()
+        summary = config.get_summary()
+        return {"ok": True, **summary}
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "infrastructure_config_failed"}
 
 
 # Merge memory tools into the registry
@@ -2084,6 +2122,32 @@ READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
             },
         ),
         _github_list_check_runs_tool,
+    ),
+    "github_discover_config": (
+        tool_def(
+            "github_discover_config",
+            "Discover GitHub repository configuration from settings/environment. Use this for self-introspection to find what GitHub repo is configured. Returns configured repo, allowed repos, and token status.",
+            {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _github_discover_config_tool,
+    ),
+    "infrastructure_config_summary": (
+        tool_def(
+            "infrastructure_config_summary",
+            "Get complete infrastructure configuration summary (pre-loaded at startup). Returns GitHub repos, ECS clusters/services, CloudWatch log groups, DynamoDB tables, S3 buckets/prefixes, SQS queues, Cognito pools, and Secrets Manager ARNs. This uses pre-loaded configuration for fast access without runtime queries.",
+            {
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _infrastructure_config_summary_tool,
     ),
 }
 

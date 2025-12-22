@@ -87,10 +87,10 @@ def _detect_and_store_collaboration(
             
             # Try to resolve to cognito user ID
             try:
-                from .slack_actor_context import resolve_actor_context
-                user_ctx = resolve_actor_context(slack_user_id=msg_user, force_refresh=False)
-                if user_ctx.user_sub:
-                    participant_cognito_ids.add(user_ctx.user_sub)
+                from .identity_service import resolve_from_slack
+                user_identity = resolve_from_slack(slack_user_id=msg_user)
+                if user_identity.user_sub:
+                    participant_cognito_ids.add(user_identity.user_sub)
             except Exception:
                 pass  # Can't resolve, use slack ID only
         
@@ -634,8 +634,10 @@ Infrastructure/AWS Tools:
 - s3_* - S3 operations (head, presign)
 - telemetry_* - CloudWatch Logs Insights queries
 - logs_discover_for_ecs - Discover log groups for an ECS service (self-introspection)
-- logs_list_available - List available log groups (self-introspection)
+- logs_list_available - List available log groups (self-introspection, uses pre-loaded config)
 - ecs_metadata_introspect - Self-discover ECS task/cluster/service info
+- infrastructure_config_summary - Get complete infrastructure configuration (pre-loaded at startup: GitHub repos, ECS, log groups, DynamoDB, S3, SQS, Cognito, Secrets)
+- github_discover_config - Discover GitHub repo configuration (uses pre-loaded config)
 - browser_* - Browser automation (Playwright)
 - github_* - GitHub API operations
 - aws_ecs_* - ECS service operations
@@ -1777,7 +1779,7 @@ def _slack_ask_tool(args: dict[str, Any]) -> dict[str, Any]:
 def _slack_send_dm_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Send a direct message to a Slack user."""
     from .slack_web import open_dm_channel, chat_post_message_result, get_user_info, lookup_user_id_by_email
-    from .slack_actor_context import resolve_actor_context
+    from .identity_service import resolve_from_slack
     
     user_id = str(args.get("userId") or "").strip()
     text = str(args.get("text") or "").strip()
@@ -1812,7 +1814,7 @@ def _slack_send_dm_tool(args: dict[str, Any]) -> dict[str, Any]:
     # Get additional platform context about the target user (for logging/auditing)
     target_user_ctx = None
     try:
-        target_user_ctx = resolve_actor_context(slack_user_id=resolved_user_id, slack_team_id=None, slack_enterprise_id=None)
+        target_user_identity = resolve_from_slack(slack_user_id=resolved_user_id)
     except Exception:
         # Non-fatal: continue even if platform context resolution fails
         pass
@@ -1840,10 +1842,10 @@ def _slack_send_dm_tool(args: dict[str, Any]) -> dict[str, Any]:
     
     # Include user context information if available (for logging/auditing)
     if target_user_ctx:
-        if target_user_ctx.email:
-            response["userEmail"] = target_user_ctx.email
-        if target_user_ctx.display_name:
-            response["userDisplayName"] = target_user_ctx.display_name
+        if target_user_identity and target_user_identity.email:
+            response["userEmail"] = target_user_identity.email
+        if target_user_identity and target_user_identity.display_name:
+            response["userDisplayName"] = target_user_identity.display_name
     
     return response
 
@@ -2205,13 +2207,23 @@ def run_slack_operator_for_mention(
         return SlackOperatorResult(did_post=False, text=None, meta={"error": "missing_params"})
 
     # Best-effort identity resolution for safer write actions (and future "me" support).
+    # Use unified identity service
     actor_ctx = None
     actor_user_sub = None
     try:
-        from .slack_actor_context import resolve_actor_context
+        from .identity_service import resolve_from_slack
 
-        actor_ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
-        actor_user_sub = actor_ctx.user_sub
+        actor_identity = resolve_from_slack(slack_user_id=user_id)
+        actor_user_sub = actor_identity.user_sub
+        # Create a compatibility object for existing code
+        class _CompatContext:
+            def __init__(self, identity):
+                self.user_sub = identity.user_sub
+                self.email = identity.email
+                self.display_name = identity.display_name
+                self.user_profile = identity.user_profile
+                self.slack_user = identity.slack_user
+        actor_ctx = _CompatContext(actor_identity)
     except Exception:
         actor_user_sub = None
 
@@ -2295,12 +2307,12 @@ def run_slack_operator_for_mention(
             # (even if confidence is low, False means don't ask for RFP scope)
             try:
                 from .slack_web import chat_post_message_result
-                from .slack_actor_context import resolve_actor_context
+                from .identity_service import resolve_from_slack
 
-                ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
-                display_name = ctx.display_name
-                email = ctx.email
-                user_profile = ctx.user_profile
+                identity = resolve_from_slack(slack_user_id=user_id)
+                display_name = identity.display_name
+                email = identity.email
+                user_profile = identity.user_profile
 
                 ans = _sa.run_slack_agent_question(
                     question=q,
@@ -2331,12 +2343,12 @@ def run_slack_operator_for_mention(
             # If confidence is high but still None, we might want to be more cautious
             try:
                 from .slack_web import chat_post_message_result
-                from .slack_actor_context import resolve_actor_context
+                from .identity_service import resolve_from_slack
 
-                ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
-                display_name = ctx.display_name
-                email = ctx.email
-                user_profile = ctx.user_profile
+                identity = resolve_from_slack(slack_user_id=user_id)
+                display_name = identity.display_name
+                email = identity.email
+                user_profile = identity.user_profile
 
                 ans = _sa.run_slack_agent_question(
                     question=q,
@@ -2576,8 +2588,11 @@ def run_slack_operator_for_mention(
             "- You can read and write platform data, schedule jobs, and execute multi-step workflows",
             "- You can handle both simple queries and complex multi-turn operations",
             "- You are aware of user preferences, team member profiles, and collaboration patterns",
-            "- You can self-introspect your environment: use ecs_metadata_introspect to discover cluster/service info, logs_discover_for_ecs to find log groups, logs_list_available to see accessible log groups",
-            "- When troubleshooting infrastructure issues, ALWAYS start by using introspection tools (ecs_metadata_introspect, logs_discover_for_ecs, logs_list_available) rather than asking users for configuration details",
+            "- You can self-introspect your environment: use infrastructure_config_summary for complete pre-loaded config, ecs_metadata_introspect to discover cluster/service info, logs_discover_for_ecs to find log groups, logs_list_available to see accessible log groups, github_discover_config to find GitHub repo configuration",
+            "- When troubleshooting infrastructure issues, ALWAYS start by using introspection tools (infrastructure_config_summary, ecs_metadata_introspect, logs_discover_for_ecs, logs_list_available, github_discover_config) rather than asking users for configuration details",
+            "- infrastructure_config_summary provides pre-loaded configuration (GitHub repos, ECS clusters/services, log groups, DynamoDB tables, S3 buckets, etc.) - use this for fast access to static infrastructure metadata",
+            "- When creating GitHub issues or performing GitHub operations, use github_discover_config or infrastructure_config_summary to find the configured repository name",
+            "- If you encounter AccessDeniedException errors (e.g., CloudWatch Logs), clearly explain what permissions are missing and suggest the IAM policy statement needed. Offer to create a GitHub issue to track the fix.",
             "",
             "Metaprompt Analysis (your thinking about this request):",
             metaprompt if metaprompt else "- Analyzing user request...",
@@ -2621,6 +2636,7 @@ def run_slack_operator_for_mention(
             "- For complex requests: Break down into steps, gather information incrementally, and iterate. Use multi-turn loops to work through the problem systematically.",
             "- Team awareness: You have access to team member profiles, biographies, and project-specific bios. Use `get_team_member` or `list_team_members` when users ask about team capabilities or need to match team members to projects.",
             "- Creating new RFPs from files: When users ask to upload a file as a new RFP opportunity (e.g., 'upload this as a new opportunity', 'create a new RFP from the file above', 'it's brand new'), use `slack_get_thread` to find PDF files in the thread, then use `rfp_create_from_slack_file` with the file URL and name. This does NOT require RFP scope - it creates a NEW RFP.",
+            "- Error handling: When tools fail, always include the full error message, errorType, and errorCategory in your Slack response. Errors are automatically logged to memory for learning, but you must surface them to users so they understand what went wrong and can provide feedback.",
             "",
             "GPT-5.2 Best Practices:",
             "- You are using GPT-5.2 with the Responses API, which supports passing chain of thought (CoT) between turns for improved intelligence.",
@@ -2882,13 +2898,67 @@ def run_slack_operator_for_mention(
                         max_delay=5.0,
                     )
                 except Exception as e:
+                    import traceback
                     classification = classify_error(e)
+                    error_tb = traceback.format_exc()
                     result = {
                         "ok": False,
                         "error": str(e) or "tool_failed",
                         "errorCategory": classification.category.value,
                         "retryable": classification.retryable,
+                        "errorType": type(e).__name__,
+                        "errorDetails": {
+                            "message": str(e),
+                            "category": classification.category.value,
+                            "retryable": classification.retryable,
+                        },
                     }
+                    
+                    # Store error log in memory (best-effort, non-blocking)
+                    try:
+                        from .agent_memory_error_logs import store_error_log
+                        from .identity_service import resolve_from_slack
+                        from .slack_actor_context import resolve_actor_context
+                        
+                        # Resolve actor context for provenance
+                        # Try new identity service first, fall back to old method for compatibility
+                        try:
+                            actor_identity_for_error = resolve_from_slack(slack_user_id=user_id)
+                            cognito_id = actor_identity_for_error.user_sub or actor_user_sub
+                            slack_id = actor_identity_for_error.slack_user_id or user_id
+                            team_id = actor_identity_for_error.slack_team_id
+                        except Exception:
+                            # Fallback to old method if new service fails
+                            try:
+                                actor_ctx_for_error = resolve_actor_context(slack_user_id=user_id, force_refresh=False)
+                                cognito_id = actor_ctx_for_error.user_sub or actor_user_sub
+                                slack_id = actor_ctx_for_error.slack_user_id or user_id
+                                team_id = actor_ctx_for_error.slack_team_id
+                            except Exception:
+                                cognito_id = actor_user_sub
+                                slack_id = user_id
+                                team_id = None
+                        
+                        store_error_log(
+                            tool_name=name,
+                            error_message=str(e) or "tool_failed",
+                            error_type=type(e).__name__,
+                            error_details=result.get("errorDetails"),
+                            tool_args=args if isinstance(args, dict) else {},
+                            tool_result=result,
+                            user_query=q,
+                            traceback_str=error_tb,
+                            user_sub=actor_user_sub,
+                            cognito_user_id=cognito_id,
+                            slack_user_id=slack_id,
+                            slack_channel_id=ch,
+                            slack_thread_ts=th,
+                            slack_team_id=team_id,
+                            rfp_id=rfp_id,
+                            source="slack_operator",
+                        )
+                    except Exception as storage_err:
+                        log.warning("error_log_storage_failed", error=str(storage_err))
 
                 # Track tool failure for learning
                 # Validate tool result structure
@@ -2923,11 +2993,11 @@ def run_slack_operator_for_mention(
                             error_msg = str(result.get("error", "unknown_error")) if isinstance(result, dict) else "tool_failed"
                             # Resolve actor context for provenance (if not already resolved)
                             try:
-                                from .slack_actor_context import resolve_actor_context
-                                actor_ctx_for_failure = resolve_actor_context(slack_user_id=user_id, force_refresh=False)
-                                cognito_id = actor_ctx_for_failure.user_sub or actor_user_sub
-                                slack_id = actor_ctx_for_failure.slack_user_id or user_id
-                                team_id = actor_ctx_for_failure.slack_team_id
+                                from .identity_service import resolve_from_slack
+                                actor_identity_for_failure = resolve_from_slack(slack_user_id=user_id)
+                                cognito_id = actor_identity_for_failure.user_sub or actor_user_sub
+                                slack_id = actor_identity_for_failure.slack_user_id or user_id
+                                team_id = actor_identity_for_failure.slack_team_id
                             except Exception:
                                 cognito_id = actor_user_sub
                                 slack_id = user_id
@@ -3003,13 +3073,13 @@ def run_slack_operator_for_mention(
                 slack_user_id_for_memory = user_id
                 cognito_user_id_for_memory = actor_user_sub  # actor_user_sub should be cognito sub
                 try:
-                    from .slack_actor_context import resolve_actor_context
-                    actor_ctx = resolve_actor_context(slack_user_id=user_id, force_refresh=False)
-                    if actor_ctx.user_sub:
-                        cognito_user_id_for_memory = actor_ctx.user_sub
-                    if actor_ctx.slack_user_id:
-                        slack_user_id_for_memory = actor_ctx.slack_user_id
-                    slack_team_id_for_memory = actor_ctx.slack_team_id
+                    from .identity_service import resolve_from_slack
+                    actor_identity = resolve_from_slack(slack_user_id=user_id)
+                    if actor_identity.user_sub:
+                        cognito_user_id_for_memory = actor_identity.user_sub
+                    if actor_identity.slack_user_id:
+                        slack_user_id_for_memory = actor_identity.slack_user_id
+                    slack_team_id_for_memory = actor_identity.slack_team_id
                 except Exception:
                     slack_team_id_for_memory = None  # Use defaults if resolution fails
                 
@@ -3348,13 +3418,58 @@ def run_slack_operator_for_mention(
                     ),
                 )
             except Exception as e:
+                import traceback
                 classification = classify_error(e)
+                error_tb = traceback.format_exc()
                 result = {
                     "ok": False,
                     "error": str(e) or "tool_failed",
                     "errorCategory": classification.category.value,
                     "retryable": classification.retryable,
+                    "errorType": type(e).__name__,
+                    "errorDetails": {
+                        "message": str(e),
+                        "category": classification.category.value,
+                        "retryable": classification.retryable,
+                    },
                 }
+                
+                # Store error log in memory (best-effort, non-blocking)
+                try:
+                    from .agent_memory_error_logs import store_error_log
+                    from .identity_service import resolve_from_slack
+                    
+                    # Resolve actor context for provenance
+                    try:
+                        actor_identity_for_error = resolve_from_slack(slack_user_id=user_id)
+                        cognito_id = actor_identity_for_error.user_sub or actor_user_sub
+                        slack_id = actor_identity_for_error.slack_user_id or user_id
+                        team_id = actor_identity_for_error.slack_team_id
+                    except Exception:
+                        cognito_id = actor_user_sub
+                        slack_id = user_id
+                        team_id = None
+                    
+                    store_error_log(
+                        tool_name=name,
+                        error_message=str(e) or "tool_failed",
+                        error_type=type(e).__name__,
+                        error_details=result.get("errorDetails"),
+                        tool_args=args if isinstance(args, dict) else {},
+                        tool_result=result,
+                        user_query=q,
+                        traceback_str=error_tb,
+                        user_sub=actor_user_sub,
+                        cognito_user_id=cognito_id,
+                        slack_user_id=slack_id,
+                        slack_channel_id=ch,
+                        slack_thread_ts=th,
+                        slack_team_id=team_id,
+                        rfp_id=rfp_id,
+                        source="slack_operator",
+                    )
+                except Exception as storage_err:
+                    log.warning("error_log_storage_failed", error=str(storage_err))
 
             # Update protocol flags on success.
             if bool(result.get("ok")):

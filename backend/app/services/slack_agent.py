@@ -660,12 +660,12 @@ def run_slack_agent_question(
                         slack_user_id_for_memory = user_id
                         cognito_user_id_for_memory = user_sub_from_profile  # user_sub should be cognito sub
                         try:
-                            from .slack_actor_context import resolve_actor_context
-                            actor_ctx = resolve_actor_context(slack_user_id=user_id, force_refresh=False)
-                            if actor_ctx.user_sub:
-                                cognito_user_id_for_memory = actor_ctx.user_sub
-                            if actor_ctx.slack_user_id:
-                                slack_user_id_for_memory = actor_ctx.slack_user_id
+                            from .identity_service import resolve_from_slack
+                            actor_identity = resolve_from_slack(slack_user_id=user_id)
+                            if actor_identity.user_sub:
+                                cognito_user_id_for_memory = actor_identity.user_sub
+                            if actor_identity.slack_user_id:
+                                slack_user_id_for_memory = actor_identity.slack_user_id
                         except Exception:
                             pass  # Use defaults if resolution fails
                         
@@ -758,14 +758,47 @@ def run_slack_agent_question(
                         max_delay=5.0,
                     )
                 except Exception as e:
+                    import traceback
                     from .agent_resilience import classify_error
                     classification = classify_error(e)
+                    error_tb = traceback.format_exc()
                     result = {
                         "ok": False,
                         "error": str(e) or "tool_failed",
                         "errorCategory": classification.category.value,
                         "retryable": classification.retryable,
+                        "errorType": type(e).__name__,
+                        "errorDetails": {
+                            "message": str(e),
+                            "category": classification.category.value,
+                            "retryable": classification.retryable,
+                        },
                     }
+                    
+                    # Store error log in memory (best-effort, non-blocking)
+                    try:
+                        from .agent_memory_error_logs import store_error_log
+                        
+                        store_error_log(
+                            tool_name=name,
+                            error_message=str(e) or "tool_failed",
+                            error_type=type(e).__name__,
+                            error_details=result.get("errorDetails"),
+                            tool_args=args if isinstance(args, dict) else {},
+                            tool_result=result,
+                            user_query=q,
+                            traceback_str=error_tb,
+                            user_sub=user_id,  # slack_agent doesn't have actor_user_sub
+                            cognito_user_id=None,
+                            slack_user_id=user_id,
+                            slack_channel_id=channel_id,
+                            slack_thread_ts=thread_ts,
+                            slack_team_id=None,
+                            rfp_id=None,
+                            source="slack_agent",
+                        )
+                    except Exception as storage_err:
+                        log.warning("error_log_storage_failed", error=str(storage_err))
                 try:
                     append_event(
                         rfp_id="rfp_slack_agent",
