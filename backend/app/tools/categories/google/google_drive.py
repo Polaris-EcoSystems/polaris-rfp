@@ -12,7 +12,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from ...registry.aws_clients import secretsmanager_client
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 
 log = get_logger("google_drive")
 
