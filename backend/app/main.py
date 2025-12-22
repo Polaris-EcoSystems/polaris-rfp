@@ -33,6 +33,7 @@ from .routers.templates import router as templates_router
 from .routers.ai import router as ai_router
 from .routers.ai_jobs import router as ai_jobs_router
 from .routers.ai_agent import router as ai_agent_router
+from .routers.integrations import router as integrations_router
 from .routers.integrations_canva import router as canva_router
 from .routers.integrations_googledrive import router as googledrive_router
 from .routers.integrations_slack import router as slack_router
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_router, prefix="/api/ai")
     app.include_router(ai_jobs_router, prefix="/api/ai")
     app.include_router(ai_agent_router, prefix="/api/ai")
+    app.include_router(integrations_router, prefix="/api/integrations")
     app.include_router(canva_router, prefix="/api/integrations/canva")
     app.include_router(googledrive_router, prefix="/api/googledrive")
     app.include_router(slack_router, prefix="/api/integrations")

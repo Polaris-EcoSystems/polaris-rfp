@@ -1477,6 +1477,51 @@ export interface AgentJob {
   error?: string
 }
 
+export const integrationsApi = {
+  getStatus: () =>
+    api.get<{
+      ok: boolean
+      integrations: {
+        googleDrive?: {
+          status: 'green' | 'yellow' | 'red'
+          statusMessage: string
+          serviceAccount: {
+            configured: boolean
+            valid: boolean
+            error: string | null
+          }
+          apiKey: {
+            configured: boolean
+            valid: boolean
+            error: string | null
+          }
+          overallError: string | null
+        }
+        canva?: {
+          status: 'green' | 'yellow' | 'red'
+          statusMessage: string
+          connected: boolean
+          error: string | null
+          connection?: Record<string, any>
+        }
+      }
+    }>(proxyUrl('/api/integrations/status')),
+  getActivities: (limit?: number) =>
+    api.get<{
+      ok: boolean
+      activities: Array<{
+        integration: 'canva' | 'googleDrive'
+        type: string
+        tool?: string
+        createdAt: string
+        payload?: Record<string, any>
+      }>
+      count: number
+    }>(proxyUrl('/api/integrations/activities'), {
+      params: limit ? { limit } : undefined,
+    }),
+}
+
 export const agentsApi = {
   getInfrastructure: () =>
     api.get<{
