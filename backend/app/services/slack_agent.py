@@ -500,20 +500,50 @@ def run_slack_agent_question(
     # Deterministic handler for preference questions.
     if _is_whats_my_preferences(q):
         prof = user_profile if isinstance(user_profile, dict) else {}
-        prefs = prof.get("aiPreferences") if isinstance(prof.get("aiPreferences"), dict) else {}
         user_sub = str(prof.get("_id") or prof.get("userSub") or "").strip()
         
-        if isinstance(prefs, dict) and prefs:
+        # Combine preferences from two sources:
+        # 1. User profile aiPreferences (legacy)
+        profile_prefs = prof.get("aiPreferences") if isinstance(prof.get("aiPreferences"), dict) else {}
+        
+        # 2. Semantic memories (preferences stored in memory system)
+        semantic_prefs: dict[str, Any] = {}
+        if user_sub:
+            try:
+                from ..memory.retrieval.agent_memory_retrieval import get_memories_for_context
+                
+                semantic_memories = get_memories_for_context(
+                    user_sub=user_sub,
+                    query_text="preferences",
+                    memory_types=["SEMANTIC"],
+                    limit=50,  # Get all semantic memories (preferences)
+                )
+                
+                # Extract key-value pairs from semantic memories
+                for mem in semantic_memories:
+                    metadata = mem.get("metadata", {})
+                    if isinstance(metadata, dict):
+                        key = metadata.get("key", "")
+                        value = metadata.get("value")
+                        if key:
+                            semantic_prefs[key] = value
+            except Exception as e:
+                log.warning("semantic_preferences_retrieval_failed", user_sub=user_sub, error=str(e))
+        
+        # Merge preferences (semantic memories take precedence over profile prefs)
+        all_prefs = {**profile_prefs, **semantic_prefs}
+        
+        if isinstance(all_prefs, dict) and all_prefs:
             try:
                 # Format preferences nicely for display
-                prefs_str = json.dumps(prefs, ensure_ascii=False, indent=2)
+                prefs_str = json.dumps(all_prefs, ensure_ascii=False, indent=2)
                 return SlackAgentAnswer(
                     text=f"Here are your saved preferences:\n\n```\n{prefs_str}\n```"
                 )
             except Exception:
                 # Fallback to simple format if JSON serialization fails
                 pref_lines = []
-                for k, v in prefs.items():
+                for k, v in all_prefs.items():
                     if isinstance(v, str):
                         pref_lines.append(f"• {k}: {v}")
                     else:
