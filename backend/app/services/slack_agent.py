@@ -504,7 +504,8 @@ def run_slack_agent_question(
         
         # Combine preferences from two sources:
         # 1. User profile aiPreferences (legacy)
-        profile_prefs = prof.get("aiPreferences") if isinstance(prof.get("aiPreferences"), dict) else {}
+        profile_prefs_raw = prof.get("aiPreferences")
+        profile_prefs: dict[str, Any] = profile_prefs_raw if isinstance(profile_prefs_raw, dict) else {}
         
         # 2. Semantic memories (preferences stored in memory system)
         semantic_prefs: dict[str, Any] = {}
@@ -531,7 +532,7 @@ def run_slack_agent_question(
                 log.warning("semantic_preferences_retrieval_failed", user_sub=user_sub, error=str(e))
         
         # Merge preferences (semantic memories take precedence over profile prefs)
-        all_prefs = {**profile_prefs, **semantic_prefs}
+        all_prefs: dict[str, Any] = {**profile_prefs, **semantic_prefs}
         
         if isinstance(all_prefs, dict) and all_prefs:
             try:
