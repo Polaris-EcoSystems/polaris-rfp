@@ -75,7 +75,7 @@ def run_rfp_onboarding_workflow(
             elif rfp_url:
                 try:
                     import requests
-                    response = requests.get(rfp_url, timeout=30, max_redirects=5)
+                    response = requests.get(rfp_url, timeout=30, allow_redirects=True)
                     response.raise_for_status()
                     pdf_data = response.content
                     steps_completed.append("downloaded_from_url")

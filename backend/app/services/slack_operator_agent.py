@@ -1812,7 +1812,7 @@ def _slack_send_dm_tool(args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "user_not_found", "userId": resolved_user_id, "hint": "Could not find Slack user with the provided identifier"}
     
     # Get additional platform context about the target user (for logging/auditing)
-    target_user_ctx = None
+    target_user_identity = None
     try:
         target_user_identity = resolve_from_slack(slack_user_id=resolved_user_id)
     except Exception:
@@ -1841,10 +1841,10 @@ def _slack_send_dm_tool(args: dict[str, Any]) -> dict[str, Any]:
     }
     
     # Include user context information if available (for logging/auditing)
-    if target_user_ctx:
-        if target_user_identity and target_user_identity.email:
+    if target_user_identity:
+        if target_user_identity.email:
             response["userEmail"] = target_user_identity.email
-        if target_user_identity and target_user_identity.display_name:
+        if target_user_identity.display_name:
             response["userDisplayName"] = target_user_identity.display_name
     
     return response
@@ -1897,16 +1897,14 @@ def _opportunity_link_drive_file_tool(args: dict[str, Any]) -> dict[str, Any]:
         
         append_entry(
             rfp_id=rfp_id,
-            entry={
-                "text": journal_text,
+            what_changed=journal_text,
+            meta={
+                "fileId": file_id,
+                "fileName": file_name,
+                "folderId": folder_id,
+                "category": category,
+                "webViewLink": web_view_link,
                 "type": "file_linked",
-                "metadata": {
-                    "fileId": file_id,
-                    "fileName": file_name,
-                    "folderId": folder_id,
-                    "category": category,
-                    "webViewLink": web_view_link,
-                },
             },
         )
         

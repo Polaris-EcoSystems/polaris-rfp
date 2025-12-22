@@ -85,30 +85,24 @@ def get_channel_by_rfp(*, rfp_id: str) -> dict[str, Any] | None:
         return None
     
     # Query GSI1 for the RFP
+    from boto3.dynamodb.conditions import Attr, Key
+    
     table = get_main_table()
-    results = table.query(
+    page = table.query_page(
         index_name="GSI1",
-        key_condition_expression="gsi1pk = :pk AND begins_with(gsi1sk, :sk)",
-        expression_attribute_values={
-            ":pk": "TYPE#SLACK_CHANNEL_PROJECT",
-            ":sk": f"{_now_iso()[:10]}#{rid}",  # Match by date prefix and RFP ID
-        },
+        key_condition_expression=Key("gsi1pk").eq("TYPE#SLACK_CHANNEL_PROJECT") & Key("gsi1sk").begins_with(f"{_now_iso()[:10]}#{rid}"),
         limit=1,
     )
     
     # Also try without date prefix for broader search
-    if not results:
-        results = table.query(
+    if not page.items:
+        page = table.query_page(
             index_name="GSI1",
-            key_condition_expression="gsi1pk = :pk",
-            filter_expression="rfpId = :rid",
-            expression_attribute_values={
-                ":pk": "TYPE#SLACK_CHANNEL_PROJECT",
-                ":rid": rid,
-            },
+            key_condition_expression=Key("gsi1pk").eq("TYPE#SLACK_CHANNEL_PROJECT"),
+            filter_expression=Attr("rfpId").eq(rid),
             limit=1,
         )
     
-    if results:
-        return normalize(results[0])
+    if page.items:
+        return normalize(page.items[0])
     return None
