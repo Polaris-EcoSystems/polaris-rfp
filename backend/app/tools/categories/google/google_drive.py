@@ -734,3 +734,85 @@ def delete_google_file(*, file_id: str, permanent: bool = False) -> dict[str, An
     except Exception as e:
         log.error("delete_google_file_failed", error=str(e))
         return {"ok": False, "error": str(e)}
+
+
+def share_google_file(
+    *,
+    file_id: str,
+    email: str | None = None,
+    role: str = "writer",
+    allow_anyone_with_link: bool = True,
+) -> dict[str, Any]:
+    """
+    Share a Google Drive file or folder with users.
+    
+    Args:
+        file_id: File or folder ID
+        email: Optional email address to share with (if None, only makes link-accessible)
+        role: Permission role ('reader', 'writer', 'commenter', 'owner')
+        allow_anyone_with_link: If True, makes file accessible to anyone with the link
+    
+    Returns:
+        Dict with 'ok', 'fileId', 'shared'
+    """
+    if not file_id:
+        return {"ok": False, "error": "file_id is required"}
+    
+    try:
+        credentials = _get_google_credentials(use_api_key=False)
+        service = build('drive', 'v3', credentials=credentials)
+        
+        shared = False
+        
+        # Share with specific email if provided
+        if email and email.strip():
+            try:
+                permission = {
+                    'type': 'user',
+                    'role': role,
+                    'emailAddress': email.strip().lower(),
+                }
+                service.permissions().create(
+                    fileId=file_id,
+                    body=permission,
+                    fields='id',
+                ).execute()
+                shared = True
+                log.info("shared_file_with_email", file_id=file_id, email=email, role=role)
+            except Exception as e:
+                log.warning("failed_to_share_with_email", file_id=file_id, email=email, error=str(e))
+        
+        # Make accessible to anyone with the link
+        if allow_anyone_with_link:
+            try:
+                permission = {
+                    'type': 'anyone',
+                    'role': 'reader',  # Anyone with link can view
+                }
+                service.permissions().create(
+                    fileId=file_id,
+                    body=permission,
+                    fields='id',
+                ).execute()
+                shared = True
+                log.info("made_file_link_accessible", file_id=file_id)
+            except Exception as e:
+                log.warning("failed_to_make_link_accessible", file_id=file_id, error=str(e))
+        
+        return {
+            "ok": True,
+            "fileId": file_id,
+            "shared": shared,
+            "email": email if email else None,
+            "linkAccessible": allow_anyone_with_link,
+        }
+    
+    except HttpError as e:
+        error_details = json.loads(e.content.decode('utf-8')) if e.content else {}
+        error_msg = error_details.get('error', {}).get('message', str(e))
+        log.error("google_drive_share_error", error=error_msg)
+        return {"ok": False, "error": f"Google Drive API error: {error_msg}"}
+    
+    except Exception as e:
+        log.error("share_google_file_failed", error=str(e))
+        return {"ok": False, "error": str(e)}

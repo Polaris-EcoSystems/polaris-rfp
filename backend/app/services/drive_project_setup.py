@@ -8,7 +8,7 @@ from typing import Any
 
 from ..observability.logging import get_logger
 from ..repositories.rfp.rfps_repo import get_rfp_by_id
-from ..tools.categories.google.google_drive import create_google_folder
+from ..tools.categories.google.google_drive import create_google_folder, share_google_file
 from .slack_channel_projects_repo import get_channel_project, set_channel_project
 
 log = get_logger("drive_project_setup")
@@ -92,6 +92,17 @@ def setup_project_folders(
         if not root_folder_id:
             return {"ok": False, "error": "Root folder created but no folder ID returned"}
         
+        # Share the root folder so users can access it
+        # Make it accessible to anyone with the link (users can access via the folder URL)
+        share_result = share_google_file(
+            file_id=root_folder_id,
+            allow_anyone_with_link=True,
+        )
+        if not share_result.get("ok"):
+            log.warning("failed_to_share_root_folder", rfp_id=rid, root_folder_id=root_folder_id, error=share_result.get("error"))
+        else:
+            log.info("shared_root_folder", rfp_id=rid, root_folder_id=root_folder_id)
+        
         # Create subfolders
         folders: dict[str, str] = {"root": root_folder_id}
         errors: list[str] = []
@@ -105,6 +116,11 @@ def setup_project_folders(
             if folder_result.get("ok"):
                 folder_id = folder_result.get("folderId")
                 if folder_id:
+                    # Share subfolder so users can access it
+                    share_google_file(
+                        file_id=folder_id,
+                        allow_anyone_with_link=True,
+                    )
                     # Map folder name to key
                     folder_key = folder_name.lower().replace(" ", "")
                     folders[folder_key] = folder_id

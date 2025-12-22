@@ -638,6 +638,19 @@ def get_drive_folder(id: str):
                 "folderUrl": None,
             }
         
+        # Ensure folder is shared (for existing folders that may not have been shared)
+        try:
+            from ..tools.categories.google.google_drive import share_google_file
+            share_result = share_google_file(
+                file_id=root_folder_id,
+                allow_anyone_with_link=True,
+            )
+            if not share_result.get("ok"):
+                log.warning("failed_to_share_existing_folder", rfp_id=id, root_folder_id=root_folder_id, error=share_result.get("error"))
+        except Exception as e:
+            log.warning("error_sharing_existing_folder", rfp_id=id, root_folder_id=root_folder_id, error=str(e))
+            # Continue anyway - folder URL will still be returned
+        
         # Construct Google Drive folder URL
         folder_url = f"https://drive.google.com/drive/folders/{root_folder_id}"
         
