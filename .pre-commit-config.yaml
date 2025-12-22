@@ -17,7 +17,7 @@ repos:
     hooks:
       - id: backend-mypy
         name: backend mypy (uses backend/.venv)
-        entry: bash -lc "cd backend && . .venv/bin/activate && mypy app"
+        entry: bash -lc "cd backend && . .venv/bin/activate && .venv/bin/mypy app"
         language: system
         pass_filenames: false
         stages: [pre-push]
