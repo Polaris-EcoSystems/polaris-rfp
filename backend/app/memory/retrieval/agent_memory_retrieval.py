@@ -11,9 +11,9 @@ from ..core.agent_memory_db import (
     list_memories_by_type,
     update_memory_access,
 )
-from .agent_memory_keywords import extract_keywords
+from ..core.agent_memory_keywords import extract_keywords
 from .agent_memory_opensearch import search_memories
-from .agent_memory_scope_expansion import expand_scopes_contextually
+from ..core.agent_memory_scope_expansion import expand_scopes_contextually
 from ...observability.logging import get_logger
 
 log = get_logger("agent_memory_retrieval")
