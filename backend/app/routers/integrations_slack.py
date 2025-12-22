@@ -617,96 +617,124 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
         }
 
     if sub in ("diag", "diagnostics"):
-        # Lightweight health + permissions probe.
-        token_present = bool(get_bot_token())
-        auth = slack_api_get(method="auth.test", params={}) if token_present else {"ok": False, "error": "missing_token"}
-        user_info = slack_api_get(method="users.info", params={"user": user_id}) if (token_present and user_id) else {"ok": False, "error": "missing_user_id"}
-        # Attempt email presence if users.info worked.
-        email = None
+        # Comprehensive diagnostics including credentials, infrastructure, tools, and capabilities
         try:
-            if bool(user_info.get("ok")):
-                u_raw = user_info.get("user")
-                u: dict[str, Any] = u_raw if isinstance(u_raw, dict) else {}
-                prof_raw = u.get("profile")
-                prof: dict[str, Any] = prof_raw if isinstance(prof_raw, dict) else {}
-                email = str(prof.get("email") or "").strip().lower() or None
-        except Exception:
-            email = None
-
-        ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
-
-        # Google Drive credentials status
-        google_drive_status = "unknown"
-        google_drive_error = None
-        try:
-            from ..services.agent_infrastructure_config import get_infrastructure_config
-            infra_config = get_infrastructure_config()
-            infra_summary = infra_config.get_summary()
-            gd_info = infra_summary.get("googleDrive", {})
-            service_account_ok = bool(gd_info.get("serviceAccountConfigured"))
-            api_key_ok = bool(gd_info.get("apiKeyConfigured"))
-            credentials_valid = bool(gd_info.get("credentialsValid"))
+            from ..services.comprehensive_diagnostics import get_comprehensive_diagnostics, format_diagnostics_for_slack
             
-            if credentials_valid:
-                if service_account_ok:
-                    google_drive_status = "service_account"
-                elif api_key_ok:
-                    google_drive_status = "api_key"
-                else:
-                    google_drive_status = "unknown"
-            else:
-                google_drive_status = "invalid"
-                google_drive_error = gd_info.get("error")
+            # Get comprehensive diagnostics
+            diagnostics = get_comprehensive_diagnostics()
+            
+            # Format for Slack
+            lines = format_diagnostics_for_slack(diagnostics)
+            
+            # Add Slack-specific diagnostics
+            token_present = bool(get_bot_token())
+            auth = slack_api_get(method="auth.test", params={}) if token_present else {"ok": False, "error": "missing_token"}
+            user_info = slack_api_get(method="users.info", params={"user": user_id}) if (token_present and user_id) else {"ok": False, "error": "missing_user_id"}
+            
+            # Attempt email presence if users.info worked.
+            email = None
+            try:
+                if bool(user_info.get("ok")):
+                    u_raw = user_info.get("user")
+                    u: dict[str, Any] = u_raw if isinstance(u_raw, dict) else {}
+                    prof_raw = u.get("profile")
+                    prof: dict[str, Any] = prof_raw if isinstance(prof_raw, dict) else {}
+                    email = str(prof.get("email") or "").strip().lower() or None
+            except Exception:
+                email = None
+            
+            ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
+            
+            # Prepend Slack-specific info
+            slack_lines = [
+                "*Polaris Slack Diagnostics*",
+                "",
+                "*🔗 Slack Connection*",
+                f"- slack_enabled: `{bool(settings.slack_enabled)}`",
+                f"- slack_agent_enabled: `{bool(settings.slack_agent_enabled)}`",
+                f"- slack_agent_actions_enabled: `{bool(settings.slack_agent_actions_enabled)}`",
+                f"- bot_token_present: `{token_present}`",
+                f"- auth.test: `{bool(auth.get('ok'))}`" + (f" (error `{auth.get('error')}`)" if not auth.get("ok") else ""),
+                f"- users.info: `{bool(user_info.get('ok'))}`" + (f" (error `{user_info.get('error')}`)" if not user_info.get("ok") else ""),
+                f"- email_visible: `{bool(email)}`",
+                "",
+                "*👤 Identity Mapping*",
+                f"- slack_user_id: `{user_id}`",
+                f"- display_name: `{ctx.display_name or ''}`",
+                f"- email: `{ctx.email or ''}`",
+                f"- user_sub: `{ctx.user_sub or ''}`",
+                f"- user_profile_resolved: `{bool(ctx.user_profile)}`",
+                "",
+            ]
+            
+            lines = slack_lines + lines
+            
+            # Add tips
+            lines.extend([
+                "",
+                "*💡 Tips*",
+                "- If `users.info` fails with `missing_scope`, add `users:read` (and `users:read.email` for email mapping), then reinstall.",
+                "- If posting fails with `not_in_channel`, invite the bot to the channel.",
+                "- Check credentials section above for API key status.",
+                "- Use `/polaris diag` to see this full diagnostic report.",
+            ])
+            
+            # Log diagnostics event
+            try:
+                append_event(
+                    rfp_id="rfp_slack_agent",
+                    type="slack_diagnostics",
+                    payload={
+                        "authOk": bool(auth.get("ok")),
+                        "usersInfoOk": bool(user_info.get("ok")),
+                        "emailVisible": bool(email),
+                        "userSubResolved": bool(ctx.user_sub),
+                    },
+                    inputs_redacted={"channelId": channel_id, "slackUserId": user_id},
+                    created_by="slack_commands",
+                )
+            except Exception:
+                pass
+                
         except Exception as e:
-            google_drive_status = "error"
-            google_drive_error = str(e)[:200]
-
-        lines = [
-            "*Polaris Slack diagnostics*",
-            f"- slack_enabled: `{bool(settings.slack_enabled)}`",
-            f"- slack_agent_enabled: `{bool(settings.slack_agent_enabled)}`",
-            f"- slack_agent_actions_enabled: `{bool(settings.slack_agent_actions_enabled)}`",
-            f"- bot_token_present: `{token_present}`",
-            "",
-            "*Slack API*",
-            f"- auth.test: `{bool(auth.get('ok'))}`" + (f" (error `{auth.get('error')}`)" if not auth.get("ok") else ""),
-            f"- users.info: `{bool(user_info.get('ok'))}`" + (f" (error `{user_info.get('error')}`)" if not user_info.get("ok") else ""),
-            f"- email_visible: `{bool(email)}`",
-            "",
-            "*Identity mapping*",
-            f"- slack_user_id: `{user_id}`",
-            f"- display_name: `{ctx.display_name or ''}`",
-            f"- email: `{ctx.email or ''}`",
-            f"- user_sub: `{ctx.user_sub or ''}`",
-            f"- user_profile_resolved: `{bool(ctx.user_profile)}`",
-            "",
-            "*Google Drive*",
-            f"- credentials_status: `{google_drive_status}`",
-        ]
-        if google_drive_error:
-            lines.append(f"- credentials_error: `{google_drive_error}`")
-        lines.extend([
-            "",
-            "*Tips*",
-            "- If `users.info` fails with `missing_scope`, add `users:read` (and `users:read.email` for email mapping), then reinstall.",
-            "- If posting fails with `not_in_channel`, invite the bot to the channel.",
-            "- If `google_drive` status is `invalid` or `error`, check AWS Secrets Manager for GOOGLE_CREDENTIALS and GOOGLE_API_KEY secrets.",
-        ])
-        try:
-            append_event(
-                rfp_id="rfp_slack_agent",
-                type="slack_diagnostics",
-                payload={
-                    "authOk": bool(auth.get("ok")),
-                    "usersInfoOk": bool(user_info.get("ok")),
-                    "emailVisible": bool(email),
-                    "userSubResolved": bool(ctx.user_sub),
-                },
-                inputs_redacted={"channelId": channel_id, "slackUserId": user_id},
-                created_by="slack_commands",
-            )
-        except Exception:
-            pass
+            # Fallback to basic diagnostics if comprehensive fails
+            log.error("comprehensive_diagnostics_failed", error=str(e))
+            token_present = bool(get_bot_token())
+            auth = slack_api_get(method="auth.test", params={}) if token_present else {"ok": False, "error": "missing_token"}
+            user_info = slack_api_get(method="users.info", params={"user": user_id}) if (token_present and user_id) else {"ok": False, "error": "missing_user_id"}
+            ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
+            
+            lines = [
+                "*Polaris Slack Diagnostics*",
+                "",
+                f"⚠️ Error loading comprehensive diagnostics: {str(e)[:200]}",
+                "",
+                "*Basic Slack Status*",
+                f"- slack_enabled: `{bool(settings.slack_enabled)}`",
+                f"- slack_agent_enabled: `{bool(settings.slack_agent_enabled)}`",
+                f"- bot_token_present: `{token_present}`",
+                f"- auth.test: `{bool(auth.get('ok'))}`",
+                f"- users.info: `{bool(user_info.get('ok'))}`",
+            ]
+            
+            # Log basic diagnostics event
+            try:
+                append_event(
+                    rfp_id="rfp_slack_agent",
+                    type="slack_diagnostics",
+                    payload={
+                        "authOk": bool(auth.get("ok")),
+                        "usersInfoOk": bool(user_info.get("ok")),
+                        "userSubResolved": bool(ctx.user_sub),
+                        "error": str(e)[:200],
+                    },
+                    inputs_redacted={"channelId": channel_id, "slackUserId": user_id},
+                    created_by="slack_commands",
+                )
+            except Exception:
+                pass
+        
         return {"response_type": "ephemeral", "text": "\n".join([line for line in lines if line is not None])}
 
     if sub in ("link-thread", "linkthread"):
