@@ -39,7 +39,7 @@ class RegisteredAgent:
     name: str  # Human-readable name
     description: str
     capabilities: list[AgentCapability] = field(default_factory=list)
-    handler: Callable[..., Any] | None = None  # Function to call the agent
+    handler: Callable[..., Any] | None = None  # Function to call the agent (accepts any signature)
     version: str = "1.0.0"
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -165,7 +165,7 @@ class AgentRegistry:
         name: str,
         description: str,
         capabilities: list[AgentCapability] | None = None,
-        handler: Callable[[Any], Any] | None = None,
+        handler: Callable[..., Any] | None = None,
         version: str = "1.0.0",
         metadata: dict[str, Any] | None = None,
     ) -> None:
