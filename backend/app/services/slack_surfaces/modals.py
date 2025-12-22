@@ -167,7 +167,7 @@ def open_bid_decision_modal(*, trigger_id: str, channel_id: str, thread_ts: str,
         },
         {
             "type": "input",
-            "optional": True,  # type: ignore[dict-item]
+            "optional": True,
             "block_id": "notes_block",
             "label": {"type": "plain_text", "text": "Notes"},
             "element": {
