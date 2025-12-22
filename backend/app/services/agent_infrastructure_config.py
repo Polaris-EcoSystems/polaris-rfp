@@ -66,6 +66,12 @@ class InfrastructureConfig:
         
         # Secrets Manager configuration
         self.secrets_arns: list[str] = []
+        
+        # Google Drive configuration
+        self.google_drive_service_account_configured: bool = False
+        self.google_drive_api_key_configured: bool = False
+        self.google_drive_credentials_valid: bool = False
+        self.google_drive_credentials_error: str | None = None
     
     def load(self) -> None:
         """Load infrastructure configuration from settings and runtime discovery."""
@@ -145,6 +151,54 @@ class InfrastructureConfig:
         if settings.agent_allowed_secrets_arns:
             from ..tools.registry.allowlist import parse_csv, uniq
             self.secrets_arns = uniq(parse_csv(settings.agent_allowed_secrets_arns))
+        
+        # Google Drive credentials validation
+        self._validate_google_drive_credentials()
+    
+    def _validate_google_drive_credentials(self) -> None:
+        """
+        Validate Google Drive credentials are accessible and can be loaded.
+        
+        Checks:
+        - Service account JSON credentials can be loaded from Secrets Manager
+        - API key can be loaded from Secrets Manager (fallback)
+        - Service account credentials can be initialized (valid JSON format)
+        
+        Note: This validates credentials can be loaded, not that they actually work.
+        Full validation (API call test) happens on first use via the tools.
+        """
+        # Check service account credentials (preferred)
+        try:
+            from ..tools.categories.google.google_drive import _get_google_credentials
+            
+            # Try to load service account credentials (validates they exist and are valid JSON)
+            credentials = _get_google_credentials(use_api_key=False)
+            if credentials:
+                self.google_drive_service_account_configured = True
+                self.google_drive_credentials_valid = True
+                log.info("google_drive_service_account_configured")
+        except Exception as e:
+            error_msg = str(e)[:200]
+            self.google_drive_credentials_error = f"Service account: {error_msg}"
+            log.debug("google_drive_service_account_not_configured", error=error_msg)
+        
+        # Check API key (fallback)
+        try:
+            from ..tools.categories.google.google_drive import _get_google_credentials
+            api_key = _get_google_credentials(use_api_key=True)
+            if api_key and isinstance(api_key, str) and api_key.strip():
+                self.google_drive_api_key_configured = True
+                # If service account failed but API key works, mark as valid
+                if not self.google_drive_credentials_valid:
+                    self.google_drive_credentials_valid = True
+                    self.google_drive_credentials_error = None
+                    log.info("google_drive_api_key_configured")
+        except Exception as e:
+            if not self.google_drive_service_account_configured:
+                # Only set error if service account also failed
+                if not self.google_drive_credentials_error:
+                    self.google_drive_credentials_error = f"API key: {str(e)[:200]}"
+                log.debug("google_drive_api_key_not_configured", error=str(e))
     
     def _discover_runtime_config(self) -> None:
         """Discover additional configuration from AWS APIs (best-effort, non-blocking)."""
@@ -269,6 +323,12 @@ class InfrastructureConfig:
             "secrets": {
                 "arns": self.secrets_arns,
                 "count": len(self.secrets_arns),
+            },
+            "googleDrive": {
+                "serviceAccountConfigured": self.google_drive_service_account_configured,
+                "apiKeyConfigured": self.google_drive_api_key_configured,
+                "credentialsValid": self.google_drive_credentials_valid,
+                "error": self.google_drive_credentials_error,
             },
         }
 

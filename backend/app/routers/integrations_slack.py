@@ -635,6 +635,32 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
 
         ctx = resolve_actor_context(slack_user_id=user_id, slack_team_id=None, slack_enterprise_id=None)
 
+        # Google Drive credentials status
+        google_drive_status = "unknown"
+        google_drive_error = None
+        try:
+            from ..services.agent_infrastructure_config import get_infrastructure_config
+            infra_config = get_infrastructure_config()
+            infra_summary = infra_config.get_summary()
+            gd_info = infra_summary.get("googleDrive", {})
+            service_account_ok = bool(gd_info.get("serviceAccountConfigured"))
+            api_key_ok = bool(gd_info.get("apiKeyConfigured"))
+            credentials_valid = bool(gd_info.get("credentialsValid"))
+            
+            if credentials_valid:
+                if service_account_ok:
+                    google_drive_status = "service_account"
+                elif api_key_ok:
+                    google_drive_status = "api_key"
+                else:
+                    google_drive_status = "unknown"
+            else:
+                google_drive_status = "invalid"
+                google_drive_error = gd_info.get("error")
+        except Exception as e:
+            google_drive_status = "error"
+            google_drive_error = str(e)[:200]
+
         lines = [
             "*Polaris Slack diagnostics*",
             f"- slack_enabled: `{bool(settings.slack_enabled)}`",
@@ -654,10 +680,18 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
             f"- user_sub: `{ctx.user_sub or ''}`",
             f"- user_profile_resolved: `{bool(ctx.user_profile)}`",
             "",
+            "*Google Drive*",
+            f"- credentials_status: `{google_drive_status}`",
+        ]
+        if google_drive_error:
+            lines.append(f"- credentials_error: `{google_drive_error}`")
+        lines.extend([
+            "",
             "*Tips*",
             "- If `users.info` fails with `missing_scope`, add `users:read` (and `users:read.email` for email mapping), then reinstall.",
             "- If posting fails with `not_in_channel`, invite the bot to the channel.",
-        ]
+            "- If `google_drive` status is `invalid` or `error`, check AWS Secrets Manager for GOOGLE_CREDENTIALS and GOOGLE_API_KEY secrets.",
+        ])
         try:
             append_event(
                 rfp_id="rfp_slack_agent",
