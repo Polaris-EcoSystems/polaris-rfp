@@ -98,6 +98,29 @@ def list_jobs(
     job_type: str | None = None,
     rfp_id: str | None = None,
 ) -> dict[str, Any]:
+    """List agent jobs with optional filtering (no trailing slash)."""
+    return _list_jobs_impl(request, limit, status, job_type, rfp_id)
+
+
+@router.get("/jobs/")
+def list_jobs_slash(
+    request: Request,
+    limit: int = 50,
+    status: str | None = None,
+    job_type: str | None = None,
+    rfp_id: str | None = None,
+) -> dict[str, Any]:
+    """List agent jobs with optional filtering (with trailing slash)."""
+    return _list_jobs_impl(request, limit, status, job_type, rfp_id)
+
+
+def _list_jobs_impl(
+    request: Request,
+    limit: int = 50,
+    status: str | None = None,
+    job_type: str | None = None,
+    rfp_id: str | None = None,
+) -> dict[str, Any]:
     """
     List agent jobs with optional filtering.
     
@@ -285,6 +308,27 @@ def get_recent_activity(
     rfp_id: str | None = None,
     user_sub_filter: str | None = None,
 ) -> dict[str, Any]:
+    """Get recent agent activity/logs (no trailing slash)."""
+    return _get_recent_activity_impl(hours, limit, rfp_id, user_sub_filter)
+
+
+@router.get("/activity/")
+def get_recent_activity_slash(
+    hours: int = 24,
+    limit: int = 100,
+    rfp_id: str | None = None,
+    user_sub_filter: str | None = None,
+) -> dict[str, Any]:
+    """Get recent agent activity/logs (with trailing slash)."""
+    return _get_recent_activity_impl(hours, limit, rfp_id, user_sub_filter)
+
+
+def _get_recent_activity_impl(
+    hours: int = 24,
+    limit: int = 100,
+    rfp_id: str | None = None,
+    user_sub_filter: str | None = None,
+) -> dict[str, Any]:
     """
     Get recent agent activity/logs.
     
@@ -331,6 +375,23 @@ def get_metrics(
     hours: int = 24,
     operation_type: str | None = None,
 ) -> dict[str, Any]:
+    """Get agent metrics/telemetry (no trailing slash)."""
+    return _get_metrics_impl(hours, operation_type)
+
+
+@router.get("/metrics/")
+def get_metrics_slash(
+    hours: int = 24,
+    operation_type: str | None = None,
+) -> dict[str, Any]:
+    """Get agent metrics/telemetry (with trailing slash)."""
+    return _get_metrics_impl(hours, operation_type)
+
+
+def _get_metrics_impl(
+    hours: int = 24,
+    operation_type: str | None = None,
+) -> dict[str, Any]:
     """
     Get agent metrics/telemetry.
     
@@ -355,6 +416,27 @@ def get_metrics(
 
 @router.get("/diagnostics")
 def get_diagnostics(
+    hours: int = 24,
+    rfp_id: str | None = None,
+    user_sub: str | None = None,
+    channel_id: str | None = None,
+) -> dict[str, Any]:
+    """Get comprehensive agent diagnostics (no trailing slash)."""
+    return _get_diagnostics_impl(hours, rfp_id, user_sub, channel_id)
+
+
+@router.get("/diagnostics/")
+def get_diagnostics_slash(
+    hours: int = 24,
+    rfp_id: str | None = None,
+    user_sub: str | None = None,
+    channel_id: str | None = None,
+) -> dict[str, Any]:
+    """Get comprehensive agent diagnostics (with trailing slash)."""
+    return _get_diagnostics_impl(hours, rfp_id, user_sub, channel_id)
+
+
+def _get_diagnostics_impl(
     hours: int = 24,
     rfp_id: str | None = None,
     user_sub: str | None = None,

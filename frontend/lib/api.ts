@@ -1510,7 +1510,7 @@ export const integrationsApi = {
     api.get<{
       ok: boolean
       activities: Array<{
-        integration: 'canva' | 'googleDrive'
+        integration: 'canva' | 'googleDrive' | 'slack' | 'github'
         type: string
         tool?: string
         createdAt: string
