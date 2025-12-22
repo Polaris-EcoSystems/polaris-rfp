@@ -27,12 +27,14 @@ def get_comprehensive_diagnostics() -> dict[str, Any]:
     - infrastructure: Infrastructure resources (tables, buckets, queues, etc.)
     - tools: Available tools summary
     - capabilities: Agent capabilities summary
+    - recentErrors: Recent agent errors from memory
     """
     diagnostics: dict[str, Any] = {
         "credentials": _get_credentials_diagnostics(),
         "infrastructure": _get_infrastructure_diagnostics(),
         "tools": _get_tools_diagnostics(),
         "capabilities": _get_capabilities_diagnostics(),
+        "recentErrors": _get_recent_agent_errors(),
     }
     
     return diagnostics
@@ -56,11 +58,55 @@ def _get_credentials_diagnostics() -> dict[str, Any]:
     # GitHub
     try:
         from .agent_infrastructure_config import get_infrastructure_config
+        from .github_secrets import get_github_secret
+        from ..infrastructure.github.github_api import _token
+        
         infra_config = get_infrastructure_config()
         infra_summary = infra_config.get_summary()
         github_info = infra_summary.get("github", {})
+        
+        # Enhanced diagnostics
+        secret_arn_configured = bool(settings.github_secret_arn and str(settings.github_secret_arn).strip())
+        secret_accessible = False
+        secret_keys = []
+        
+        if secret_arn_configured:
+            try:
+                secret_dict = get_github_secret()
+                if secret_dict:
+                    secret_accessible = True
+                    secret_keys = list(secret_dict.keys()) if isinstance(secret_dict, dict) else []
+            except Exception:
+                pass  # Will show secret_accessible as False
+        
+        # Try to get token directly
+        token_value = _token()
+        token_configured = bool(token_value)
+        
+        # Try to validate token with a test API call
+        token_valid = False
+        if token_configured:
+            try:
+                import httpx
+                headers = {
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {token_value}",
+                    "User-Agent": "polaris-rfp-diagnostics",
+                }
+                # Make a lightweight API call to validate token
+                with httpx.Client(timeout=5.0) as client:
+                    resp = client.get("https://api.github.com/user", headers=headers)
+                    if resp.status_code == 200:
+                        token_valid = True
+            except Exception:
+                pass  # Token validation failed, but token is configured
+        
         creds["github"] = {
-            "tokenConfigured": bool(github_info.get("tokenConfigured")),
+            "tokenConfigured": token_configured,
+            "tokenValid": token_valid,
+            "secretArnConfigured": secret_arn_configured,
+            "secretAccessible": secret_accessible,
+            "secretKeys": secret_keys,
             "repo": github_info.get("repo"),
             "allowedRepos": github_info.get("allowedRepos", []),
         }
@@ -289,6 +335,51 @@ def _get_capabilities_diagnostics() -> dict[str, Any]:
     return capabilities
 
 
+def _get_recent_agent_errors(limit: int = 5) -> dict[str, Any]:
+    """Get recent agent errors from memory."""
+    errors: dict[str, Any] = {
+        "recent": [],
+        "count": 0,
+    }
+    
+    try:
+        from ..memory.core.agent_memory_db import MemoryType, list_memories_by_type
+        
+        error_memories, _ = list_memories_by_type(
+            memory_type=MemoryType.ERROR_LOG,
+            limit=limit,
+        )
+        
+        errors["count"] = len(error_memories)
+        
+        for mem in error_memories:
+            metadata = mem.get("metadata", {})
+            tool_name = metadata.get("toolName") or "unknown"
+            error_message = metadata.get("errorMessage") or mem.get("summary", "unknown error")
+            error_type = metadata.get("errorType")
+            created_at = mem.get("createdAt", "")
+            
+            # Truncate error message for display
+            error_preview = str(error_message)[:150]
+            if len(str(error_message)) > 150:
+                error_preview += "..."
+            
+            errors["recent"].append({
+                "toolName": tool_name,
+                "errorMessage": error_preview,
+                "errorType": error_type,
+                "createdAt": created_at,
+                "source": mem.get("source"),
+            })
+        
+    except Exception as e:
+        errors["error"] = str(e)[:200]
+        log.debug("recent_errors_diagnostics_failed", error=str(e))
+        # Non-fatal - memory might not be available
+    
+    return errors
+
+
 def format_diagnostics_for_slack(diagnostics: dict[str, Any] | None = None) -> list[str]:
     """
     Format comprehensive diagnostics for Slack display.
@@ -312,22 +403,21 @@ def format_diagnostics_for_slack(diagnostics: dict[str, Any] | None = None) -> l
         status = "✅" if openai.get("configured") else "❌"
         model = openai.get("model", "unknown")
         lines.append(f"- OpenAI: {status} (model: `{model}`)")
-        if openai.get("projectId"):
-            lines.append("  - Project ID: configured")
-        if openai.get("organizationId"):
-            lines.append("  - Organization ID: configured")
     
     # GitHub
     github = creds.get("github", {})
     if github.get("error"):
         lines.append(f"- GitHub: `error` ({github.get('error')})")
     else:
-        status = "✅" if github.get("tokenConfigured") else "❌"
+        token_valid = github.get("tokenValid", False)
+        token_configured = github.get("tokenConfigured", False)
+        status = "✅" if token_valid else ("⚠️" if token_configured else "❌")
         repo = github.get("repo") or "none"
         lines.append(f"- GitHub: {status} (repo: `{repo}`)")
-        allowed_repos = github.get("allowedRepos", [])
-        if allowed_repos:
-            lines.append(f"  - Allowed repos: {len(allowed_repos)}")
+        if not token_valid and not token_configured:
+            secret_arn_configured = github.get("secretArnConfigured", False)
+            if not secret_arn_configured:
+                lines.append("  - GITHUB_SECRET_ARN not configured")
     
     # Google Drive
     gd = creds.get("googleDrive", {})
@@ -338,8 +428,6 @@ def format_diagnostics_for_slack(diagnostics: dict[str, Any] | None = None) -> l
         status = "✅" if valid else "❌"
         method = "service_account" if gd.get("serviceAccountConfigured") else ("api_key" if gd.get("apiKeyConfigured") else "none")
         lines.append(f"- Google Drive: {status} (method: `{method}`)")
-        if gd.get("error"):
-            lines.append(f"  - Error: {gd.get('error')[:100]}")
     
     # Slack
     slack = creds.get("slack", {})
@@ -368,46 +456,20 @@ def format_diagnostics_for_slack(diagnostics: dict[str, Any] | None = None) -> l
     if infra.get("error"):
         lines.append(f"- Error loading infrastructure: {infra.get('error')}")
     else:
-        # ECS
-        ecs = infra.get("ecs", {})
-        if ecs.get("cluster"):
-            lines.append(f"- ECS: cluster=`{ecs.get('cluster')}`, service=`{ecs.get('service')}`")
-            lines.append(f"  - Allowed clusters: {ecs.get('allowedClusters', 0)}")
-            lines.append(f"  - Allowed services: {ecs.get('allowedServices', 0)}")
-        
-        # DynamoDB
         ddb = infra.get("dynamodb", {})
-        lines.append(f"- DynamoDB: {ddb.get('tables', 0)} tables")
-        table_names = ddb.get("tableNames", [])
-        if table_names and len(table_names) <= 5:
-            lines.append(f"  - Tables: {', '.join(table_names)}")
-        elif table_names:
-            lines.append(f"  - Tables: {', '.join(table_names[:5])}... (+{len(table_names) - 5} more)")
-        
-        # S3
         s3 = infra.get("s3", {})
-        lines.append(f"- S3: {s3.get('buckets', 0)} buckets, {s3.get('prefixes', 0)} prefixes")
-        bucket_names = s3.get("bucketNames", [])
-        if bucket_names and len(bucket_names) <= 3:
-            lines.append(f"  - Buckets: {', '.join(bucket_names)}")
-        
-        # CloudWatch
         logs = infra.get("cloudWatchLogs", {})
-        lines.append(f"- CloudWatch Logs: {logs.get('logGroups', 0)} log groups ({logs.get('discoveredAtStartup', 0)} discovered at startup)")
-        
-        # SQS
         sqs = infra.get("sqs", {})
-        lines.append(f"- SQS: {sqs.get('queues', 0)} queues")
-        
-        # Cognito
         cognito = infra.get("cognito", {})
-        lines.append(f"- Cognito: {cognito.get('userPools', 0)} user pools")
-        
-        # Secrets
         secrets = infra.get("secrets", {})
+        
+        lines.append(f"- DynamoDB: {ddb.get('tables', 0)} tables")
+        lines.append(f"- S3: {s3.get('buckets', 0)} buckets, {s3.get('prefixes', 0)} prefixes")
+        lines.append(f"- CloudWatch Logs: {logs.get('logGroups', 0)} log groups ({logs.get('discoveredAtStartup', 0)} discovered at startup)")
+        lines.append(f"- SQS: {sqs.get('queues', 0)} queues")
+        lines.append(f"- Cognito: {cognito.get('userPools', 0)} user pools")
         lines.append(f"- Secrets Manager: {secrets.get('arns', 0)} ARNs")
         
-        # Errors
         load_errors = infra.get("loadErrors", [])
         if load_errors:
             lines.append(f"- Load errors: {len(load_errors)}")
@@ -448,5 +510,31 @@ def format_diagnostics_for_slack(diagnostics: dict[str, Any] | None = None) -> l
                     lines.append(f"  - {category}: {count}")
         else:
             lines.append("- No capabilities catalogued (capability inventory may not be populated)")
+    
+    # Recent Errors section
+    lines.append("")
+    lines.append("*⚠️ Recent Agent Errors*")
+    errors = diagnostics.get("recentErrors", {})
+    
+    if errors.get("error"):
+        lines.append(f"- Error loading errors: {errors.get('error')}")
+    else:
+        recent = errors.get("recent", [])
+        if recent:
+            lines.append(f"- Last {len(recent)} errors:")
+            for err in recent[:5]:  # Show up to 5 most recent
+                tool = err.get("toolName", "unknown")
+                error_msg = err.get("errorMessage", "unknown error")
+                error_type = err.get("errorType")
+                source = err.get("source", "unknown")
+                
+                error_line = f"  - `{tool}`: {error_msg}"
+                if error_type:
+                    error_line += f" ({error_type})"
+                if source:
+                    error_line += f" [{source}]"
+                lines.append(error_line)
+        else:
+            lines.append("- No recent errors")
     
     return lines

@@ -92,6 +92,7 @@ def run_rfp_onboarding_workflow(
                     analysis=analysis,
                     source_file_name=file_name_final,
                     source_file_size=len(pdf_data),
+                    source_pdf_data=pdf_data,
                 )
                 result_rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
                 if not result_rfp_id:

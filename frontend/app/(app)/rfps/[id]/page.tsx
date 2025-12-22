@@ -24,6 +24,7 @@ import {
   ClockIcon,
   CurrencyDollarIcon,
   DocumentTextIcon,
+  FolderIcon,
   PaperClipIcon,
   PlusIcon,
   UserGroupIcon,
@@ -60,11 +61,14 @@ export default function RFPDetailPage() {
   const params = useParams<{ id?: string }>()
   const id = typeof params?.id === 'string' ? params.id : ''
 
-  type PageTab = 'details' | 'pdf'
+  type PageTab = 'details' | 'pdf' | 'drive'
   const [pageTab, setPageTab] = useState<PageTab>('details')
   const [sourcePdfUrl, setSourcePdfUrl] = useState<string | null>(null)
   const [sourcePdfLoading, setSourcePdfLoading] = useState(false)
   const [sourcePdfError, setSourcePdfError] = useState<string | null>(null)
+  const [driveFolderUrl, setDriveFolderUrl] = useState<string | null>(null)
+  const [driveFolderLoading, setDriveFolderLoading] = useState(false)
+  const [driveFolderError, setDriveFolderError] = useState<string | null>(null)
 
   const [rfp, setRfp] = useState<RFP | null>(null)
   const [workflowTasks, setWorkflowTasks] = useState<WorkflowTask[]>([])
@@ -219,6 +223,42 @@ export default function RFPDetailPage() {
       cancelled = true
     }
   }, [pageTab, rfp])
+
+  useEffect(() => {
+    if (pageTab !== 'drive') return
+    if (!rfp?._id) return
+    if (driveFolderUrl) return // Already loaded
+
+    let cancelled = false
+
+    ;(async () => {
+      setDriveFolderLoading(true)
+      setDriveFolderError(null)
+
+      try {
+        const resp = await rfpApi.getDriveFolder(rfp._id)
+        const url = String(resp?.data?.folderUrl || '').trim()
+        if (cancelled) return
+        if (url) {
+          setDriveFolderUrl(url)
+        } else {
+          setDriveFolderError(
+            resp?.data?.error || 'No Google Drive folder found for this RFP.',
+          )
+        }
+      } catch (e) {
+        console.warn('Failed to get Drive folder:', e)
+        if (cancelled) return
+        setDriveFolderError('Failed to load Google Drive folder information.')
+      } finally {
+        if (!cancelled) setDriveFolderLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [pageTab, rfp?._id, driveFolderUrl])
 
   // --- Bid / no-bid review state ---
   type BidDecision = '' | 'bid' | 'no_bid' | 'maybe'
@@ -1795,6 +1835,18 @@ export default function RFPDetailPage() {
               />
               Original PDF
             </button>
+            <button
+              onClick={() => setPageTab('drive')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
+                pageTab === 'drive'
+                  ? 'border-primary-500 text-primary-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+              type="button"
+            >
+              <FolderIcon className="h-5 w-5 inline mr-2" aria-hidden="true" />
+              Google Drive
+            </button>
           </nav>
         </div>
       </div>
@@ -1847,6 +1899,73 @@ export default function RFPDetailPage() {
             ) : (
               <div className="p-6 text-sm text-gray-700">
                 No original PDF is available for this RFP.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {pageTab === 'drive' ? (
+        <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+          <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-gray-200">
+            <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+              <FolderIcon className="h-5 w-5 text-gray-500" />
+              Google Drive Folder
+            </div>
+            {driveFolderUrl ? (
+              <a
+                href={driveFolderUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-sm font-semibold text-primary-600 hover:text-primary-700"
+              >
+                Open in Google Drive
+              </a>
+            ) : null}
+          </div>
+          <div className="p-6">
+            {driveFolderLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600"></div>
+              </div>
+            ) : driveFolderError ? (
+              <div className="text-sm text-gray-700">
+                <div className="font-semibold text-gray-900">
+                  Drive folder unavailable
+                </div>
+                <div className="mt-1">{driveFolderError}</div>
+                <div className="mt-3 text-xs text-gray-500">
+                  Google Drive folders are automatically created when an RFP is
+                  uploaded. If you just uploaded this RFP, please wait a moment
+                  and refresh the page.
+                </div>
+              </div>
+            ) : driveFolderUrl ? (
+              <div className="space-y-4">
+                <div className="text-sm text-gray-700">
+                  <p className="font-semibold text-gray-900 mb-2">
+                    Project folder ready
+                  </p>
+                  <p>
+                    This RFP has a dedicated Google Drive folder with organized
+                    subfolders for managing project files.
+                  </p>
+                </div>
+                <div>
+                  <a
+                    href={driveFolderUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
+                  >
+                    <FolderIcon className="h-5 w-5" />
+                    Open Folder in Google Drive
+                  </a>
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-gray-700">
+                No Google Drive folder found for this RFP.
               </div>
             )}
           </div>

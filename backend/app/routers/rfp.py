@@ -10,13 +10,11 @@ from ..db.dynamodb.table import get_main_table
 from ..services.ai_section_titles import generate_section_titles
 from ..services.rfp_analyzer import analyze_rfp
 from ..repositories.rfp.rfps_repo import (
-    build_rfp_item_from_analysis,
     create_rfp_from_analysis,
     delete_rfp,
     get_rfp_by_id,
     list_rfp_proposal_summaries,
     list_rfps,
-    new_id,
     now_iso,
     update_rfp,
 )
@@ -123,6 +121,7 @@ async def upload(file: UploadFile = File(...)):
             analysis=analysis,
             source_file_name=file.filename or "upload.pdf",
             source_file_size=len(data),
+            source_pdf_data=data,
         )
         # Best-effort: notify Slack (machine channel) for direct uploads too.
         try:
@@ -440,25 +439,23 @@ def _process_rfp_upload_job(job_id: str) -> None:
 
         analysis = analyze_rfp(data, file_name)
 
-        # Transactionally: create the RFP record + mark this sha256 as completed.
-        t = get_main_table()
-        rfp_id = new_id("rfp")
-        rfp_item = build_rfp_item_from_analysis(
-            rfp_id=rfp_id,
+        # Create the RFP using create_rfp_from_analysis which handles Drive folder creation and PDF upload
+        saved = create_rfp_from_analysis(
             analysis=analysis,
             source_file_name=file_name,
             source_file_size=len(data),
+            source_pdf_data=data,
+            source_s3_key=key,
         )
+        rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
+        
+        if not rfp_id:
+            raise ValueError("RFP created but no ID returned")
 
-        created = False
+        # Transactionally: mark this sha256 as completed (RFP already created above)
+        t = get_main_table()
         try:
             t.transact_write(
-                puts=[
-                    t.tx_put(
-                        item=rfp_item,
-                        condition_expression="attribute_not_exists(pk)",
-                    )
-                ],
                 updates=[
                     t.tx_update(
                         key=dedup_key(sha),
@@ -480,12 +477,13 @@ def _process_rfp_upload_job(job_id: str) -> None:
                     )
                 ],
             )
-            created = True
         except DdbConflict:
             # Another worker won the race; load the canonical rfpId.
             dup = get_by_sha256(sha) or {}
-            rfp_id = str(dup.get("rfpId") or "").strip()
-            if not rfp_id:
+            existing_rfp_id = str(dup.get("rfpId") or "").strip()
+            if existing_rfp_id:
+                rfp_id = existing_rfp_id
+            else:
                 raise
 
         # Persist the source PDF reference on the RFP so it can be viewed later.
@@ -508,7 +506,7 @@ def _process_rfp_upload_job(job_id: str) -> None:
         # Best-effort: generate AI section titles immediately so the RFP page
         # can offer AI proposal scaffolding without another round trip.
         try:
-            rfp_for_titles = rfp_item if created else (get_rfp_by_id(rfp_id) or {})
+            rfp_for_titles = saved if saved else (get_rfp_by_id(rfp_id) or {})
             titles = generate_section_titles(rfp_for_titles)
             if titles:
                 update_rfp(rfp_id, {"sectionTitles": titles})
@@ -610,6 +608,58 @@ def get_one(id: str):
 def get_one_slash(id: str):
     # Accept trailing slash to avoid 404s when clients normalize URLs.
     return get_one(id)
+
+
+@router.get("/{id}/drive-folder")
+def get_drive_folder(id: str):
+    """
+    Get Google Drive folder information for an RFP.
+    
+    Returns the root folder URL and folder structure.
+    """
+    try:
+        from ..services.drive_project_setup import get_project_folders
+        
+        folders_result = get_project_folders(rfp_id=id)
+        if not folders_result.get("ok"):
+            return {
+                "ok": False,
+                "error": folders_result.get("error", "No Drive folder found for this RFP"),
+                "folderUrl": None,
+            }
+        
+        folders = folders_result.get("folders", {})
+        root_folder_id = folders.get("root")
+        
+        if not root_folder_id:
+            return {
+                "ok": False,
+                "error": "No root folder ID found",
+                "folderUrl": None,
+            }
+        
+        # Construct Google Drive folder URL
+        folder_url = f"https://drive.google.com/drive/folders/{root_folder_id}"
+        
+        return {
+            "ok": True,
+            "folderUrl": folder_url,
+            "folderId": root_folder_id,
+            "folders": folders,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to fetch Drive folder", "message": str(e)},
+        )
+
+
+@router.get("/{id}/drive-folder/", include_in_schema=False)
+def get_drive_folder_slash(id: str):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return get_drive_folder(id)
 
 
 @router.get("/{id}/source-pdf/presign")

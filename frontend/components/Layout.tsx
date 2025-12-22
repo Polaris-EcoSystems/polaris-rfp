@@ -17,6 +17,7 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   CogIcon,
+  CpuChipIcon,
   DocumentTextIcon,
   FolderIcon,
   MagnifyingGlassIcon,
@@ -264,6 +265,13 @@ export default function Layout({ children }: LayoutProps) {
   const toolsNav: NavItem[] = useMemo(
     () => [
       {
+        id: 'agents',
+        label: t('nav.agents'),
+        href: '/agents',
+        icon: CpuChipIcon,
+        current: pathname.startsWith('/agents'),
+      },
+      {
         id: 'finder',
         label: t('nav.rfpFinder'),
         href: '/finder',
@@ -391,6 +399,23 @@ export default function Layout({ children }: LayoutProps) {
             >
               <MenuItems className="absolute right-0 bottom-full mb-2 w-48 bg-white border border-gray-200 rounded-lg shadow-xl z-50 focus:outline-none">
                 <div className="py-1.5">
+                  <MenuItem>
+                    {({ active }) => (
+                      <Link
+                        href="/profile"
+                        className={`w-full text-left px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors duration-150 flex items-center gap-2 rounded-md ${
+                          active ? 'bg-gray-50 text-gray-900' : ''
+                        }`}
+                        onClick={() => setSidebarOpen(false)}
+                      >
+                        <UserCircleIcon
+                          className="h-4 w-4"
+                          aria-hidden="true"
+                        />
+                        {t('nav.profile')}
+                      </Link>
+                    )}
+                  </MenuItem>
                   <MenuItem>
                     {({ active }) => (
                       <button
@@ -621,89 +646,6 @@ export default function Layout({ children }: LayoutProps) {
                         ))}
                       </div>
                     )}
-                  </div>
-                </MenuItems>
-              </Transition>
-            </Menu>
-
-            <Menu as="div" className="relative">
-              <MenuButton
-                className="flex items-center gap-3 p-2 rounded-xl hover:bg-gray-100 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
-                aria-label={t('header.openUserMenu')}
-                type="button"
-              >
-                <UserCircleIcon
-                  className="h-8 w-8 text-gray-600"
-                  aria-hidden="true"
-                />
-                <div className="hidden sm:block text-left">
-                  {user ? (
-                    <>
-                      <p className="text-sm font-medium text-gray-900">
-                        {displayName}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {t('header.online')}
-                      </p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-sm font-medium text-gray-900">
-                        {t('header.guest')}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {t('header.offline')}
-                      </p>
-                    </>
-                  )}
-                </div>
-                <ChevronDownIcon
-                  className="h-4 w-4 text-gray-400"
-                  aria-hidden="true"
-                />
-              </MenuButton>
-              <Transition
-                as={Fragment}
-                enter="ease-out duration-150 motion-reduce:transition-none"
-                enterFrom="opacity-0 translate-y-1"
-                enterTo="opacity-100 translate-y-0"
-                leave="ease-in duration-100 motion-reduce:transition-none"
-                leaveFrom="opacity-100 translate-y-0"
-                leaveTo="opacity-0 translate-y-1"
-              >
-                <MenuItems className="absolute right-0 mt-2 w-52 bg-white border border-gray-200 rounded-lg shadow-xl z-50 focus:outline-none">
-                  <div className="py-1.5">
-                    <MenuItem>
-                      {({ active }) => (
-                        <button
-                          onClick={async () => {
-                            await logout()
-                            router.push('/login')
-                          }}
-                          className={`w-full text-left px-4 py-2.5 text-sm font-medium text-red-600 transition-colors duration-150 flex items-center gap-2 rounded-md ${
-                            active ? 'bg-red-50 text-red-700' : ''
-                          }`}
-                          type="button"
-                        >
-                          <svg
-                            className="h-4 w-4"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                            stroke="currentColor"
-                            aria-hidden="true"
-                            focusable="false"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                            />
-                          </svg>
-                          {t('header.logout')}
-                        </button>
-                      )}
-                    </MenuItem>
                   </div>
                 </MenuItems>
               </Transition>

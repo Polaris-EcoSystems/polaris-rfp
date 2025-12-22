@@ -168,7 +168,12 @@ def handle_shortcut(*, payload: dict[str, Any], background_tasks: Any) -> dict[s
         try:
             pdf = download_slack_file(url=url, max_bytes=60 * 1024 * 1024)
             analysis = analyze_rfp(pdf, name)
-            saved = create_rfp_from_analysis(analysis=analysis, source_file_name=name, source_file_size=len(pdf))
+            saved = create_rfp_from_analysis(
+                analysis=analysis, 
+                source_file_name=name, 
+                source_file_size=len(pdf),
+                source_pdf_data=pdf,
+            )
             rid = str(saved.get("_id") or saved.get("rfpId") or "").strip()
             
             # Check if message mentions a user to assign review to

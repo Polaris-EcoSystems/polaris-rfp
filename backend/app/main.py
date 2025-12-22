@@ -43,6 +43,7 @@ from .routers.user_profile import router as user_profile_router
 from .routers.contracting import router as contracting_router
 from .routers.contract_templates import router as contract_templates_router
 from .routers.client_portal import router as client_portal_router
+from .routers.agents import router as agents_router
 from .settings import settings
 
 
@@ -127,6 +128,7 @@ def create_app() -> FastAPI:
     app.include_router(contracting_router, prefix="/api")
     app.include_router(contract_templates_router, prefix="/api")
     app.include_router(client_portal_router, prefix="/api")
+    app.include_router(agents_router, prefix="/api")
 
     # Instrument after routers/middleware are attached.
     instrument_app(app)

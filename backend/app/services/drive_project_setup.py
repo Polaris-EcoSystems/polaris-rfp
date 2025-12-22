@@ -38,6 +38,8 @@ def setup_project_folders(
     - Root folder: "{RFP Title} - {Client Name}"
     - Subfolders: RFP Files, Financial, Marketing, Drafts, Questions, Templates
     
+    If folders already exist (in OpportunityState), returns existing folder IDs.
+    
     Args:
         rfp_id: RFP ID
         channel_id: Optional Slack channel ID to link
@@ -51,6 +53,20 @@ def setup_project_folders(
         return {"ok": False, "error": "rfp_id is required"}
     
     try:
+        # Check if folders already exist in OpportunityState
+        existing_folders_result = get_project_folders(rfp_id=rid)
+        if existing_folders_result.get("ok"):
+            folders = existing_folders_result.get("folders", {})
+            root_folder_id = folders.get("root")
+            if root_folder_id:
+                log.info("using_existing_drive_folders", rfp_id=rid, root_folder_id=root_folder_id)
+                return {
+                    "ok": True,
+                    "rootFolderId": root_folder_id,
+                    "folders": folders,
+                    "existing": True,
+                }
+        
         # Get RFP details for folder naming
         rfp = get_rfp_by_id(rid) or {}
         rfp_title = str(rfp.get("title") or rfp.get("rfpTitle") or "RFP").strip()

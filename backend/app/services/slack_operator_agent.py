@@ -1943,6 +1943,7 @@ def _rfp_vet_tool(args: dict[str, Any]) -> dict[str, Any]:
                 analysis=analysis,
                 source_file_name=file_name,
                 source_file_size=len(pdf_data),
+                source_pdf_data=pdf_data,
             )
             rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
             if not rfp_id:
@@ -2161,8 +2162,13 @@ def _rfp_create_from_slack_file_tool(args: dict[str, Any]) -> dict[str, Any]:
         # Analyze the RFP
         analysis = analyze_rfp(pdf_data, file_name)
         
-        # Create the RFP
-        saved = create_rfp_from_analysis(analysis=analysis, source_file_name=file_name, source_file_size=len(pdf_data))
+        # Create the RFP (with PDF upload to Drive)
+        saved = create_rfp_from_analysis(
+            analysis=analysis, 
+            source_file_name=file_name, 
+            source_file_size=len(pdf_data),
+            source_pdf_data=pdf_data,
+        )
         rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
         
         if not rfp_id:

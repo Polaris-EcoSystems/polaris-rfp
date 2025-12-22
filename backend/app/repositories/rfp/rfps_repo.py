@@ -54,7 +54,14 @@ def normalize_rfp_for_api(item: dict[str, Any] | None) -> dict[str, Any] | None:
     return obj
 
 
-def create_rfp_from_analysis(*, analysis: dict[str, Any], source_file_name: str, source_file_size: int) -> dict[str, Any]:
+def create_rfp_from_analysis(
+    *, 
+    analysis: dict[str, Any], 
+    source_file_name: str, 
+    source_file_size: int,
+    source_pdf_data: bytes | None = None,
+    source_s3_key: str | None = None,
+) -> dict[str, Any]:
     rfp_id = new_id("rfp")
     item = build_rfp_item_from_analysis(
         rfp_id=rfp_id,
@@ -65,23 +72,97 @@ def create_rfp_from_analysis(*, analysis: dict[str, Any], source_file_name: str,
     get_main_table().put_item(item=item, condition_expression="attribute_not_exists(pk)")
     result = normalize_rfp_for_api(item) or {}
     
-    # Trigger folder creation and template population (background, best-effort)
+    # Trigger folder creation, template population, and PDF upload (background, best-effort)
     try:
         from ...services.drive_project_setup import setup_project_folders
         from ...services.drive_template_populator import populate_project_templates
+        from ...repositories.rfp.opportunity_state_repo import ensure_state_exists, patch_state
         
         # Create folders
         folder_result = setup_project_folders(rfp_id=rfp_id)
         if folder_result.get("ok"):
             folders = folder_result.get("folders", {})
+            
+            # Store folder IDs in OpportunityState
+            try:
+                ensure_state_exists(rfp_id=rfp_id)
+                patch_state(
+                    rfp_id=rfp_id,
+                    patch={"driveFolders": folders},
+                    create_snapshot=False,
+                )
+            except Exception as e:
+                from ...observability.logging import get_logger
+                log = get_logger("rfps_repo")
+                log.warning("failed_to_store_drive_folders", rfp_id=rfp_id, error=str(e))
+            
             # Populate templates
-            templates_folder = folders.get("templates")
-            financial_folder = folders.get("financial")
-            populate_project_templates(
-                rfp_id=rfp_id,
-                templates_folder_id=templates_folder,
-                financial_folder_id=financial_folder,
-            )
+            try:
+                templates_folder = folders.get("templates")
+                financial_folder = folders.get("financial")
+                populate_project_templates(
+                    rfp_id=rfp_id,
+                    templates_folder_id=templates_folder,
+                    financial_folder_id=financial_folder,
+                )
+            except Exception as e:
+                from ...observability.logging import get_logger
+                log = get_logger("rfps_repo")
+                log.warning("template_population_failed", rfp_id=rfp_id, error=str(e))
+            
+            # Upload PDF to Drive "RFP Files" folder
+            try:
+                rfp_files_folder_id = folders.get("rfpfiles") or folders.get("root")
+                if rfp_files_folder_id:
+                    pdf_data = source_pdf_data
+                    
+                    # If we don't have PDF data but have S3 key, download it
+                    if not pdf_data and source_s3_key:
+                        from ...services.s3_assets import get_object_bytes
+                        try:
+                            pdf_data = get_object_bytes(key=source_s3_key, max_bytes=60 * 1024 * 1024)
+                        except Exception:
+                            pdf_data = None
+                    
+                    if pdf_data:
+                        from ...tools.categories.google.google_drive import upload_file_to_drive
+                        from datetime import datetime, timezone
+                        
+                        # Use sanitized filename
+                        pdf_filename = source_file_name or "rfp.pdf"
+                        if not pdf_filename.lower().endswith(".pdf"):
+                            pdf_filename = f"{pdf_filename}.pdf"
+                        
+                        upload_result = upload_file_to_drive(
+                            name=pdf_filename,
+                            content=pdf_data,
+                            mime_type="application/pdf",
+                            folder_id=rfp_files_folder_id,
+                        )
+                        
+                        if upload_result.get("ok"):
+                            file_id = upload_result.get("fileId")
+                            # Store file reference in OpportunityState
+                            try:
+                                patch_state(
+                                    rfp_id=rfp_id,
+                                    patch={
+                                        "driveFiles_append": [{
+                                            "fileId": file_id,
+                                            "fileName": pdf_filename,
+                                            "folderId": rfp_files_folder_id,
+                                            "category": "source_pdf",
+                                            "uploadedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                                        }]
+                                    },
+                                    create_snapshot=False,
+                                )
+                            except Exception:
+                                pass  # Non-fatal
+            except Exception as e:
+                from ...observability.logging import get_logger
+                log = get_logger("rfps_repo")
+                log.warning("pdf_upload_to_drive_failed", rfp_id=rfp_id, error=str(e))
     except Exception as e:
         # Non-fatal - log but don't fail RFP creation
         from ...observability.logging import get_logger

@@ -34,6 +34,14 @@ MAGIC_LINK_TABLE_NAME=polaris-rfp-magic-production
 # S3 assets bucket (headshots, etc.)
 ASSETS_BUCKET_NAME=your-assets-bucket-name
 
+# GitHub (optional; enables GitHub API operations)
+# Store GitHub token in Secrets Manager as JSON with keys: GITHUB_TOKEN or GH_TOKEN
+GITHUB_SECRET_ARN=arn:aws:secretsmanager:us-east-1:123456789012:secret:polaris-rfp/github-xxxxxx
+# Default repo to use for GitHub operations (format: org/repo)
+GITHUB_REPO=Polaris-EcoSystems/polaris-rfp
+# Comma-separated list of allowed repos (alternative to GITHUB_REPO)
+# AGENT_ALLOWED_GITHUB_REPOS=Polaris-EcoSystems/polaris-rfp,Polaris-EcoSystems/other-repo
+
 # Canva Connect (optional; enables /integrations/canva)
 CANVA_CLIENT_ID=your-canva-client-id
 CANVA_CLIENT_SECRET=your-canva-client-secret

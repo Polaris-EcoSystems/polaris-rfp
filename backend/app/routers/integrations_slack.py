@@ -164,6 +164,7 @@ def _slack_upload_latest_pdfs_task(*, response_url: str, channel_id: str, n: int
                     analysis=analysis,
                     source_file_name=name,
                     source_file_size=len(pdf),
+                    source_pdf_data=pdf,
                 )
                 rid = str(saved.get("_id") or saved.get("rfpId") or "").strip()
                 if rid:

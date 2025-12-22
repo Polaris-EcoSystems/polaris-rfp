@@ -208,6 +208,95 @@ def fail_job(*, job_id: str, error: str) -> dict[str, Any] | None:
     return normalize_job(updated)
 
 
+def cancel_job(*, job_id: str) -> dict[str, Any] | None:
+    """Cancel a job (mark as cancelled). Only works for queued or checkpointed jobs."""
+    jid = str(job_id or "").strip()
+    if not jid:
+        raise ValueError("job_id is required")
+    now = _now_iso()
+    updated = get_main_table().update_item(
+        key=job_key(job_id=jid),
+        update_expression="SET #s = :c, finishedAt = :f, updatedAt = :u",
+        expression_attribute_names={"#s": "status"},
+        expression_attribute_values={":c": "cancelled", ":f": now, ":u": now, ":q": "queued", ":ch": "checkpointed"},
+        condition_expression="#s IN (:q, :ch)",
+        return_values="ALL_NEW",
+    )
+    return normalize_job(updated) if updated else None
+
+
+def update_job(*, job_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    """Update job fields. Only allows updating certain fields when job is queued."""
+    jid = str(job_id or "").strip()
+    if not jid:
+        raise ValueError("job_id is required")
+    
+    # Get current job to check status
+    current = get_job(job_id=jid)
+    if not current:
+        return None
+    
+    current_status = str(current.get("status") or "").strip().lower()
+    
+    # Only allow updating certain fields when queued or checkpointed
+    allowed_fields = {"dueAt", "payload", "scope", "dependsOn"}
+    if current_status not in ("queued", "checkpointed"):
+        allowed_fields = set()  # No updates allowed for running/completed/failed jobs
+    
+    # Filter updates to only allowed fields
+    filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields}
+    
+    if not filtered_updates:
+        return current  # No valid updates
+    
+    now = _now_iso()
+    expr_parts: list[str] = []
+    expr_names: dict[str, str] = {}
+    expr_values: dict[str, Any] = {":u": now}
+    
+    i = 0
+    for k, v in filtered_updates.items():
+        i += 1
+        nk = f"#k{i}"
+        vk = f":v{i}"
+        expr_names[nk] = k
+        expr_values[vk] = v
+        expr_parts.append(f"{nk} = {vk}")
+    
+    # If dueAt changed, need to update GSI1
+    if "dueAt" in filtered_updates:
+        new_due = str(filtered_updates["dueAt"]).strip()
+        expr_parts.append("gsi1sk = :gsi1sk")
+        expr_values[":gsi1sk"] = f"{new_due}#{jid}"
+    
+    expr_parts.append("updatedAt = :u")
+    
+    updated = get_main_table().update_item(
+        key=job_key(job_id=jid),
+        update_expression="SET " + ", ".join(expr_parts),
+        expression_attribute_names=expr_names if expr_names else None,
+        expression_attribute_values=expr_values,
+        return_values="ALL_NEW",
+    )
+    return normalize_job(updated) if updated else None
+
+
+def delete_job(*, job_id: str) -> None:
+    """Permanently delete a job. Only works for cancelled, completed, or failed jobs."""
+    jid = str(job_id or "").strip()
+    if not jid:
+        raise ValueError("job_id is required")
+    
+    # Get current job to check status
+    current = get_job(job_id=jid)
+    if current:
+        current_status = str(current.get("status") or "").strip().lower()
+        if current_status not in ("cancelled", "completed", "failed"):
+            raise ValueError(f"Cannot delete job with status: {current_status}")
+    
+    get_main_table().delete_item(key=job_key(job_id=jid))
+
+
 def list_recent_jobs(*, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
     """
     List recent agent jobs, optionally filtered by status.

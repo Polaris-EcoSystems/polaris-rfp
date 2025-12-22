@@ -762,6 +762,14 @@ export const rfpApi = {
       proxyUrl(`/api/rfp/${cleanPathToken(rfpId)}/buyer-profiles/remove`),
       data,
     ),
+  getDriveFolder: (id: string) =>
+    api.get<{
+      ok: boolean
+      folderUrl: string | null
+      folderId?: string
+      folders?: Record<string, string>
+      error?: string
+    }>(proxyUrl(`/api/rfp/${cleanPathToken(id)}/drive-folder`)),
 }
 
 export const tasksApi = {
@@ -1443,6 +1451,160 @@ export const magicLinkApi = {
       returnTo?: string | null
     }>('/api/session/magic-link/verify', data),
 }
+
+export interface AgentJob {
+  _id?: string
+  jobId: string
+  jobType: string
+  status:
+    | 'queued'
+    | 'running'
+    | 'checkpointed'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+  scope: Record<string, any>
+  payload?: Record<string, any>
+  dueAt: string
+  createdAt: string
+  updatedAt: string
+  startedAt?: string
+  finishedAt?: string
+  requestedByUserSub?: string
+  dependsOn?: string[]
+  checkpointId?: string
+  result?: Record<string, any>
+  error?: string
+}
+
+export const agentsApi = {
+  getInfrastructure: () =>
+    api.get<{
+      ok: boolean
+      infrastructure: {
+        baseAgentClass: string
+        workers: Array<{
+          name: string
+          description: string
+          schedule: string
+        }>
+        memory: {
+          type: string
+          tableName: string
+        }
+      }
+    }>(proxyUrl('/api/agents/infrastructure')),
+  listJobs: (params?: {
+    limit?: number
+    status?: string
+    jobType?: string
+    rfpId?: string
+  }) =>
+    api.get<{
+      ok: boolean
+      jobs: AgentJob[]
+      count: number
+      statusCounts: Record<string, number>
+    }>(proxyUrl('/api/agents/jobs'), { params }),
+  getJob: (jobId: string) =>
+    api.get<{ ok: boolean; job: AgentJob }>(
+      proxyUrl(`/api/agents/jobs/${cleanPathToken(jobId)}`),
+    ),
+  createJob: (data: {
+    jobType: string
+    scope: Record<string, any>
+    dueAt: string
+    payload?: Record<string, any>
+    dependsOn?: string[]
+  }) =>
+    api.post<{ ok: boolean; job: AgentJob }>(
+      proxyUrl('/api/agents/jobs'),
+      data,
+    ),
+  updateJob: (
+    jobId: string,
+    data: {
+      dueAt?: string
+      payload?: Record<string, any>
+      scope?: Record<string, any>
+      dependsOn?: string[]
+    },
+  ) =>
+    api.put<{ ok: boolean; job: AgentJob }>(
+      proxyUrl(`/api/agents/jobs/${cleanPathToken(jobId)}`),
+      data,
+    ),
+  cancelJob: (jobId: string) =>
+    api.post<{ ok: boolean; job: AgentJob }>(
+      proxyUrl(`/api/agents/jobs/${cleanPathToken(jobId)}/cancel`),
+    ),
+  deleteJob: (jobId: string) =>
+    api.delete<{ ok: boolean; message: string }>(
+      proxyUrl(`/api/agents/jobs/${cleanPathToken(jobId)}`),
+    ),
+  getActivity: (params?: {
+    hours?: number
+    limit?: number
+    rfpId?: string
+    userSubFilter?: string
+  }) =>
+    api.get<{
+      ok: boolean
+      since: string
+      count: number
+      events: Array<any>
+    }>(proxyUrl('/api/agents/activity'), { params }),
+  getMetrics: (params?: { hours?: number; operationType?: string }) =>
+    api.get<{
+      ok: boolean
+      since: string
+      hours: number
+      operationType?: string
+      metrics: {
+        count: number
+        avg_duration_ms: number
+        avg_steps: number
+        success_rate: number
+        p50_duration_ms?: number
+        p95_duration_ms?: number
+        p99_duration_ms?: number
+      }
+    }>(proxyUrl('/api/agents/metrics'), { params }),
+  getDiagnostics: (params?: {
+    hours?: number
+    rfpId?: string
+    userSub?: string
+    channelId?: string
+  }) =>
+    api.get<{
+      ok: boolean
+      window: {
+        start: string
+        end: string
+        hours: number
+      }
+      metrics: any
+      recentJobs: any[]
+      recentActivities: any[]
+      [key: string]: any
+    }>(proxyUrl('/api/agents/diagnostics'), { params }),
+  getWorkers: () =>
+    api.get<{
+      ok: boolean
+      workers: Array<{
+        name: string
+        schedule: string
+        description: string
+        logGroup?: string
+        resources?: {
+          cpu?: string
+          memory?: string
+        }
+      }>
+      note: string
+    }>(proxyUrl('/api/agents/workers')),
+}
+
 export const proposalApiPdf = {
   generate: (data: {
     rfpId: string
