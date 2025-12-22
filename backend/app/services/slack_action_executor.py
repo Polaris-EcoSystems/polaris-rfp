@@ -107,13 +107,13 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
             base_review.pop("assignedReviewerUserSub", None)
         
         # Set updatedAt and updatedBy (following router pattern)
-        review: dict[str, Any] = dict(base_review)
-        review["updatedAt"] = _now_iso()
+        final_review: dict[str, Any] = dict(base_review)
+        final_review["updatedAt"] = _now_iso()
         actor_sub = str(a.get("_actorUserSub") or a.get("_requestedByUserSub") or "").strip() or None
         if actor_sub:
-            review["updatedBy"] = actor_sub
+            final_review["updatedBy"] = actor_sub
         
-        updated = update_rfp(rfp_id, {"review": review})
+        updated = update_rfp(rfp_id, {"review": final_review})
         if not updated:
             return {"ok": False, "error": "update_failed"}
         

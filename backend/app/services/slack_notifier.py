@@ -310,7 +310,8 @@ def notify_review_assigned(*, rfp: dict[str, Any], actor_user_sub: str | None = 
 
     rfp_id = str(rfp.get("_id") or rfp.get("rfpId") or "").strip()
     rfp_title = str(rfp.get("title") or "RFP").strip() or "RFP"
-    review = rfp.get("review") if isinstance(rfp.get("review"), dict) else {}
+    review_raw = rfp.get("review")
+    review: dict[str, Any] = review_raw if isinstance(review_raw, dict) else {}
     assignee_sub = str(review.get("assignedReviewerUserSub") or "").strip()
     
     if not assignee_sub:

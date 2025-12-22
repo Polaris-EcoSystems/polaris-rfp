@@ -98,7 +98,8 @@ def open_assign_review_modal(*, trigger_id: str, channel_id: str, thread_ts: str
     from ...repositories.rfp.rfps_repo import get_rfp_by_id
     
     rfp = get_rfp_by_id(rfp_id) or {}
-    review = rfp.get("review") if isinstance(rfp.get("review"), dict) else {}
+    review_raw = rfp.get("review")
+    review: dict[str, Any] = review_raw if isinstance(review_raw, dict) else {}
     current_assignee = str(review.get("assignedReviewerUserSub") or "").strip()
     
     assignee_text = f"Currently assigned to: `{current_assignee}`" if current_assignee else "No reviewer assigned"
@@ -129,11 +130,12 @@ def open_bid_decision_modal(*, trigger_id: str, channel_id: str, thread_ts: str,
     from ...repositories.rfp.rfps_repo import get_rfp_by_id
     
     rfp = get_rfp_by_id(rfp_id) or {}
-    review = rfp.get("review") if isinstance(rfp.get("review"), dict) else {}
+    review_raw = rfp.get("review")
+    review: dict[str, Any] = review_raw if isinstance(review_raw, dict) else {}
     current_assignee = str(review.get("assignedReviewerUserSub") or "").strip()
     current_decision = str(review.get("decision") or "").strip()
     
-    blocks = [
+    blocks: list[dict[str, Any]] = [
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*RFP:* `{rfp_id}`"}},
     ]
     
@@ -142,6 +144,10 @@ def open_bid_decision_modal(*, trigger_id: str, channel_id: str, thread_ts: str,
             "type": "section",
             "text": {"type": "mrkdwn", "text": f"*Assigned reviewer:* `{current_assignee}`"},
         })
+    
+    notes_value: str | None = None
+    if review.get("notes"):
+        notes_value = str(review.get("notes") or "").strip()
     
     blocks.extend([
         {
@@ -161,14 +167,14 @@ def open_bid_decision_modal(*, trigger_id: str, channel_id: str, thread_ts: str,
         },
         {
             "type": "input",
-            "optional": True,
+            "optional": True,  # type: ignore[dict-item]
             "block_id": "notes_block",
             "label": {"type": "plain_text", "text": "Notes"},
             "element": {
                 "type": "plain_text_input",
                 "action_id": "notes",
                 "multiline": True,
-                "initial_value": str(review.get("notes") or "").strip() if review.get("notes") else None,
+                "initial_value": notes_value,
             },
         },
     ])
