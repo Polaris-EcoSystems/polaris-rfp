@@ -205,6 +205,15 @@ def _ensure_canva_design_for_proposal(*, user_id: str, proposal: dict[str, Any],
 
 @router.get("/status")
 def status(request: Request):
+    return _status_impl(request)
+
+
+@router.get("/status/")
+def status_slash(request: Request):
+    return _status_impl(request)
+
+
+def _status_impl(request: Request):
     user_id = _user_id_from_request(request)
     conn = canva_repo.get_connection_for_user(user_id)
     if not conn:
@@ -324,6 +333,15 @@ def dataset(request: Request, id: str):
 
 @router.get("/company-mappings")
 def list_company_mappings(request: Request):
+    return _list_company_mappings_impl(request)
+
+
+@router.get("/company-mappings/")
+def list_company_mappings_slash(request: Request):
+    return _list_company_mappings_impl(request)
+
+
+def _list_company_mappings_impl(request: Request):
     _ = _user_id_from_request(request)
     items = canva_repo.list_company_mappings(limit=200)
     return {"data": items}

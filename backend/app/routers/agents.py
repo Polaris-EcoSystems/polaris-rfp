@@ -37,6 +37,17 @@ def _now_iso() -> str:
 
 @router.get("/infrastructure")
 def get_infrastructure_info() -> dict[str, Any]:
+    """Get agent infrastructure information (no trailing slash)."""
+    return _get_infrastructure_info_impl()
+
+
+@router.get("/infrastructure/")
+def get_infrastructure_info_slash() -> dict[str, Any]:
+    """Get agent infrastructure information (with trailing slash)."""
+    return _get_infrastructure_info_impl()
+
+
+def _get_infrastructure_info_impl() -> dict[str, Any]:
     """
     Get agent infrastructure information.
     
@@ -366,6 +377,17 @@ def get_diagnostics(
 
 @router.get("/workers")
 def get_workers_summary() -> dict[str, Any]:
+    """Get summary information about worker processes (no trailing slash)."""
+    return _get_workers_summary_impl()
+
+
+@router.get("/workers/")
+def get_workers_summary_slash() -> dict[str, Any]:
+    """Get summary information about worker processes (with trailing slash)."""
+    return _get_workers_summary_impl()
+
+
+def _get_workers_summary_impl() -> dict[str, Any]:
     """
     Get summary information about worker processes.
     

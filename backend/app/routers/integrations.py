@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ..observability.logging import get_logger
 from ..services.agent_infrastructure_config import get_infrastructure_config
-from ..services import canva_repo
+from ..services.canva_repo import get_connection_for_user
 
 log = get_logger("integrations_router")
 
@@ -34,6 +34,17 @@ def _user_id_from_request(request: Request) -> str:
 
 @router.get("/status")
 def get_integrations_status(request: Request) -> dict[str, Any]:
+    """Get status for all integrations (no trailing slash)."""
+    return _get_integrations_status_impl(request)
+
+
+@router.get("/status/")
+def get_integrations_status_slash(request: Request) -> dict[str, Any]:
+    """Get status for all integrations (with trailing slash)."""
+    return _get_integrations_status_impl(request)
+
+
+def _get_integrations_status_impl(request: Request) -> dict[str, Any]:
     """
     Get status for all integrations.
     
@@ -129,7 +140,7 @@ def get_integrations_status(request: Request) -> dict[str, Any]:
     
     # Canva Status
     try:
-        conn = canva_repo.get_connection_for_user(user_id)
+        conn = get_connection_for_user(user_id)
         
         if not conn:
             integrations["canva"] = {
@@ -185,6 +196,17 @@ def get_integrations_status(request: Request) -> dict[str, Any]:
 
 @router.get("/activities")
 def get_recent_activities(request: Request, limit: int = 5) -> dict[str, Any]:
+    """Get recent activities for integrations (no trailing slash)."""
+    return _get_recent_activities_impl(request, limit)
+
+
+@router.get("/activities/")
+def get_recent_activities_slash(request: Request, limit: int = 5) -> dict[str, Any]:
+    """Get recent activities for integrations (with trailing slash)."""
+    return _get_recent_activities_impl(request, limit)
+
+
+def _get_recent_activities_impl(request: Request, limit: int = 5) -> dict[str, Any]:
     """
     Get recent activities for integrations.
     
