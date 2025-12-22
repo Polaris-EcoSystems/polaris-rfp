@@ -34,8 +34,20 @@ interface CanvaStatus extends IntegrationStatus {
   connection?: Record<string, any>
 }
 
+interface SlackStatus extends IntegrationStatus {
+  configured: boolean
+  tokenValid: boolean
+}
+
+interface GitHubStatus extends IntegrationStatus {
+  configured: boolean
+  tokenValid: boolean
+  repo?: string | null
+  allowedRepos?: string[]
+}
+
 interface Activity {
-  integration: 'canva' | 'googleDrive'
+  integration: 'canva' | 'googleDrive' | 'slack' | 'github'
   type: string
   tool?: string
   createdAt: string
@@ -47,6 +59,8 @@ export default function IntegrationsPage() {
   const [status, setStatus] = useState<{
     googleDrive?: GoogleDriveStatus
     canva?: CanvaStatus
+    slack?: SlackStatus
+    github?: GitHubStatus
   }>({})
   const [activities, setActivities] = useState<Activity[]>([])
   const [loading, setLoading] = useState(true)
@@ -329,6 +343,168 @@ export default function IntegrationsPage() {
               ) : (
                 <p className="text-sm text-gray-500">
                   Failed to load Canva status
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* Slack Integration */}
+          <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-gray-900">Slack</h2>
+                {status.slack && getStatusIcon(status.slack.status)}
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              {status.slack ? (
+                <>
+                  <div>
+                    <div
+                      className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium border ${getStatusColor(
+                        status.slack.status,
+                      )}`}
+                    >
+                      {status.slack.statusMessage}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-gray-600">Configured:</span>
+                      <span
+                        className={
+                          status.slack.configured
+                            ? 'text-green-600 font-medium'
+                            : 'text-gray-400'
+                        }
+                      >
+                        {status.slack.configured ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                    {status.slack.configured && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="text-gray-600">Token Valid:</span>
+                        <span
+                          className={
+                            status.slack.tokenValid
+                              ? 'text-green-600 font-medium'
+                              : 'text-red-600 font-medium'
+                          }
+                        >
+                          {status.slack.tokenValid ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {status.slack.error && (
+                    <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded">
+                      <h4 className="text-sm font-medium text-red-900 mb-1">
+                        Error
+                      </h4>
+                      <p className="text-xs font-mono text-red-700 break-all">
+                        {status.slack.error}
+                      </p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm text-gray-500">
+                  Failed to load Slack status
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* GitHub Integration */}
+          <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold text-gray-900">GitHub</h2>
+                {status.github && getStatusIcon(status.github.status)}
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              {status.github ? (
+                <>
+                  <div>
+                    <div
+                      className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium border ${getStatusColor(
+                        status.github.status,
+                      )}`}
+                    >
+                      {status.github.statusMessage}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-gray-600">Configured:</span>
+                      <span
+                        className={
+                          status.github.configured
+                            ? 'text-green-600 font-medium'
+                            : 'text-gray-400'
+                        }
+                      >
+                        {status.github.configured ? 'Yes' : 'No'}
+                      </span>
+                    </div>
+                    {status.github.configured && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="text-gray-600">Token Valid:</span>
+                        <span
+                          className={
+                            status.github.tokenValid
+                              ? 'text-green-600 font-medium'
+                              : 'text-red-600 font-medium'
+                          }
+                        >
+                          {status.github.tokenValid ? 'Yes' : 'No'}
+                        </span>
+                      </div>
+                    )}
+                    {status.github.repo && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="text-gray-600">Repository:</span>
+                        <span className="text-gray-900 font-mono">
+                          {status.github.repo}
+                        </span>
+                      </div>
+                    )}
+                    {status.github.allowedRepos &&
+                      status.github.allowedRepos.length > 0 && (
+                        <div className="text-sm">
+                          <span className="text-gray-600">Allowed Repos:</span>
+                          <div className="mt-1 space-y-1">
+                            {status.github.allowedRepos.map((repo, idx) => (
+                              <div
+                                key={idx}
+                                className="text-gray-900 font-mono text-xs"
+                              >
+                                {repo}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                  </div>
+
+                  {status.github.error && (
+                    <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded">
+                      <h4 className="text-sm font-medium text-red-900 mb-1">
+                        Error
+                      </h4>
+                      <p className="text-xs font-mono text-red-700 break-all">
+                        {status.github.error}
+                      </p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm text-gray-500">
+                  Failed to load GitHub status
                 </p>
               )}
             </div>

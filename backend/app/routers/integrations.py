@@ -54,9 +54,11 @@ def _get_integrations_status_impl(request: Request) -> dict[str, Any]:
     
     integrations: dict[str, Any] = {}
     
+    # Get infrastructure config (used by multiple integrations)
+    config = get_infrastructure_config()
+    
     # Google Drive Status
     try:
-        config = get_infrastructure_config()
         
         overall_error = config.google_drive_credentials_error
         
@@ -188,6 +190,121 @@ def _get_integrations_status_impl(request: Request) -> dict[str, Any]:
             "error": str(e),
         }
     
+    # Slack Status
+    try:
+        from ..services.slack_web import is_slack_configured, slack_api_get
+        
+        configured = is_slack_configured()
+        token_valid = False
+        error = None
+        
+        if configured:
+            # Test the token by calling auth.test
+            try:
+                test_result = slack_api_get(method="auth.test")
+                if test_result.get("ok"):
+                    token_valid = True
+                    status = "green"
+                    status_message = "Configured and working"
+                else:
+                    token_valid = False
+                    status = "yellow"
+                    status_message = "Configured but token invalid"
+                    error = test_result.get("error", "Token validation failed")
+            except Exception as e:
+                token_valid = False
+                status = "yellow"
+                status_message = f"Configured but error: {str(e)}"
+                error = str(e)
+        else:
+            status = "red"
+            status_message = "Not configured"
+        
+        integrations["slack"] = {
+            "status": status,
+            "statusMessage": status_message,
+            "configured": configured,
+            "tokenValid": token_valid,
+            "error": error,
+        }
+    except Exception as e:
+        log.exception("failed_to_check_slack_status", error=str(e))
+        integrations["slack"] = {
+            "status": "red",
+            "statusMessage": f"Error checking status: {str(e)}",
+            "configured": False,
+            "tokenValid": False,
+            "error": str(e),
+        }
+    
+    # GitHub Status
+    try:
+        github_config = config.get_summary().get("github", {})
+        repo = github_config.get("repo")
+        token_configured = github_config.get("tokenConfigured", False)
+        allowed_repos = github_config.get("allowedRepos", [])
+        
+        token_valid = False
+        error = None
+        
+        if token_configured:
+            # Test the token by making a simple API call
+            try:
+                from ..infrastructure.github.github_api import _token
+                token = _token()
+                if token:
+                    import httpx
+                    headers = {
+                        "Accept": "application/vnd.github+json",
+                        "Authorization": f"Bearer {token}",
+                        "User-Agent": "polaris-rfp-integrations",
+                    }
+                    with httpx.Client(timeout=5.0) as client:
+                        resp = client.get("https://api.github.com/user", headers=headers)
+                        if resp.status_code == 200:
+                            token_valid = True
+                            status = "green"
+                            status_message = "Configured and working"
+                        else:
+                            token_valid = False
+                            status = "yellow"
+                            status_message = "Configured but token invalid"
+                            error = f"API returned status {resp.status_code}"
+                else:
+                    token_valid = False
+                    status = "yellow"
+                    status_message = "Token not found"
+                    error = "Token not accessible"
+            except Exception as e:
+                token_valid = False
+                status = "yellow"
+                status_message = f"Configured but error: {str(e)}"
+                error = str(e)
+        else:
+            status = "red"
+            status_message = "Not configured"
+        
+        integrations["github"] = {
+            "status": status,
+            "statusMessage": status_message,
+            "configured": token_configured,
+            "tokenValid": token_valid,
+            "repo": repo,
+            "allowedRepos": allowed_repos,
+            "error": error,
+        }
+    except Exception as e:
+        log.exception("failed_to_check_github_status", error=str(e))
+        integrations["github"] = {
+            "status": "red",
+            "statusMessage": f"Error checking status: {str(e)}",
+            "configured": False,
+            "tokenValid": False,
+            "repo": None,
+            "allowedRepos": [],
+            "error": str(e),
+        }
+    
     return {
         "ok": True,
         "integrations": integrations,
@@ -244,6 +361,12 @@ def _get_recent_activities_impl(request: Request, limit: int = 5) -> dict[str, A
             elif "drive" in event_type or "drive" in tool or "googledrive" in event_type or "googledrive" in tool:
                 is_integration_event = True
                 integration_name = "googleDrive"
+            elif "slack" in event_type or "slack" in tool:
+                is_integration_event = True
+                integration_name = "slack"
+            elif "github" in event_type or "github" in tool or "gh" in event_type or "gh" in tool:
+                is_integration_event = True
+                integration_name = "github"
             
             # Check payload for integration keywords
             if not is_integration_event and isinstance(payload, dict):
@@ -254,6 +377,12 @@ def _get_recent_activities_impl(request: Request, limit: int = 5) -> dict[str, A
                 elif any(kw in payload_str for kw in ["drive", "googledrive"]):
                     is_integration_event = True
                     integration_name = "googleDrive"
+                elif "slack" in payload_str:
+                    is_integration_event = True
+                    integration_name = "slack"
+                elif any(kw in payload_str for kw in ["github", "gh"]):
+                    is_integration_event = True
+                    integration_name = "github"
             
             if is_integration_event:
                 activities.append({
