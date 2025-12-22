@@ -81,6 +81,51 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
             return {"ok": False, "error": "update_failed"}
         return {"ok": True, "action": k, "rfpId": rfp_id, "review": updated.get("review")}
 
+    if k == "assign_rfp_review":
+        rfp_id = str(a.get("rfpId") or "").strip()
+        assignee = str(a.get("assigneeUserSub") or "").strip()
+        if not rfp_id:
+            return {"ok": False, "error": "missing_rfpId"}
+        if not assignee:
+            return {"ok": False, "error": "missing_assigneeUserSub"}
+        existing = get_rfp_by_id(rfp_id)
+        if not existing:
+            return {"ok": False, "error": "rfp_not_found"}
+        
+        # Follow the same pattern as the router endpoint (PUT /rfps/{id}/review)
+        # to ensure consistent validation and behavior
+        existing_review = existing.get("review")
+        base_review: dict[str, Any] = (
+            dict(existing_review) if isinstance(existing_review, dict) else {}
+        )
+        
+        # Set or unset assignedReviewerUserSub (following router logic)
+        if assignee:
+            base_review["assignedReviewerUserSub"] = assignee
+        else:
+            # Empty string means unassign
+            base_review.pop("assignedReviewerUserSub", None)
+        
+        # Set updatedAt and updatedBy (following router pattern)
+        review: dict[str, Any] = dict(base_review)
+        review["updatedAt"] = _now_iso()
+        actor_sub = str(a.get("_actorUserSub") or a.get("_requestedByUserSub") or "").strip() or None
+        if actor_sub:
+            review["updatedBy"] = actor_sub
+        
+        updated = update_rfp(rfp_id, {"review": review})
+        if not updated:
+            return {"ok": False, "error": "update_failed"}
+        
+        # Best-effort Slack notifications.
+        try:
+            from ..slack_notifier import notify_review_assigned
+            notify_review_assigned(rfp=updated, actor_user_sub=actor_sub)
+        except Exception:
+            pass
+        
+        return {"ok": True, "action": k, "rfpId": rfp_id, "review": updated.get("review")}
+
     if k == "assign_task":
         task_id = str(a.get("taskId") or "").strip()
         assignee = str(a.get("assigneeUserSub") or "").strip()

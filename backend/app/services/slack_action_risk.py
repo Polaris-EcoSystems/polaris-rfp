@@ -26,7 +26,7 @@ def classify_action_risk(*, action: str, args: dict[str, Any] | None = None) -> 
         return ActionRiskDecision(risk="low", requires_confirmation=False)
 
     # Task and workflow changes affect shared work; confirm.
-    if k in ("seed_tasks_for_rfp", "assign_task", "complete_task", "update_rfp_review"):
+    if k in ("seed_tasks_for_rfp", "assign_task", "complete_task", "update_rfp_review", "assign_rfp_review"):
         return ActionRiskDecision(risk="medium", requires_confirmation=True)
 
     # Infra / data operations: always confirm.

@@ -299,6 +299,58 @@ def notify_task_assigned(*, task: dict[str, Any], actor_user_sub: str | None = N
         )
 
 
+def notify_review_assigned(*, rfp: dict[str, Any], actor_user_sub: str | None = None) -> None:
+    """
+    Notify #rfp-machine and DM the assignee when a review is assigned (best-effort).
+    """
+    log = get_logger("slack_notifier")
+    ch = _slack_rfp_machine_channel()
+    if not ch:
+        return
+
+    rfp_id = str(rfp.get("_id") or rfp.get("rfpId") or "").strip()
+    rfp_title = str(rfp.get("title") or "RFP").strip() or "RFP"
+    review = rfp.get("review") if isinstance(rfp.get("review"), dict) else {}
+    assignee_sub = str(review.get("assignedReviewerUserSub") or "").strip()
+    
+    if not assignee_sub:
+        return  # No assignee to notify
+    
+    rfp_link = f"<{_rfp_url(rfp_id)}|{rfp_title}>" if rfp_id else "RFP"
+    actor_part = f" by `{actor_user_sub}`" if actor_user_sub else ""
+    text = f"Review assigned{actor_part}: *{rfp_title}* → *{assignee_sub}*\n{rfp_link} `{rfp_id}`"
+
+    res = post_message_result(text=text, channel=ch, unfurl_links=False)
+    if not bool(res.get("ok")):
+        log.warning(
+            "slack_review_assigned_channel_failed",
+            rfp_id=rfp_id or None,
+            channel=str(res.get("channel") or ch or "") or None,
+            error=str(res.get("error") or "") or None,
+        )
+
+    # DM assignee (lookup by email via session table, then Slack users.lookupByEmail)
+    email = _assignee_email_for_sub(assignee_sub)
+    if not email:
+        return
+    slack_uid = lookup_user_id_by_email(email)
+    if not slack_uid:
+        return
+    dm_channel = open_dm_channel(user_id=slack_uid)
+    if not dm_channel:
+        return
+
+    dm_text = f"You were assigned to review: *{rfp_title}*\n{rfp_link}"
+    dm_res = chat_post_message_result(text=dm_text, channel=dm_channel, unfurl_links=False)
+    if not bool(dm_res.get("ok")):
+        log.warning(
+            "slack_review_assigned_dm_failed",
+            rfp_id=rfp_id or None,
+            assignee_sub=assignee_sub or None,
+            error=str(dm_res.get("error") or "") or None,
+        )
+
+
 def notify_task_completed(*, task: dict[str, Any], actor_user_sub: str | None) -> None:
     """
     Notify #rfp-machine when a task is completed (best-effort).

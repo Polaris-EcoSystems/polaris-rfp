@@ -7,7 +7,6 @@ from ...observability.logging import get_logger
 from ...settings import settings
 from ...domain.rfp.rfp_analyzer import analyze_rfp
 from ...repositories.rfp.rfps_repo import create_rfp_from_analysis
-from ..slack_actions_repo import create_action
 from ..slack_agent import _blocks_for_proposed_action, run_slack_agent_question
 from ..slack_thread_bindings_repo import get_binding as get_thread_binding
 from ..slack_web import (
@@ -138,6 +137,22 @@ def handle_shortcut(*, payload: dict[str, Any], background_tasks: Any) -> dict[s
         ok = modals_surface.open_bid_decision_modal(trigger_id=trigger_id, channel_id=channel_id, thread_ts=th, rfp_id=rid)
         return {"response_type": "ephemeral", "text": "Opening…" if ok else "Failed to open modal."}
 
+    if cb in ("polaris_assign_review", "assign_review"):
+        if not channel_id or not th or not trigger_id:
+            return {"response_type": "ephemeral", "text": "Missing channel/thread context."}
+        rid = None
+        try:
+            b = get_thread_binding(channel_id=channel_id, thread_ts=th) or {}
+            rid = str((b or {}).get("rfpId") or "").strip() or None
+        except Exception:
+            rid = None
+        if not rid:
+            rid = _extract_rfp_id(_message_text_from_payload(payload))
+        if not rid:
+            return {"response_type": "ephemeral", "text": "Bind this thread first: `@polaris link rfp_...`"}
+        ok = modals_surface.open_assign_review_modal(trigger_id=trigger_id, channel_id=channel_id, thread_ts=th, rfp_id=rid)
+        return {"response_type": "ephemeral", "text": "Opening…" if ok else "Failed to open modal."}
+
     # Create RFP from a PDF attached to the message.
     if cb in ("polaris_create_rfp_from_message", "create_rfp_from_message"):
         f = _first_pdf_file(payload)
@@ -155,9 +170,56 @@ def handle_shortcut(*, payload: dict[str, Any], background_tasks: Any) -> dict[s
             analysis = analyze_rfp(pdf, name)
             saved = create_rfp_from_analysis(analysis=analysis, source_file_name=name, source_file_size=len(pdf))
             rid = str(saved.get("_id") or saved.get("rfpId") or "").strip()
+            
+            # Check if message mentions a user to assign review to
+            text = _message_text_from_payload(payload)
+            assignee_slack_id = None
+            if user_id and channel_id:
+                # Look for @mentions in the message
+                mentions = re.findall(r'<@([A-Z0-9]+)>', text)
+                if mentions:
+                    # Use first mention as potential reviewer
+                    assignee_slack_id = mentions[0]
+            
             if channel_id and th and rid:
+                msg_text = f"Created RFP: <{_rfp_url(rid)}|`{rid}`>"
+                if assignee_slack_id:
+                    try:
+                        from ..slack_actor_context import resolve_actor_context
+                        assignee_ctx = resolve_actor_context(slack_user_id=assignee_slack_id, slack_team_id=None, slack_enterprise_id=None)
+                        if assignee_ctx.user_sub:
+                            # Auto-assign review if mentioned user is recognized
+                            from ..slack_actions_repo import create_action
+                            saved = create_action(
+                                kind="assign_rfp_review",
+                                payload={
+                                    "action": "assign_rfp_review",
+                                    "args": {"rfpId": rid, "assigneeUserSub": assignee_ctx.user_sub},
+                                    "summary": f"Assign bid/no-bid review for `{rid}` to `{assignee_ctx.user_sub}`",
+                                    "requestedBySlackUserId": user_id,
+                                    "channelId": channel_id,
+                                    "threadTs": th,
+                                    "question": f"assign review for {rid}",
+                                    "rfpId": rid,
+                                },
+                                ttl_seconds=900,
+                            )
+                            aid = str(saved.get("actionId") or "").strip()
+                            if aid:
+                                msg_text += f"\nReview assigned to <@{assignee_slack_id}> (pending approval)"
+                                # Post action proposal blocks in thread
+                                chat_post_message_result(
+                                    text=f"Proposed: assign review for `{rid}` to <@{assignee_slack_id}>",
+                                    channel=channel_id,
+                                    thread_ts=th,
+                                    blocks=_blocks_for_proposed_action(action_id=aid, summary=f"Assign bid/no-bid review for `{rid}` to `{assignee_ctx.user_sub}`"),
+                                    unfurl_links=False,
+                                )
+                    except Exception:
+                        pass  # Non-fatal if assignment fails
+                
                 chat_post_message_result(
-                    text=f"Created RFP: <{_rfp_url(rid)}|`{rid}`>",
+                    text=msg_text,
                     channel=channel_id,
                     thread_ts=th,
                     unfurl_links=False,

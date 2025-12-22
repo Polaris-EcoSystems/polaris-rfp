@@ -1181,6 +1181,7 @@ def update_review(id: str, request: Request, body: dict = Body(...)):
             notes?: string,
             mappedSections?: string[]
         }[] (optional)
+      - assignedReviewerUserSub: string (optional) - user sub to assign review to
     """
     rfp = get_rfp_by_id(id)
     if not rfp:
@@ -1270,6 +1271,14 @@ def update_review(id: str, request: Request, body: dict = Body(...)):
                 obj = {"text": text, "status": status, "notes": notes, "mappedSections": mapped}
                 reqs.append(obj)
         base_review["requirements"] = reqs
+
+    if "assignedReviewerUserSub" in b:
+        reviewer_sub = str(b.get("assignedReviewerUserSub") or "").strip()
+        if reviewer_sub:
+            base_review["assignedReviewerUserSub"] = reviewer_sub
+        else:
+            # Empty string means unassign
+            base_review.pop("assignedReviewerUserSub", None)
 
     user = getattr(getattr(request, "state", None), "user", None)
     user_sub = str(getattr(user, "sub", "") or "").strip() if user else ""
