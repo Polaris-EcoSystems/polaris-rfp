@@ -19,6 +19,7 @@ from ..services.opportunity_compactor import run_opportunity_compaction
 from ..services.agent_daily_digest import run_daily_digest_and_reschedule
 from ..services.agent_diagnostics_scheduler import run_diagnostics_update_and_reschedule
 from ..services.agent_self_improve import run_perch_time_once
+from ..services.external_context_aggregator_scheduler import run_external_context_aggregation_and_reschedule
 from ..services.slack_reply_tools import post_summary
 from ..services.self_modify_pipeline import get_pr_checks, open_pr_for_change_proposal, verify_ecs_rollout
 from ..services.slack_web import chat_post_message_result
@@ -188,6 +189,20 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     hours = int(payload.get("hours") or 24)
                     reschedule_minutes = int(payload.get("rescheduleMinutes") or 60)
                     res = run_diagnostics_update_and_reschedule(hours=hours, reschedule_minutes=reschedule_minutes)
+                    complete_job(job_id=jid, result=res)
+                    completed += 1
+                    continue
+
+                if job_type == "external_context_aggregation":
+                    # Global, not tied to an RFP. Aggregates and reports on external context sources.
+                    hours = int(payload.get("hours") or 4)
+                    reschedule_hours = int(payload.get("rescheduleHours") or 4)
+                    report_to_slack = bool(payload.get("reportToSlack", True))
+                    res = run_external_context_aggregation_and_reschedule(
+                        hours=hours,
+                        reschedule_hours=reschedule_hours,
+                        report_to_slack=report_to_slack,
+                    )
                     complete_job(job_id=jid, result=res)
                     completed += 1
                     continue

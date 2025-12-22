@@ -63,7 +63,32 @@ def create_rfp_from_analysis(*, analysis: dict[str, Any], source_file_name: str,
         source_file_size=source_file_size,
     )
     get_main_table().put_item(item=item, condition_expression="attribute_not_exists(pk)")
-    return normalize_rfp_for_api(item) or {}
+    result = normalize_rfp_for_api(item) or {}
+    
+    # Trigger folder creation and template population (background, best-effort)
+    try:
+        from ...services.drive_project_setup import setup_project_folders
+        from ...services.drive_template_populator import populate_project_templates
+        
+        # Create folders
+        folder_result = setup_project_folders(rfp_id=rfp_id)
+        if folder_result.get("ok"):
+            folders = folder_result.get("folders", {})
+            # Populate templates
+            templates_folder = folders.get("templates")
+            financial_folder = folders.get("financial")
+            populate_project_templates(
+                rfp_id=rfp_id,
+                templates_folder_id=templates_folder,
+                financial_folder_id=financial_folder,
+            )
+    except Exception as e:
+        # Non-fatal - log but don't fail RFP creation
+        from ...observability.logging import get_logger
+        log = get_logger("rfps_repo")
+        log.warning("auto_folder_setup_failed", rfp_id=rfp_id, error=str(e))
+    
+    return result
 
 
 def build_rfp_item_from_analysis(

@@ -1850,6 +1850,293 @@ def _slack_send_dm_tool(args: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
+def _opportunity_link_drive_file_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Link a Google Drive file to an RFP's OpportunityState."""
+    rfp_id = str(args.get("rfpId") or "").strip()
+    file_id = str(args.get("fileId") or "").strip()
+    file_name = str(args.get("fileName") or "").strip()
+    folder_id = str(args.get("folderId") or "").strip() or None
+    category = str(args.get("category") or "rfpfiles").strip()
+    web_view_link = str(args.get("webViewLink") or "").strip() or None
+    
+    if not rfp_id:
+        return {"ok": False, "error": "rfp_id_required"}
+    if not file_id:
+        return {"ok": False, "error": "file_id_required"}
+    if not file_name:
+        return {"ok": False, "error": "file_name_required"}
+    
+    try:
+        from datetime import datetime, timezone
+        from ..repositories.rfp.opportunity_state_repo import patch_state, ensure_state_exists
+        from ..repositories.rfp.agent_journal_repo import append_entry
+        
+        # Ensure state exists
+        ensure_state_exists(rfp_id=rfp_id)
+        
+        # Add file to driveFiles
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        file_entry = {
+            "fileId": file_id,
+            "fileName": file_name,
+            "folderId": folder_id,
+            "category": category,
+            "uploadedAt": now,
+        }
+        
+        patch_state(
+            rfp_id=rfp_id,
+            patch={"driveFiles_append": [file_entry]},
+        )
+        
+        # Create journal entry
+        folder_name = category.replace("files", " Files").title() if category else "Drive"
+        journal_text = f"Linked {file_name} to {folder_name} folder in Google Drive"
+        if web_view_link:
+            journal_text += f" ({web_view_link})"
+        
+        append_entry(
+            rfp_id=rfp_id,
+            entry={
+                "text": journal_text,
+                "type": "file_linked",
+                "metadata": {
+                    "fileId": file_id,
+                    "fileName": file_name,
+                    "folderId": folder_id,
+                    "category": category,
+                    "webViewLink": web_view_link,
+                },
+            },
+        )
+        
+        return {
+            "ok": True,
+            "rfpId": rfp_id,
+            "fileId": file_id,
+            "fileName": file_name,
+            "linked": True,
+        }
+    except Exception as e:
+        err_msg = str(e) or "link_failed"
+        log.error("opportunity_link_drive_file_failed", error=err_msg, rfp_id=rfp_id, file_id=file_id)
+        return {"ok": False, "error": "link_failed", "hint": err_msg}
+
+
+def _rfp_vet_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Quick RFP vetting - analyzes RFP for basic fit criteria."""
+    rfp_id = str(args.get("rfpId") or "").strip()
+    file_url = str(args.get("fileUrl") or "").strip()
+    file_name = str(args.get("fileName") or "upload.pdf").strip() or "upload.pdf"
+    
+    if not rfp_id and not file_url:
+        return {"ok": False, "error": "rfp_id or file_url required"}
+    
+    try:
+        # If file_url provided, analyze it first
+        if file_url:
+            from .slack_web import download_slack_file
+            from .rfp_analyzer import analyze_rfp
+            from ..repositories.rfp.rfps_repo import create_rfp_from_analysis
+            
+            pdf_data = download_slack_file(url=file_url, max_bytes=60 * 1024 * 1024)
+            analysis = analyze_rfp(pdf_data, file_name)
+            saved = create_rfp_from_analysis(
+                analysis=analysis,
+                source_file_name=file_name,
+                source_file_size=len(pdf_data),
+            )
+            rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
+            if not rfp_id:
+                return {"ok": False, "error": "rfp_creation_failed"}
+        
+        # Get RFP and compute fit score
+        from ..repositories.rfp.rfps_repo import get_rfp_by_id
+        from ..domain.rfp.rfp_logic import compute_fit_score, check_disqualification, compute_date_sanity
+        
+        rfp = get_rfp_by_id(rfp_id) or {}
+        if not rfp:
+            return {"ok": False, "error": "rfp_not_found"}
+        
+        # Compute fit score
+        fit_result = compute_fit_score(rfp)
+        fit_score = fit_result.get("score", 0)
+        fit_reasons = fit_result.get("reasons", [])
+        
+        # Check disqualification
+        is_disqualified = check_disqualification(rfp)
+        
+        # Check date sanity
+        date_result = compute_date_sanity(rfp)
+        date_warnings = date_result.get("warnings", [])
+        
+        # Determine recommendation
+        if is_disqualified:
+            recommendation = "disqualified"
+            recommendation_text = "❌ Disqualified (past deadline or mandatory requirements not met)"
+        elif fit_score >= 7:
+            recommendation = "good_fit"
+            recommendation_text = "✅ Good fit"
+        elif fit_score >= 4:
+            recommendation = "review_needed"
+            recommendation_text = "⚠️ Review needed"
+        else:
+            recommendation = "poor_fit"
+            recommendation_text = "❌ Poor fit"
+        
+        return {
+            "ok": True,
+            "rfpId": rfp_id,
+            "fitScore": fit_score,
+            "fitReasons": fit_reasons,
+            "isDisqualified": is_disqualified,
+            "dateWarnings": date_warnings,
+            "recommendation": recommendation,
+            "recommendationText": recommendation_text,
+            "clientName": rfp.get("clientName"),
+            "title": rfp.get("title") or rfp.get("rfpTitle"),
+        }
+    except Exception as e:
+        err_msg = str(e) or "vetting_failed"
+        log.error("rfp_vet_failed", error=err_msg, rfp_id=rfp_id)
+        return {"ok": False, "error": "vetting_failed", "hint": err_msg}
+
+
+def _slack_file_to_drive_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Upload a Slack file to Google Drive with smart routing."""
+    file_url = str(args.get("fileUrl") or "").strip()
+    file_name = str(args.get("fileName") or "upload.pdf").strip() or "upload.pdf"
+    channel_id = str(args.get("channelId") or "").strip() or None
+    rfp_id = str(args.get("rfpId") or "").strip() or None
+    user_tags = args.get("userTags")
+    user_message = str(args.get("userMessage") or "").strip() or None
+    
+    if not file_url:
+        return {"ok": False, "error": "missing_file_url"}
+    
+    try:
+        from .slack_web import download_slack_file
+        from .drive_file_router import route_slack_file_to_drive, extract_user_tags_from_message
+        from ..tools.categories.google.google_drive import upload_file_to_drive
+        from .drive_project_setup import ensure_channel_drive_folder, get_project_folders
+        
+        # Extract tags from message if provided
+        if user_message and not user_tags:
+            user_tags = extract_user_tags_from_message(user_message)
+        
+        # Try to get RFP ID from channel if not provided
+        if not rfp_id and channel_id:
+            try:
+                from .slack_channel_projects_repo import get_channel_project
+                channel_proj = get_channel_project(channel_id=channel_id)
+                if channel_proj:
+                    rfp_id = channel_proj.get("rfpId")
+            except Exception:
+                pass
+        
+        # Determine routing
+        routing = route_slack_file_to_drive(
+            file_url=file_url,
+            file_name=file_name,
+            channel_id=channel_id,
+            rfp_id=rfp_id,
+            user_tags=user_tags if isinstance(user_tags, list) else None,
+        )
+        
+        if not routing.get("ok"):
+            return {"ok": False, "error": f"routing_failed: {routing.get('error')}"}
+        
+        folder_key = routing.get("folderKey", "rfpfiles")
+        folder_id = routing.get("folderId")
+        
+        # If no folder ID, try to get/create project folders
+        if not folder_id and rfp_id:
+            folders_result = get_project_folders(rfp_id=rfp_id)
+            if folders_result.get("ok"):
+                folders = folders_result.get("folders", {})
+                if folder_key == "rfpfiles":
+                    folder_id = folders.get("rfpfiles") or folders.get("root")
+                else:
+                    folder_id = folders.get(folder_key)
+        
+        # If still no folder and we have channel, try to ensure folder exists
+        if not folder_id and channel_id and rfp_id:
+            ensure_result = ensure_channel_drive_folder(channel_id=channel_id, rfp_id=rfp_id)
+            if ensure_result.get("ok"):
+                folders = ensure_result.get("folders", {})
+                if folder_key == "rfpfiles":
+                    folder_id = folders.get("rfpfiles") or folders.get("root")
+                else:
+                    folder_id = folders.get(folder_key)
+        
+        # Download file from Slack
+        file_data = download_slack_file(url=file_url, max_bytes=60 * 1024 * 1024)
+        
+        # Determine MIME type from file name
+        mime_type = None
+        if file_name.endswith('.pdf'):
+            mime_type = 'application/pdf'
+        elif file_name.endswith('.doc') or file_name.endswith('.docx'):
+            mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+        elif file_name.endswith('.xls') or file_name.endswith('.xlsx'):
+            mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        elif file_name.endswith('.txt'):
+            mime_type = 'text/plain'
+        
+        # Upload to Drive
+        upload_result = upload_file_to_drive(
+            name=file_name,
+            content=file_data,
+            mime_type=mime_type,
+            folder_id=folder_id,
+        )
+        
+        if not upload_result.get("ok"):
+            return {"ok": False, "error": f"upload_failed: {upload_result.get('error')}"}
+        
+        drive_file_id = upload_result.get("fileId")
+        drive_link = upload_result.get("webViewLink", "")
+        
+        # Link to OpportunityState if we have RFP
+        if rfp_id and drive_file_id:
+            try:
+                from ..repositories.rfp.opportunity_state_repo import patch_state
+                from datetime import datetime, timezone
+                
+                now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                
+                # Add file to driveFiles array
+                patch_state(
+                    rfp_id=rfp_id,
+                    patch={
+                        "driveFiles_append": [{
+                            "fileId": drive_file_id,
+                            "fileName": file_name,
+                            "folderId": folder_id,
+                            "category": routing.get("category", folder_key),
+                            "uploadedAt": now,
+                        }],
+                    },
+                )
+            except Exception as e:
+                log.warning("failed_to_link_file_to_opportunity", rfp_id=rfp_id, file_id=drive_file_id, error=str(e))
+        
+        return {
+            "ok": True,
+            "fileId": drive_file_id,
+            "fileName": file_name,
+            "folderKey": folder_key,
+            "folderId": folder_id,
+            "category": routing.get("category"),
+            "webViewLink": drive_link,
+            "routingReason": routing.get("reason"),
+        }
+    except Exception as e:
+        err_msg = str(e) or "upload_failed"
+        log.error("slack_file_to_drive_failed", error=err_msg, file_name=file_name)
+        return {"ok": False, "error": "upload_failed", "hint": err_msg}
+
+
 def _rfp_create_from_slack_file_tool(args: dict[str, Any]) -> dict[str, Any]:
     """Create a new RFP from a Slack file URL."""
     file_url = str(args.get("fileUrl") or "").strip()
@@ -2180,6 +2467,63 @@ OPERATOR_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
             },
         ),
         _rfp_create_from_slack_file_tool,
+    ),
+    "slack_file_to_drive": (
+        _tool_def(
+            "slack_file_to_drive",
+            "Upload a Slack file to Google Drive with smart routing to appropriate folder. Automatically categorizes files based on name/content and routes to Financial, Marketing, RFP Files, Drafts, or Questions folders.",
+            {
+                "type": "object",
+                "properties": {
+                    "fileUrl": {"type": "string", "description": "Slack file download URL (url_private_download or url_private from file metadata)", "minLength": 1, "maxLength": 500},
+                    "fileName": {"type": "string", "description": "Name of the file", "minLength": 1, "maxLength": 200},
+                    "channelId": {"type": "string", "description": "Slack channel ID for context", "maxLength": 50},
+                    "threadTs": {"type": "string", "description": "Thread timestamp for context", "maxLength": 40},
+                    "rfpId": {"type": "string", "description": "RFP ID to link file to (optional, will try to infer from channel)", "maxLength": 120},
+                    "userTags": {"type": "array", "items": {"type": "string"}, "description": "User-provided tags/hints for categorization (e.g., ['financial', 'budget'])", "maxItems": 10},
+                    "userMessage": {"type": "string", "description": "User message text to extract folder hints from", "maxLength": 500},
+                },
+                "required": ["fileUrl", "fileName"],
+                "additionalProperties": False,
+            },
+        ),
+        _slack_file_to_drive_tool,
+    ),
+    "rfp_vet": (
+        _tool_def(
+            "rfp_vet",
+            "Quick RFP vetting - analyzes RFP PDF or existing RFP for basic fit criteria. Returns fit score, recommendation, and key concerns. Use for initial screening.",
+            {
+                "type": "object",
+                "properties": {
+                    "rfpId": {"type": "string", "description": "RFP ID to vet (if RFP already exists)", "maxLength": 120},
+                    "fileUrl": {"type": "string", "description": "Slack file URL to analyze and vet (if RFP doesn't exist yet)", "maxLength": 500},
+                    "fileName": {"type": "string", "description": "File name (required if fileUrl provided)", "maxLength": 200},
+                },
+                "additionalProperties": False,
+            },
+        ),
+        _rfp_vet_tool,
+    ),
+    "opportunity_link_drive_file": (
+        _tool_def(
+            "opportunity_link_drive_file",
+            "Link a Google Drive file to an RFP's OpportunityState. Creates a journal entry documenting the linkage.",
+            {
+                "type": "object",
+                "properties": {
+                    "rfpId": {"type": "string", "minLength": 1, "maxLength": 120},
+                    "fileId": {"type": "string", "description": "Google Drive file ID", "minLength": 1, "maxLength": 200},
+                    "fileName": {"type": "string", "description": "File name", "minLength": 1, "maxLength": 200},
+                    "folderId": {"type": "string", "description": "Drive folder ID where file is located", "maxLength": 200},
+                    "category": {"type": "string", "description": "File category (financial, marketing, rfpfiles, drafts, questions)", "maxLength": 50},
+                    "webViewLink": {"type": "string", "description": "Optional web view link to file", "maxLength": 500},
+                },
+                "required": ["rfpId", "fileId", "fileName"],
+                "additionalProperties": False,
+            },
+        ),
+        _opportunity_link_drive_file_tool,
     ),
 }
 

@@ -48,6 +48,7 @@ from ..categories.aws.aws_secrets import get_secret_value as secrets_get_secret_
 from ..categories.google.google_drive import (
     read_google_doc as google_read_doc,
     list_google_drive_files as google_list_drive_files,
+    search_google_drive_files as google_search_drive_files,
     create_google_doc as google_create_doc,
     create_google_folder as google_create_folder,
     upload_file_to_drive as google_upload_file,
@@ -1127,6 +1128,17 @@ def _google_list_drive_files_tool(args: dict[str, Any]) -> dict[str, Any]:
         return google_list_drive_files(folder_id=folder_id, limit=limit)
     except Exception as e:
         return {"ok": False, "error": str(e) or "google_list_drive_files_failed"}
+
+
+def _google_search_drive_files_tool(args: dict[str, Any]) -> dict[str, Any]:
+    query = str(args.get("query") or "").strip()
+    folder_id = str(args.get("folderId") or "").strip() or None
+    rfp_id = str(args.get("rfpId") or "").strip() or None
+    limit = int(args.get("limit") or 20)
+    try:
+        return google_search_drive_files(query=query, folder_id=folder_id, rfp_id=rfp_id, limit=limit)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "google_search_drive_files_failed"}
 
 
 def _google_create_doc_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -2212,6 +2224,44 @@ READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
             },
         ),
         _google_list_drive_files_tool,
+    ),
+    "google_search_drive_files": (
+        tool_def(
+            "google_search_drive_files",
+            "Search Google Drive files by name or content. Can be scoped to a specific folder or RFP project.",
+            {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "description": "Search query (searches in file name and content)",
+                    },
+                    "folderId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "description": "Optional folder ID to scope search to",
+                    },
+                    "rfpId": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 120,
+                        "description": "Optional RFP ID to scope search to project folder",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 100,
+                        "description": "Maximum number of results (default: 20)",
+                    },
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        ),
+        _google_search_drive_files_tool,
     ),
     "google_create_doc": (
         tool_def(

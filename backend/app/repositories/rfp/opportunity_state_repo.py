@@ -81,6 +81,9 @@ def default_state(*, rfp_id: str) -> dict[str, Any]:
         "nextBestActions": [],
         "blockers": [],
         "evidenceNeeded": [],
+        # Google Drive integration.
+        "driveFolders": {},  # Map of folder type to Drive folder ID
+        "driveFiles": [],  # Array of {fileId, fileName, folderId, category, uploadedAt, uploadedBy}
     }
 
 
@@ -224,7 +227,7 @@ def _merge_state(existing_state: dict[str, Any], patch: dict[str, Any]) -> dict[
         if k == "commitments":
             continue
         # Dict-like fields: merge rather than replace to reduce accidental erasure.
-        if k in ("owners", "dueDates", "comms") and isinstance(nxt.get(k), dict) and isinstance(v, dict):
+        if k in ("owners", "dueDates", "comms", "driveFolders") and isinstance(nxt.get(k), dict) and isinstance(v, dict):
             merged = dict(nxt.get(k) or {})
             merged.update(v)
             nxt[k] = merged
@@ -248,6 +251,7 @@ def _merge_state(existing_state: dict[str, Any], patch: dict[str, Any]) -> dict[
     _append_list("nextBestActions", patch.get("nextBestActions_append"))
     _append_list("blockers", patch.get("blockers_append"))
     _append_list("evidenceNeeded", patch.get("evidenceNeeded_append"))
+    _append_list("driveFiles", patch.get("driveFiles_append"), max_items=100)
 
     # Commitments: add-only via commitments_append
     _append_list("commitments", patch.get("commitments_append"), max_items=25)

@@ -215,6 +215,112 @@ def list_google_drive_files(*, folder_id: str | None = None, limit: int = 50) ->
         return {"ok": False, "error": str(e)}
 
 
+def search_google_drive_files(
+    *,
+    query: str,
+    folder_id: str | None = None,
+    rfp_id: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    """
+    Search Google Drive files by name or content.
+    
+    Args:
+        query: Search query (searches in file name and content)
+        folder_id: Optional folder ID to scope search to
+        rfp_id: Optional RFP ID to scope search to project folder
+        limit: Maximum number of results
+    
+    Returns:
+        Dict with 'ok', 'files' (list of file metadata with folder path)
+    """
+    if not query or not query.strip():
+        return {"ok": False, "error": "query is required"}
+    
+    try:
+        # Try to get project folder if RFP ID provided
+        if rfp_id and not folder_id:
+            try:
+                from ...services.drive_project_setup import get_project_folders
+                folders_result = get_project_folders(rfp_id=rfp_id)
+                if folders_result.get("ok"):
+                    folders = folders_result.get("folders", {})
+                    # Search in root folder
+                    folder_id = folders.get("root")
+            except Exception as e:
+                log.warning("failed_to_get_project_folders_for_search", rfp_id=rfp_id, error=str(e))
+        
+        credentials = _get_google_credentials(use_api_key=False)
+        service = build('drive', 'v3', credentials=credentials)
+        
+        # Build search query
+        search_query_parts = ["trashed=false"]
+        
+        # Name contains query
+        search_query_parts.append(f"name contains '{query.strip()}'")
+        
+        # Full text search (searches in file content)
+        # Note: fullText search requires the file to be indexed by Google
+        search_query_parts.append(f"fullText contains '{query.strip()}'")
+        
+        # Combine with OR
+        name_query = f"name contains '{query.strip()}'"
+        fulltext_query = f"fullText contains '{query.strip()}'"
+        combined_query = f"({name_query} or {fulltext_query})"
+        
+        # Add folder constraint if provided
+        if folder_id:
+            combined_query = f"'{folder_id}' in parents and ({name_query} or {fulltext_query})"
+        
+        # Add trashed=false
+        final_query = f"trashed=false and ({combined_query})"
+        
+        results = service.files().list(
+            q=final_query,
+            pageSize=min(limit, 100),
+            fields='files(id,name,mimeType,createdTime,modifiedTime,webViewLink,size,parents)',
+            orderBy='modifiedTime desc',
+        ).execute()
+        
+        files = results.get('files', [])
+        
+        # Enrich with folder path information
+        enriched_files = []
+        for file in files:
+            file_info = dict(file)
+            
+            # Try to get folder name if we have parent
+            parents = file.get('parents', [])
+            if parents and len(parents) > 0:
+                try:
+                    parent_file = service.files().get(
+                        fileId=parents[0],
+                        fields='name'
+                    ).execute()
+                    file_info['parentFolderName'] = parent_file.get('name', '')
+                except Exception:
+                    pass
+            
+            enriched_files.append(file_info)
+        
+        return {
+            "ok": True,
+            "files": enriched_files,
+            "count": len(enriched_files),
+            "query": query,
+        }
+    
+    except HttpError as e:
+        error_details = json.loads(e.content.decode('utf-8')) if e.content else {}
+        error_msg = error_details.get('error', {}).get('message', str(e))
+        log.error("google_drive_search_error", error=error_msg, query=query)
+        return {"ok": False, "error": f"Google Drive API error: {error_msg}"}
+    
+    except Exception as e:
+        log.error("search_google_drive_files_failed", error=str(e), query=query)
+        return {"ok": False, "error": str(e)}
+
+
 def create_google_doc(*, title: str, content: str | None = None, folder_id: str | None = None) -> dict[str, Any]:
     """
     Create a new Google Doc.
