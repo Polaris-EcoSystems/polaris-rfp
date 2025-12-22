@@ -13,8 +13,8 @@ from ..services.contracting_repo import (
     get_contract_template,
     get_contract_template_version,
 )
-from ..services.proposals_repo import get_proposal_by_id
-from ..services.rfps_repo import get_rfp_by_id
+from ..repositories.rfp.proposals_repo import get_proposal_by_id
+from ..repositories.rfp.rfps_repo import get_rfp_by_id
 from ..services.s3_assets import get_object_bytes, put_object_bytes
 from ..services.contracting_schemas import ContractingKeyTerms
 

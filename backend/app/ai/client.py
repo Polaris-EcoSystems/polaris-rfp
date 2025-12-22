@@ -169,7 +169,7 @@ def _client(*, timeout_s: int = 60) -> Any:
         raise AiNotConfigured("OPENAI_API_KEY not configured")
     try:
         # OpenAI Python SDK v1.x
-        from openai import OpenAI
+        from openai import OpenAI  # type: ignore[attr-defined]
     except Exception as e:
         # Avoid crashing the whole app at import-time if the OpenAI SDK isn't present
         # (or is an older incompatible version). We only require it when actually

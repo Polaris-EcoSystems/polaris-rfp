@@ -4,7 +4,7 @@ from typing import Any
 
 
 def test_skill_body_key_is_under_agent_prefix():
-    from app.services.skills_store import skill_body_key
+    from app.skills.storage.skills_store import skill_body_key
 
     k = skill_body_key(skill_id="sk_abc123", version=2)
     assert k.startswith("agent/skills/")
@@ -12,7 +12,7 @@ def test_skill_body_key_is_under_agent_prefix():
 
 
 def test_skills_search_tool_calls_repo(monkeypatch):
-    from app.services.agent_tools import read_registry
+    from app.tools.registry import read_registry
 
     called: dict[str, Any] = {"ok": False}
 

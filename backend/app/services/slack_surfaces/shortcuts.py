@@ -5,8 +5,8 @@ from typing import Any
 
 from ...observability.logging import get_logger
 from ...settings import settings
-from ..rfp_analyzer import analyze_rfp
-from ..rfps_repo import create_rfp_from_analysis
+from ...domain.rfp.rfp_analyzer import analyze_rfp
+from ...repositories.rfp.rfps_repo import create_rfp_from_analysis
 from ..slack_actions_repo import create_action
 from ..slack_agent import _blocks_for_proposed_action, run_slack_agent_question
 from ..slack_thread_bindings_repo import get_binding as get_thread_binding
@@ -16,7 +16,7 @@ from ..slack_web import (
     get_user_info,
     slack_user_display_name,
 )
-from ..user_profiles_repo import get_user_profile_by_slack_user_id
+from ...repositories.users.user_profiles_repo import get_user_profile_by_slack_user_id
 from . import modals as modals_surface
 
 log = get_logger("slack_shortcuts")

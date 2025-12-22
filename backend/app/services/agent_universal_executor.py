@@ -135,9 +135,11 @@ def execute_universal_job(
     if resume and checkpoint_id:
         checkpoint = get_latest_checkpoint(rfp_id=rfp_id_for_job, job_id=job_id)
         if checkpoint:
-            checkpoint_data_for_budget = checkpoint.get("payload", {}).get("checkpointData", {})
-            if "execution_plan" in checkpoint_data_for_budget:
-                plan = checkpoint_data_for_budget.get("execution_plan")
+            checkpoint_data_for_budget = checkpoint.get("payload", {})
+            if checkpoint_data_for_budget and isinstance(checkpoint_data_for_budget, dict):
+                checkpoint_data = checkpoint_data_for_budget.get("checkpointData", {})
+                if isinstance(checkpoint_data, dict) and "execution_plan" in checkpoint_data:
+                    plan = checkpoint_data.get("execution_plan")
     
     # Initialize or restore token budget tracker
     token_budget_tracker = initialize_token_budget_for_job(
