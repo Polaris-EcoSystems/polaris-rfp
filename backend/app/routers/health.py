@@ -9,7 +9,7 @@ router = APIRouter()
 def _openai_capabilities() -> dict[str, object]:
     try:
         import openai
-        from openai import OpenAI  # type: ignore[attr-defined]
+        from openai import OpenAI
 
         try:
             client = OpenAI(api_key="__redacted__", max_retries=0, timeout=5)
