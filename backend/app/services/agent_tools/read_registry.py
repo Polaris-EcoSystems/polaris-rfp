@@ -36,7 +36,7 @@ from .aws_ecs import describe_service as ecs_describe_service
 from .aws_ecs import describe_task_definition as ecs_describe_task_definition
 from .aws_ecs import list_tasks as ecs_list_tasks
 from .aws_ecs import metadata_introspect as ecs_metadata_introspect
-from .aws_logs import tail_log_group as logs_tail
+from .aws_logs import tail_log_group as logs_tail, discover_log_groups_for_ecs_service as logs_discover_for_ecs, list_available_log_groups as logs_list_available
 from .aws_logs_insights import search_logs as telemetry_search_logs
 from .aws_logs_insights import top_errors as telemetry_top_errors
 from .aws_s3 import head_object as s3_head_object
@@ -1082,6 +1082,29 @@ def _logs_tail_tool(args: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": str(e) or "logs_failed"}
 
 
+def _logs_discover_for_ecs_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """Discover log groups for an ECS service by querying its task definition."""
+    cluster = args.get("cluster")
+    service = args.get("service")
+    try:
+        return logs_discover_for_ecs(
+            cluster=cluster if isinstance(cluster, str) else None,
+            service=service if isinstance(service, str) else None,
+        )
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "logs_discover_failed"}
+
+
+def _logs_list_available_tool(args: dict[str, Any]) -> dict[str, Any]:
+    """List available CloudWatch log groups (allowlisted or matching patterns)."""
+    prefix = args.get("prefix")
+    limit = int(args.get("limit") or 50)
+    try:
+        return logs_list_available(prefix=prefix if isinstance(prefix, str) else None, limit=limit)
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "logs_list_failed"}
+
+
 def _github_list_pulls_tool(args: dict[str, Any]) -> dict[str, Any]:
     repo = str(args.get("repo") or "").strip() or None
     state = str(args.get("state") or "").strip() or "open"
@@ -1979,6 +2002,38 @@ READ_TOOLS: dict[str, tuple[dict[str, Any], ToolFn]] = {
             },
         ),
         _logs_tail_tool,
+    ),
+    "logs_discover_for_ecs": (
+        tool_def(
+            "logs_discover_for_ecs",
+            "Discover CloudWatch log groups for an ECS service by querying its task definition. Use this to self-discover log group names when troubleshooting ECS services. If cluster/service not provided, will attempt to auto-discover from ECS metadata.",
+            {
+                "type": "object",
+                "properties": {
+                    "cluster": {"type": "string", "maxLength": 200, "description": "ECS cluster name (optional, will try to discover if not provided)"},
+                    "service": {"type": "string", "maxLength": 200, "description": "ECS service name (optional, will try to discover if not provided)"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _logs_discover_for_ecs_tool,
+    ),
+    "logs_list_available": (
+        tool_def(
+            "logs_list_available",
+            "List available CloudWatch log groups (allowlisted or matching common patterns). Use this for introspection to discover what log groups the agent can access. Optionally filter by prefix.",
+            {
+                "type": "object",
+                "properties": {
+                    "prefix": {"type": "string", "maxLength": 200, "description": "Optional prefix filter (e.g., '/ecs/northstar-' to find northstar log groups)"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Maximum number of log groups to return"},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        ),
+        _logs_list_available_tool,
     ),
     "github_list_pulls": (
         tool_def(

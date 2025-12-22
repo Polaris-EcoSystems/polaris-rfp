@@ -633,6 +633,9 @@ Infrastructure/AWS Tools:
 - dynamodb_* - Query/describe DynamoDB tables
 - s3_* - S3 operations (head, presign)
 - telemetry_* - CloudWatch Logs Insights queries
+- logs_discover_for_ecs - Discover log groups for an ECS service (self-introspection)
+- logs_list_available - List available log groups (self-introspection)
+- ecs_metadata_introspect - Self-discover ECS task/cluster/service info
 - browser_* - Browser automation (Playwright)
 - github_* - GitHub API operations
 - aws_ecs_* - ECS service operations
@@ -2573,6 +2576,8 @@ def run_slack_operator_for_mention(
             "- You can read and write platform data, schedule jobs, and execute multi-step workflows",
             "- You can handle both simple queries and complex multi-turn operations",
             "- You are aware of user preferences, team member profiles, and collaboration patterns",
+            "- You can self-introspect your environment: use ecs_metadata_introspect to discover cluster/service info, logs_discover_for_ecs to find log groups, logs_list_available to see accessible log groups",
+            "- When troubleshooting infrastructure issues, ALWAYS start by using introspection tools (ecs_metadata_introspect, logs_discover_for_ecs, logs_list_available) rather than asking users for configuration details",
             "",
             "Metaprompt Analysis (your thinking about this request):",
             metaprompt if metaprompt else "- Analyzing user request...",

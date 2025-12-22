@@ -5,7 +5,7 @@ from typing import Any
 
 from ...settings import settings
 from .allowlist import parse_csv, uniq
-from .aws_clients import logs_client
+from .aws_clients import logs_client, ecs_client
 
 
 def _default_log_groups() -> list[str]:
@@ -67,4 +67,169 @@ def tail_log_group(
             }
         )
     return {"ok": True, "logGroupName": lg, "lookbackMinutes": lb, "events": out}
+
+
+def discover_log_groups_for_ecs_service(*, cluster: str | None = None, service: str | None = None) -> dict[str, Any]:
+    """
+    Discover CloudWatch log groups for an ECS service by querying its task definition.
+    
+    If cluster/service not provided, tries to use ECS metadata introspection to discover them.
+    """
+    from .aws_ecs import _resolve_cluster, _resolve_service, describe_task_definition
+    
+    # Try to resolve cluster and service
+    try:
+        c = _resolve_cluster(cluster) if cluster else None
+        s = _resolve_service(service) if service else None
+    except ValueError:
+        c = None
+        s = None
+    
+    # If we don't have cluster/service, try ECS metadata introspection
+    if not c or not s:
+        try:
+            from .aws_ecs import metadata_introspect
+            metadata = metadata_introspect()
+            if metadata.get("ok"):
+                c = metadata.get("cluster") or c
+                # Try to infer service name from task family (common pattern: service name matches task family)
+                task_family = metadata.get("taskFamily")
+                if task_family and not s:
+                    # Common pattern: task family is like "northstar-job-runner-production"
+                    # Service name might be similar or same
+                    s = task_family
+        except Exception:
+            pass
+    
+    if not c or not s:
+        return {
+            "ok": False,
+            "error": "missing_cluster_or_service",
+            "hint": "Provide cluster and service, or run ecs_metadata_introspect first to auto-discover",
+        }
+    
+    # Get service info to find current task definition
+    try:
+        resp = ecs_client().describe_services(cluster=c, services=[s])
+        services = resp.get("services") if isinstance(resp, dict) else None
+        sv = services[0] if (services and isinstance(services, list) and services) else None
+        if not isinstance(sv, dict):
+            return {"ok": False, "error": "service_not_found", "cluster": c, "service": s}
+        
+        task_def_arn = sv.get("taskDefinition")
+        if not task_def_arn:
+            return {"ok": False, "error": "no_task_definition", "cluster": c, "service": s}
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "ecs_api_failed", "cluster": c, "service": s}
+    
+    # Get task definition to find log configuration
+    try:
+        td_resp = describe_task_definition(task_definition=task_def_arn)
+        if not td_resp.get("ok"):
+            return {"ok": False, "error": "task_definition_not_found", "taskDefinition": task_def_arn}
+        
+        # Get full task definition for log configuration
+        resp = ecs_client().describe_task_definition(taskDefinition=task_def_arn)
+        td = resp.get("taskDefinition") if isinstance(resp, dict) else None
+        if not isinstance(td, dict):
+            return {"ok": False, "error": "task_definition_invalid"}
+        
+        log_groups: list[str] = []
+        container_defs = td.get("containerDefinitions") or []
+        
+        for container in container_defs:
+            if not isinstance(container, dict):
+                continue
+            log_config = container.get("logConfiguration")
+            if isinstance(log_config, dict):
+                log_driver = log_config.get("logDriver")
+                if log_driver == "awslogs":
+                    options = log_config.get("options") or {}
+                    log_group = options.get("awslogs-group")
+                    if log_group and isinstance(log_group, str):
+                        log_groups.append(log_group)
+        
+        # Also infer log group from service name pattern (common pattern: /ecs/{service-name}-{env})
+        env = str(settings.normalized_environment or "").strip() or "production"
+        inferred_log_group = f"/ecs/{s}-{env}"
+        
+        result: dict[str, Any] = {
+            "ok": True,
+            "cluster": c,
+            "service": s,
+            "taskDefinition": task_def_arn,
+            "logGroups": list(set(log_groups)),  # Deduplicate
+        }
+        
+        # If we found log groups, also check if inferred one is different
+        if log_groups and inferred_log_group not in log_groups:
+            result["inferredLogGroup"] = inferred_log_group
+            result["hint"] = f"Task definition uses {log_groups}, but common pattern would be {inferred_log_group}"
+        
+        return result
+        
+    except Exception as e:
+        return {"ok": False, "error": str(e) or "task_definition_query_failed"}
+
+
+def list_available_log_groups(*, prefix: str | None = None, limit: int = 50) -> dict[str, Any]:
+    """
+    List available CloudWatch log groups (allowlisted or matching common patterns).
+    
+    This provides introspection capability - agent can discover what log groups exist
+    that it might be able to access.
+    """
+    lim = max(1, min(200, int(limit or 50)))
+    prefix_filter = str(prefix or "").strip() or None
+    
+    # First, return allowlisted log groups
+    allowed = _allowed_log_groups()
+    result_log_groups: list[str] = []
+    
+    if prefix_filter:
+        result_log_groups = [lg for lg in allowed if lg.startswith(prefix_filter)]
+    else:
+        result_log_groups = allowed[:lim]
+    
+    result: dict[str, Any] = {
+        "ok": True,
+        "logGroups": result_log_groups,
+        "source": "allowlist",
+        "count": len(result_log_groups),
+    }
+    
+    # If we have space and a prefix, try to query CloudWatch Logs API for matching groups
+    # (This helps discover log groups that match patterns even if not explicitly allowlisted)
+    if prefix_filter and len(result_log_groups) < lim:
+        try:
+            logs = logs_client()
+            paginator = logs.get_paginator("describe_log_groups")
+            discovered: list[str] = []
+            
+            for page in paginator.paginate(logGroupNamePrefix=prefix_filter, limit=lim - len(result_log_groups)):
+                groups = page.get("logGroups") or []
+                for group in groups:
+                    if not isinstance(group, dict):
+                        continue
+                    group_name = group.get("logGroupName")
+                    if group_name and isinstance(group_name, str):
+                        # Only include if it matches common patterns we expect
+                        if "/ecs/" in group_name or group_name.startswith("/aws/"):
+                            if group_name not in result_log_groups:
+                                discovered.append(group_name)
+                                if len(discovered) >= (lim - len(result_log_groups)):
+                                    break
+                if len(discovered) >= (lim - len(result_log_groups)):
+                    break
+            
+            if discovered:
+                result["logGroups"] = result_log_groups + discovered
+                result["count"] = len(result["logGroups"])
+                result["discovered"] = discovered
+                result["hint"] = f"Discovered {len(discovered)} additional log groups matching prefix '{prefix_filter}'"
+        except Exception:
+            # Non-fatal - just return what we have from allowlist
+            pass
+    
+    return result
 

@@ -10,6 +10,8 @@ from ...settings import settings
 from .allowlist import parse_csv, uniq
 from .aws_clients import ecs_client
 
+# Import settings at module level for use in metadata_introspect
+
 log = get_logger("aws_ecs")
 
 
@@ -262,6 +264,26 @@ def metadata_introspect() -> dict[str, Any]:
         # Include task definition family:revision if we have both
         if result.get("taskFamily") and result.get("taskRevision"):
             result["taskDefinition"] = f"{result['taskFamily']}:{result['taskRevision']}"
+        
+        # Suggest log group name based on common patterns
+        # Pattern: /ecs/{service-name}-{environment}
+        # Try to infer service name from task family (common pattern)
+        task_family = result.get("taskFamily")
+        if task_family:
+            # Common pattern: task family is like "northstar-job-runner-production"
+            # Service name might match, or we can use task family as service name
+            # Try to extract environment suffix
+            env = str(settings.normalized_environment or "").strip() or "production"
+            # Check if task family already has environment suffix
+            if task_family.endswith(f"-{env}"):
+                service_part = task_family[: -(len(env) + 1)]
+                suggested_log_group = f"/ecs/{service_part}-{env}"
+            else:
+                # Use full task family as service name
+                suggested_log_group = f"/ecs/{task_family}-{env}"
+            
+            result["suggestedLogGroup"] = suggested_log_group
+            result["hint"] = f"Common log group pattern for this service: {suggested_log_group}. Use logs_discover_for_ecs or logs_list_available to verify."
         
         return result
         
