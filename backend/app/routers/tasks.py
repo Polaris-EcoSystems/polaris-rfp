@@ -24,18 +24,29 @@ class AssignTaskRequest(BaseModel):
     assigneeDisplayName: str | None = None
 
 
-@router.get("/rfps/{rfpId}/tasks")
-@router.get("/rfp/{rfpId}/tasks")
-def list_rfp_tasks(rfpId: str):
+def _list_rfp_tasks_impl(rfpId: str):
     rid = str(rfpId or "").strip()
     if not rid:
         raise HTTPException(status_code=400, detail="rfpId is required")
     return list_tasks_for_rfp(rfp_id=rid, limit=500, next_token=None)
 
 
-@router.post("/rfps/{rfpId}/tasks/seed")
-@router.post("/rfp/{rfpId}/tasks/seed")
-def seed_rfp_tasks(rfpId: str):
+@router.get("/rfps/{rfpId}/tasks")
+def list_rfp_tasks_plural(rfpId: str):
+    return _list_rfp_tasks_impl(rfpId)
+
+
+@router.get("/rfp/{rfpId}/tasks")
+def list_rfp_tasks(rfpId: str):
+    return _list_rfp_tasks_impl(rfpId)
+
+
+@router.get("/rfp/{rfpId}/tasks/", include_in_schema=False)
+def list_rfp_tasks_slash(rfpId: str):
+    return _list_rfp_tasks_impl(rfpId)
+
+
+def _seed_rfp_tasks_impl(rfpId: str):
     rid = str(rfpId or "").strip()
     if not rid:
         raise HTTPException(status_code=400, detail="rfpId is required")
@@ -65,6 +76,21 @@ def seed_rfp_tasks(rfpId: str):
         "created": created,
         **tasks,
     }
+
+
+@router.post("/rfps/{rfpId}/tasks/seed")
+def seed_rfp_tasks_plural(rfpId: str):
+    return _seed_rfp_tasks_impl(rfpId)
+
+
+@router.post("/rfp/{rfpId}/tasks/seed")
+def seed_rfp_tasks(rfpId: str):
+    return _seed_rfp_tasks_impl(rfpId)
+
+
+@router.post("/rfp/{rfpId}/tasks/seed/", include_in_schema=False)
+def seed_rfp_tasks_slash(rfpId: str):
+    return _seed_rfp_tasks_impl(rfpId)
 
 
 @router.post("/tasks/{taskId}/assign")
@@ -140,8 +166,7 @@ def reopen_one_task(taskId: str, request: Request):
     return {"ok": True, "task": updated}
 
 
-@router.get("/tasks/{taskId}")
-def get_one_task(taskId: str):
+def _get_one_task_impl(taskId: str):
     tid = str(taskId or "").strip()
     if not tid:
         raise HTTPException(status_code=400, detail="taskId is required")
@@ -149,4 +174,14 @@ def get_one_task(taskId: str):
     if not t:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"ok": True, "task": t}
+
+
+@router.get("/tasks/{taskId}")
+def get_one_task(taskId: str):
+    return _get_one_task_impl(taskId)
+
+
+@router.get("/tasks/{taskId}/", include_in_schema=False)
+def get_one_task_slash(taskId: str):
+    return _get_one_task_impl(taskId)
 
