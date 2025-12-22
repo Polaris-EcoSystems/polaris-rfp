@@ -55,7 +55,7 @@ def store_episodic_memory_from_agent_interaction(
         if use_autonomous_decision:
             from .agent_memory_autonomous import should_store_memory_autonomous
             from .agent_memory import update_semantic_memory, add_procedural_memory as add_proc_memory
-            from .agent_memory_db import MemoryType
+            from .agent_memory_db import MemoryType, get_memory
             
             decision = should_store_memory_autonomous(
                 user_message=user_message,
@@ -87,7 +87,20 @@ def store_episodic_memory_from_agent_interaction(
                         update_scope_id = decision.get("updateScopeId", f"USER#{user_sub}")
                         update_created_at = decision.get("updateCreatedAt", "")
                         
-                        # If metadata not available, find the memory
+                        # If we have all parameters, use get_memory for efficient direct lookup
+                        if update_memory_type and update_scope_id and update_created_at:
+                            existing_mem = get_memory(
+                                memory_id=update_memory_id,
+                                memory_type=update_memory_type,
+                                scope_id=update_scope_id,
+                                created_at=update_created_at,
+                            )
+                            if not existing_mem:
+                                # Memory not found with provided params, fall through to create new
+                                log.warning("autonomous_memory_update_not_found", memory_id=update_memory_id)
+                                update_created_at = ""
+                        
+                        # If metadata not available, find the memory by searching
                         if not update_created_at:
                             from .agent_memory_db import find_memory_by_id
                             existing_mem = find_memory_by_id(
