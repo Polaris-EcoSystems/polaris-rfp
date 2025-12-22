@@ -56,14 +56,14 @@ def setup_project_folders(
         # Check if folders already exist in OpportunityState
         existing_folders_result = get_project_folders(rfp_id=rid)
         if existing_folders_result.get("ok"):
-            folders = existing_folders_result.get("folders", {})
-            root_folder_id = folders.get("root")
+            existing_folders = existing_folders_result.get("folders", {})
+            root_folder_id = existing_folders.get("root")
             if root_folder_id:
                 log.info("using_existing_drive_folders", rfp_id=rid, root_folder_id=root_folder_id)
                 return {
                     "ok": True,
                     "rootFolderId": root_folder_id,
-                    "folders": folders,
+                    "folders": existing_folders,
                     "existing": True,
                 }
         
