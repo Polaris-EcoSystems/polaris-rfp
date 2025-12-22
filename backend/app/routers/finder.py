@@ -9,7 +9,7 @@ from ..auth.cognito import VerifiedUser
 from ..services import finder_repo
 from ..services.finder_worker import run_finder_job
 from ..services.linkedin_playwright import LinkedInSessionError, validate_linkedin_session
-from ..services.rfps_repo import get_rfp_by_id, update_rfp
+from ..repositories.rfp.rfps_repo import get_rfp_by_id, update_rfp
 from ..services.token_crypto import decrypt_string, encrypt_string
 
 

@@ -6,7 +6,7 @@ from typing import Any
 from ..ai.client import AiNotConfigured
 from ..observability.logging import get_logger
 from ..settings import settings
-from .agent_tools.read_registry import READ_TOOLS
+from ..tools.registry.read_registry import READ_TOOLS
 from . import slack_operator_agent as op_agent
 
 log = get_logger("agent_job_planner")

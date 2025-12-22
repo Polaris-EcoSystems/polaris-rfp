@@ -6,7 +6,7 @@ from ..observability.logging import get_logger
 from .agent_checkpoint import get_latest_checkpoint
 from .agent_job_planner import plan_job_execution
 from .agent_long_running import LongRunningOrchestrator, StepDefinition
-from .agent_memory import add_procedural_memory
+from ..memory.core.agent_memory import add_procedural_memory
 from .agent_resilience import (
     classify_error,
     retry_with_classification,
@@ -19,7 +19,7 @@ def _create_step_executor(tool_name: str, tool_args: dict[str, Any], alternative
     """
     Create a step executor function that can try the primary tool and alternatives.
     """
-    from .agent_tools.read_registry import READ_TOOLS
+    from ..tools.registry.read_registry import READ_TOOLS
     from . import slack_operator_agent as op_agent
     
     # Get tool from either READ_TOOLS or OPERATOR_TOOLS

@@ -14,7 +14,7 @@ from ..ai.tuning import tuning_for
 from ..observability.logging import get_logger
 from ..settings import settings
 from .agent_events_repo import append_event, list_recent_events
-from .agent_journal_repo import append_entry, list_recent_entries
+from ..repositories.rfp.agent_journal_repo import append_entry, list_recent_entries
 from .agent_jobs_repo import (
     create_job as create_agent_job,
     get_job as get_agent_job,
@@ -25,10 +25,10 @@ from .agent_jobs_repo import (
 )
 from .agent_policy import sanitize_opportunity_patch
 from .change_proposals_repo import create_change_proposal
-from .opportunity_state_repo import ensure_state_exists, get_state, patch_state
+from ..repositories.rfp.opportunity_state_repo import ensure_state_exists, get_state, patch_state
 from .slack_thread_bindings_repo import get_binding as get_thread_binding, set_binding as set_thread_binding
 from .slack_reply_tools import ask_clarifying_question, post_summary
-from .agent_tools.slack_read import get_thread as slack_get_thread
+from ..tools.categories.slack.slack_read import get_thread as slack_get_thread
 from .slack_web import get_user_info, slack_user_display_name
 from .slack_formatting_guide import SLACK_FORMATTING_GUIDE
 
@@ -118,7 +118,7 @@ def _detect_and_store_collaboration(
             collaboration_type = "discussion"
         
         # Create collaboration context memory
-        from .agent_memory_collaboration import add_collaboration_context_memory
+        from ..memory.core.agent_memory_collaboration import add_collaboration_context_memory
         
         participant_list = list(participant_cognito_ids) if participant_cognito_ids else list(participant_slack_ids)
         content = f"Collaboration in thread: {user_message[:200]}"
@@ -273,7 +273,7 @@ def _detect_and_store_temporal_events(
     scope_id = f"RFP#{rfp_id}" if rfp_id else f"USER#{user_sub}"
     
     # Create temporal event memory
-    from .agent_memory_temporal import add_temporal_event_memory
+    from ..memory.core.agent_memory_temporal import add_temporal_event_memory
     
     event_at_iso = event_date.isoformat().replace("+00:00", "Z")
     content = f"Temporal event mentioned: {user_message[:300]}"
@@ -321,8 +321,8 @@ def _link_memories_after_interaction(
     - Episodic memory → Temporal events (if temporal events detected)
     """
     try:
-        from .agent_memory_db import list_memories_by_scope, get_memory
-        from .agent_memory_relationships import add_relationship
+        from ..memory.core.agent_memory_db import list_memories_by_scope, get_memory
+        from ..memory.relationships.agent_memory_relationships import add_relationship
         
         # Get the most recent episodic memory for this user
         scope_id = f"USER#{user_sub}"
@@ -405,7 +405,7 @@ def _link_memories_after_interaction(
             # Try to find recent collaboration memories
             # (This is a simplified approach - full implementation would query by participants)
             try:
-                from .agent_memory_db import list_memories_by_type
+                from ..memory.core.agent_memory_db import list_memories_by_type
                 collab_memories, _ = list_memories_by_type(
                     memory_type="COLLABORATION_CONTEXT",
                     scope_id=None,  # Search across scopes
@@ -444,7 +444,7 @@ def _link_memories_after_interaction(
         
         # Link to temporal events if present
         try:
-            from .agent_memory_temporal import get_upcoming_events
+            from ..memory.core.agent_memory_temporal import get_upcoming_events
             temporal_events = get_upcoming_events(
                 user_sub=user_sub,
                 rfp_id=rfp_id,
@@ -1863,7 +1863,7 @@ def _rfp_create_from_slack_file_tool(args: dict[str, Any]) -> dict[str, Any]:
     try:
         from .slack_web import download_slack_file
         from .rfp_analyzer import analyze_rfp
-        from .rfps_repo import create_rfp_from_analysis
+        from ..repositories.rfp.rfps_repo import create_rfp_from_analysis
         
         def _rfp_url(rfp_id: str) -> str:
             from ..settings import settings
@@ -2546,7 +2546,7 @@ def run_slack_operator_for_mention(
     procedural_memories: list[dict[str, Any]] | None = None
     if actor_user_sub:
         try:
-            from .agent_memory_retrieval import get_memories_for_context
+            from ..memory.retrieval.agent_memory_retrieval import get_memories_for_context
             procedural_memories = get_memories_for_context(
                 user_sub=actor_user_sub,
                 rfp_id=rfp_id,
@@ -2591,7 +2591,7 @@ def run_slack_operator_for_mention(
     skills_guidance = ""
     if q and any(term in q.lower() for term in ["skill", "capability", "expertise", "what can", "how to"]):
         try:
-            from .agent_tools.read_registry import READ_TOOLS
+            from ..tools.registry.read_registry import READ_TOOLS
             if "skills_search" in READ_TOOLS:
                 skills_guidance = (
                     "- Use `skills_search` to find relevant skills/capabilities for this request\n"
@@ -2961,7 +2961,7 @@ def run_slack_operator_for_mention(
                     
                     # Store error log in memory (best-effort, non-blocking)
                     try:
-                        from .agent_memory_error_logs import store_error_log
+                        from ..memory.core.agent_memory_error_logs import store_error_log
                         from .identity_service import resolve_from_slack
                         from .slack_actor_context import resolve_actor_context
                         
@@ -3031,7 +3031,7 @@ def run_slack_operator_for_mention(
                 elif tool_failed and actor_user_sub:
                     # Store failure pattern (best-effort, non-blocking)
                     try:
-                        from .agent_memory_hooks import store_procedural_memory_from_tool_sequence
+                        from ..memory.hooks.agent_memory_hooks import store_procedural_memory_from_tool_sequence
                         # Get recent tools up to this point (including the failed one)
                         failed_sequence = recent_tools_chat[-3:] if len(recent_tools_chat) >= 3 else recent_tools_chat
                         if failed_sequence:
@@ -3113,7 +3113,7 @@ def run_slack_operator_for_mention(
         # Also detect collaboration patterns and temporal events, and link memories
         if actor_user_sub:
             try:
-                from .agent_memory_hooks import store_episodic_memory_from_agent_interaction
+                from ..memory.hooks.agent_memory_hooks import store_episodic_memory_from_agent_interaction
                 # Resolve full actor context for provenance
                 slack_user_id_for_memory = user_id
                 cognito_user_id_for_memory = actor_user_sub  # actor_user_sub should be cognito sub
@@ -3206,7 +3206,7 @@ def run_slack_operator_for_mention(
                 # Only store if we actually used tools and completed successfully
                 if did_post and recent_tools_chat:
                     try:
-                        from .agent_memory_hooks import store_procedural_memory_from_tool_sequence
+                        from ..memory.hooks.agent_memory_hooks import store_procedural_memory_from_tool_sequence
                         store_procedural_memory_from_tool_sequence(
                             user_sub=actor_user_sub,
                             tool_sequence=recent_tools_chat,
@@ -3493,7 +3493,7 @@ def run_slack_operator_for_mention(
                 
                 # Store error log in memory (best-effort, non-blocking)
                 try:
-                    from .agent_memory_error_logs import store_error_log
+                    from ..memory.core.agent_memory_error_logs import store_error_log
                     from .identity_service import resolve_from_slack
                     
                     # Resolve actor context for provenance

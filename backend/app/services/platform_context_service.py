@@ -280,7 +280,7 @@ class PlatformContextService:
         email: str | None = None,
     ) -> dict[str, Any] | None:
         """Get web app context for a user."""
-        from .user_profiles_repo import get_user_profile
+        from ..repositories.users.user_profiles_repo import get_user_profile
         
         if not user_sub:
             return None
@@ -291,8 +291,8 @@ class PlatformContextService:
                 return None
             
             # Get user's RFPs and proposals
-            from .rfps_repo import list_rfps
-            from .proposals_repo import list_proposals
+            from ..repositories.rfp.rfps_repo import list_rfps
+            from ..repositories.rfp.proposals_repo import list_proposals
             
             # Get RFPs where user is involved (simplified - would need proper filtering)
             rfps_result = list_rfps(page=1, limit=50, next_token=None)
@@ -316,9 +316,9 @@ class PlatformContextService:
     def _get_web_app_context_for_rfp(self, *, rfp_id: str) -> dict[str, Any] | None:
         """Get web app context for an RFP."""
         try:
-            from .rfps_repo import get_rfp_by_id
-            from .proposals_repo import list_proposals
-            from .opportunity_state_repo import get_state
+            from ..repositories.rfp.rfps_repo import get_rfp_by_id
+            from ..repositories.rfp.proposals_repo import list_proposals
+            from ..repositories.rfp.opportunity_state_repo import get_state
             
             # Get RFP
             rfp = get_rfp_by_id(rfp_id=rfp_id)

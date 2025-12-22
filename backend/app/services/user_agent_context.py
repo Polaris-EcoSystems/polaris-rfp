@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..observability.logging import get_logger
-from .agent_memory_retrieval import get_memories_for_context
+from ..memory.retrieval.agent_memory_retrieval import get_memories_for_context
 from .agent_context_builder import build_user_context
 from .identity_service import resolve_from_slack
 

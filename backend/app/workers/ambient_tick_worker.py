@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..observability.logging import configure_logging, get_logger
-from ..services.opportunity_state_repo import ensure_state_exists, patch_state, seed_from_platform
-from ..services.proposals_repo import list_proposals
-from ..services.rfps_repo import list_rfps
+from ..repositories.rfp.opportunity_state_repo import ensure_state_exists, patch_state, seed_from_platform
+from ..repositories.rfp.proposals_repo import list_proposals
+from ..repositories.rfp.rfps_repo import list_rfps
 from ..services.workflow_tasks_repo import compute_pipeline_stage
 
 

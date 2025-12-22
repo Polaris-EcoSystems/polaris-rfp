@@ -12,7 +12,7 @@ from ..ai.tuning import tuning_for
 from ..observability.logging import get_logger
 from ..settings import settings
 from .agent_events_repo import append_event
-from .agent_tools.read_registry import READ_TOOLS as READ_TOOLS_REGISTRY
+from ..tools.registry.read_registry import READ_TOOLS as READ_TOOLS_REGISTRY
 from .slack_actions_repo import create_action, get_action, mark_action_done
 from .slack_action_executor import execute_action
 from .slack_action_risk import classify_action_risk
@@ -655,7 +655,7 @@ def run_slack_agent_question(
                 user_sub_from_profile = str(user_profile.get("_id") or user_profile.get("userSub") or "").strip() if user_profile else None
                 if user_sub_from_profile:
                     try:
-                        from .agent_memory_hooks import store_episodic_memory_from_agent_interaction
+                        from ..memory.hooks.agent_memory_hooks import store_episodic_memory_from_agent_interaction
                         # Resolve full actor context for provenance
                         slack_user_id_for_memory = user_id
                         cognito_user_id_for_memory = user_sub_from_profile  # user_sub should be cognito sub
@@ -777,7 +777,7 @@ def run_slack_agent_question(
                     
                     # Store error log in memory (best-effort, non-blocking)
                     try:
-                        from .agent_memory_error_logs import store_error_log
+                        from ..memory.core.agent_memory_error_logs import store_error_log
                         
                         store_error_log(
                             tool_name=name,

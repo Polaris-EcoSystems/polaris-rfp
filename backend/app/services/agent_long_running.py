@@ -318,7 +318,7 @@ def create_analysis_orchestrator(
     
     # Step 1: Load all RFPs
     def load_rfps(context: dict[str, Any]) -> dict[str, Any]:
-        from .rfps_repo import get_rfp_by_id
+        from ..repositories.rfp.rfps_repo import get_rfp_by_id
         
         loaded: dict[str, Any] = {}
         for rid in rfp_ids:

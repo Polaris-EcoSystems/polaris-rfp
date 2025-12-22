@@ -12,9 +12,9 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from ..observability.logging import get_logger
 from ..settings import settings
 from ..services.rfp_analyzer import analyze_rfp
-from ..services.proposals_repo import list_proposals
+from ..repositories.rfp.proposals_repo import list_proposals
 from ..services.rfp_upload_jobs_repo import get_job
-from ..services.rfps_repo import create_rfp_from_analysis, get_rfp_by_id, list_rfps
+from ..repositories.rfp.rfps_repo import create_rfp_from_analysis, get_rfp_by_id, list_rfps
 from ..services.slack_agent import run_slack_agent_question
 from ..services.slack_operator_agent import run_slack_operator_for_mention
 from ..services.slack_surfaces.dispatcher import handle_event_callback, handle_interactivity

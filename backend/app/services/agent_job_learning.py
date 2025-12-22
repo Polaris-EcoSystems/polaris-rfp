@@ -4,7 +4,7 @@ from typing import Any
 
 from ..observability.logging import get_logger
 from .agent_jobs_repo import list_recent_jobs, get_job
-from .agent_memory import add_procedural_memory, retrieve_relevant_memories
+from ..memory.core.agent_memory import add_procedural_memory, retrieve_relevant_memories
 
 log = get_logger("agent_job_learning")
 

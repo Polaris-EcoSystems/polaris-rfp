@@ -6,11 +6,11 @@ from typing import Any
 from ..ai.context import clip_text
 from .agent_events_repo import list_recent_events
 from .agent_jobs_repo import list_jobs_by_scope
-from .agent_journal_repo import list_recent_entries
-from .agent_memory_retrieval import get_memories_for_context
+from ..repositories.rfp.agent_journal_repo import list_recent_entries
+from ..memory.retrieval.agent_memory_retrieval import get_memories_for_context
 from .external_context_service import format_external_context_for_prompt, get_external_context_for_query
-from .opportunity_state_repo import get_state
-from .rfps_repo import get_rfp_by_id, list_rfps
+from ..repositories.rfp.opportunity_state_repo import get_state
+from ..repositories.rfp.rfps_repo import get_rfp_by_id, list_rfps
 
 
 def _now_iso() -> str:
@@ -159,7 +159,7 @@ def build_thread_context(
         return ""
     
     try:
-        from .agent_tools.slack_read import get_thread as slack_get_thread
+        from ..tools.categories.slack_read import get_thread as slack_get_thread
         from .slack_web import get_user_info, slack_user_display_name
         
         result = slack_get_thread(channel=channel_id, thread_ts=thread_ts, limit=limit)
@@ -522,7 +522,7 @@ def build_memory_context(
         if rfp_id:
             # Try to get RFP participants and channels from opportunity state
             try:
-                from .opportunity_state_repo import get_state
+                from ..repositories.rfp.opportunity_state_repo import get_state
                 rfp_state = get_state(rfp_id=rfp_id)
                 if rfp_state:
                     # Extract participants, channels from state if available

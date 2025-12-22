@@ -6,8 +6,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ..ai.verified_calls import call_json_verified
-from .agent_journal_repo import list_recent_entries
-from .opportunity_state_repo import ensure_state_exists, get_state, patch_state
+from ..repositories.rfp.agent_journal_repo import list_recent_entries
+from ..repositories.rfp.opportunity_state_repo import ensure_state_exists, get_state, patch_state
 
 
 def _now_iso() -> str:

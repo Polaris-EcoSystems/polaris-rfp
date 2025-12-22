@@ -14,7 +14,7 @@ from ..services.agent_jobs_repo import (
     mark_checkpointed,
     try_mark_running,
 )
-from ..services.opportunity_state_repo import ensure_state_exists, patch_state, seed_from_platform
+from ..repositories.rfp.opportunity_state_repo import ensure_state_exists, patch_state, seed_from_platform
 from ..services.opportunity_compactor import run_opportunity_compaction
 from ..services.agent_daily_digest import run_daily_digest_and_reschedule
 from ..services.agent_diagnostics_scheduler import run_diagnostics_update_and_reschedule

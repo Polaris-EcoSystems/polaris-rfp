@@ -11,7 +11,7 @@ from typing import Any
 
 from ..observability.logging import get_logger
 from .agent_message import AgentMessage, AgentResponse, UserIdentity
-from .agent_registry import get_registry
+from ..agents.orchestrators.agent_registry import get_registry
 
 log = get_logger("agent_router")
 

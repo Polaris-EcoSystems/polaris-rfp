@@ -16,7 +16,7 @@ from ..services import content_repo, templates_repo
 from ..services.ai_jobs_repo import create_job as create_ai_job
 from ..services.ai_jobs_repo import update_job as update_ai_job
 from ..services.contracting_repo import create_case, get_case_by_proposal_id
-from ..services.proposals_repo import (
+from ..repositories.rfp.proposals_repo import (
     create_proposal,
     delete_proposal,
     get_proposal_by_id,
@@ -24,8 +24,8 @@ from ..services.proposals_repo import (
     update_proposal,
     update_proposal_review,
 )
-from ..services.rfps_repo import get_rfp_by_id
-from ..services.rfps_repo import list_rfp_proposal_summaries
+from ..repositories.rfp.rfps_repo import get_rfp_by_id
+from ..repositories.rfp.rfps_repo import list_rfp_proposal_summaries
 from ..services.shared_section_formatters import (
     format_cover_letter_section,
     format_experience_section,

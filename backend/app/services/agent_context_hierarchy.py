@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .agent_memory_blocks import list_memory_blocks
-from .agent_memory_db import MemoryType
-from .agent_memory_retrieval import retrieve_relevant_memories
+from ..memory.blocks.agent_memory_blocks import list_memory_blocks
+from ..memory.core.agent_memory_db import MemoryType
+from ..memory.retrieval.agent_memory_retrieval import retrieve_relevant_memories
 from ..ai.context import clip_text
 from ..observability.logging import get_logger
 
@@ -178,7 +178,7 @@ class ContextHierarchy:
         # If no budget tracker, use simple limit-based approach
         if token_budget_tracker is None:
             # Fallback to simple retrieval
-            from .agent_memory_retrieval import get_memories_for_context
+            from ..memory.retrieval.agent_memory_retrieval import get_memories_for_context
             
             memories = get_memories_for_context(
                 user_sub=user_sub,

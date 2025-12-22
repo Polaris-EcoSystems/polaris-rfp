@@ -6,7 +6,7 @@ from typing import Any
 from . import finder_repo
 from .buyer_scoring import enrich_buyer_profile_with_ai, score_buyer_likelihood
 from .linkedin_playwright import LinkedInSessionError, discover_people_for_company
-from .rfps_repo import get_rfp_by_id
+from ..repositories.rfp.rfps_repo import get_rfp_by_id
 from .token_crypto import decrypt_string
 from .slack_notifier import notify_finder_run_done, notify_finder_run_error
 

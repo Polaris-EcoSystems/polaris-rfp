@@ -20,7 +20,7 @@ from .agent_context_builder import (
     build_thread_context,
     build_user_context,
 )
-from .agent_memory_keywords import extract_keywords
+from ..memory.core.agent_memory_keywords import extract_keywords
 
 
 def _now_iso() -> str:

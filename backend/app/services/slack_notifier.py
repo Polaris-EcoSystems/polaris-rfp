@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..settings import settings
-from .rfps_repo import get_rfp_by_id
+from ..repositories.rfp.rfps_repo import get_rfp_by_id
 from .slack_secrets import get_secret_str
 from .sessions_repo import list_sessions_for_user
 from .slack_web import (

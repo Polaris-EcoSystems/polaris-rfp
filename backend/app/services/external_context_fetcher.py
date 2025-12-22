@@ -21,7 +21,7 @@ import httpx
 
 from ..observability.logging import get_logger
 from ..settings import settings
-from .agent_memory_db import MemoryType, create_memory
+from ..memory.core.agent_memory_db import MemoryType, create_memory
 
 log = get_logger("external_context_fetcher")
 
@@ -490,7 +490,7 @@ def store_external_context(
     keywords = [context_type]
     if query:
         # Extract keywords from query
-        from .agent_memory_keywords import extract_keywords
+        from ..memory.core.agent_memory_keywords import extract_keywords
         keywords.extend(extract_keywords(query, max_keywords=10))
     
     # Store in memory

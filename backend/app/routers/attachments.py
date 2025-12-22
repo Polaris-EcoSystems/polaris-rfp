@@ -17,7 +17,7 @@ from ..services.attachments_repo import (
     get_attachment,
     list_attachments,
 )
-from ..services.rfps_repo import get_rfp_by_id
+from ..repositories.rfp.rfps_repo import get_rfp_by_id
 
 router = APIRouter(tags=["attachments"])
 

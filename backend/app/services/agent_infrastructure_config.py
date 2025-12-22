@@ -16,10 +16,10 @@ from typing import Any
 
 from ..observability.logging import get_logger
 from ..settings import settings
-from .agent_tools.aws_clients import logs_client
-from .agent_tools.aws_ecs import _allowed_clusters, _allowed_services
-from .agent_tools.aws_logs import _allowed_log_groups
-from .agent_tools.github_api import _allowed_repos
+from ..tools.registry.aws_clients import logs_client
+from ..tools.categories.aws.aws_ecs import _allowed_clusters, _allowed_services
+from ..tools.categories.aws.aws_logs import _allowed_log_groups
+from ..infrastructure.github.github_api import _allowed_repos
 
 log = get_logger("agent_infrastructure_config")
 
@@ -101,7 +101,7 @@ class InfrastructureConfig:
         self.github_allowed_repos = _allowed_repos()
         
         try:
-            from .agent_tools.github_api import _token
+            from ..infrastructure.github.github_api import _token
             self.github_token_configured = bool(_token())
         except Exception:
             self.github_token_configured = False
@@ -117,33 +117,33 @@ class InfrastructureConfig:
         
         # DynamoDB
         if settings.agent_allowed_ddb_tables:
-            from .agent_tools.allowlist import parse_csv, uniq
+            from ..tools.registry.allowlist import parse_csv, uniq
             self.dynamodb_tables = uniq(parse_csv(settings.agent_allowed_ddb_tables))
         
         # S3
         if settings.agent_allowed_s3_buckets:
-            from .agent_tools.allowlist import parse_csv, uniq
+            from ..tools.registry.allowlist import parse_csv, uniq
             self.s3_buckets = uniq(parse_csv(settings.agent_allowed_s3_buckets))
         
         if settings.agent_allowed_s3_prefixes:
-            from .agent_tools.allowlist import parse_csv, uniq
+            from ..tools.registry.allowlist import parse_csv, uniq
             self.s3_prefixes = uniq(parse_csv(settings.agent_allowed_s3_prefixes))
         
         # SQS
         if settings.agent_allowed_sqs_queue_urls:
-            from .agent_tools.allowlist import parse_csv, uniq
+            from ..tools.registry.allowlist import parse_csv, uniq
             self.sqs_queues = uniq(parse_csv(settings.agent_allowed_sqs_queue_urls))
         
         # Cognito
         if settings.agent_allowed_cognito_user_pool_ids:
-            from .agent_tools.allowlist import parse_csv, uniq
+            from ..tools.registry.allowlist import parse_csv, uniq
             self.cognito_user_pools = uniq(parse_csv(settings.agent_allowed_cognito_user_pool_ids))
         elif settings.cognito_user_pool_id:
             self.cognito_user_pools = [settings.cognito_user_pool_id]
         
         # Secrets Manager
         if settings.agent_allowed_secrets_arns:
-            from .agent_tools.allowlist import parse_csv, uniq
+            from ..tools.registry.allowlist import parse_csv, uniq
             self.secrets_arns = uniq(parse_csv(settings.agent_allowed_secrets_arns))
     
     def _discover_runtime_config(self) -> None:
@@ -190,7 +190,7 @@ class InfrastructureConfig:
             # Method 2: Discover log groups from ECS services via task definitions
             # This finds log groups configured in task definitions (more accurate)
             try:
-                from .agent_tools.aws_logs import discover_log_groups_for_ecs_service
+                from ..tools.categories.aws.aws_logs import discover_log_groups_for_ecs_service
                 
                 # Try to discover from configured ECS cluster/service if available
                 if self.ecs_cluster and self.ecs_service:

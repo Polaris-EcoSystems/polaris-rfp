@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ..services.rfps_repo import get_rfp_by_id, list_rfp_proposal_summaries
+from ..repositories.rfp.rfps_repo import get_rfp_by_id, list_rfp_proposal_summaries
 from ..services.slack_notifier import notify_task_assigned, notify_task_completed
 from ..services.workflow_tasks_repo import (
     assign_task,

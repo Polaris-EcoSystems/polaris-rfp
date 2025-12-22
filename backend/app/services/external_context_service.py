@@ -10,8 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .agent_memory_db import MemoryType
-from .agent_memory_retrieval import retrieve_relevant_memories
+from ..memory.core.agent_memory_db import MemoryType
+from ..memory.retrieval.agent_memory_retrieval import retrieve_relevant_memories
 from .external_context_fetcher import (
     fetch_arxiv_research,
     fetch_business_news,

@@ -4,8 +4,8 @@ from typing import Any
 
 from ..observability.logging import get_logger
 from .agent_events_repo import append_event
-from .agent_journal_repo import append_entry
-from .opportunity_state_repo import patch_state
+from ..repositories.rfp.agent_journal_repo import append_entry
+from ..repositories.rfp.opportunity_state_repo import patch_state
 from .slack_web import chat_post_message_result, slack_api_post
 
 

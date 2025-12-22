@@ -9,7 +9,7 @@ from ..db.dynamodb.errors import DdbConflict
 from ..db.dynamodb.table import get_main_table
 from ..services.ai_section_titles import generate_section_titles
 from ..services.rfp_analyzer import analyze_rfp
-from ..services.rfps_repo import (
+from ..repositories.rfp.rfps_repo import (
     build_rfp_item_from_analysis,
     create_rfp_from_analysis,
     delete_rfp,
