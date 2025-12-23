@@ -11,7 +11,7 @@ def test_render_contract_docx_renders_and_uploads(monkeypatch):
 
     from docx import Document
 
-    from app.services import contracting_docgen
+    from app.domain.pipeline.contracting import contracting_docgen
 
     # Build a minimal DOCX template with docxtpl placeholders.
     tmpl = Document()
@@ -70,7 +70,7 @@ def test_render_contract_docx_renders_and_uploads(monkeypatch):
 def test_generate_budget_xlsx_generates_and_uploads(monkeypatch):
     pytest.importorskip("openpyxl")
 
-    from app.services import contracting_docgen
+    from app.domain.pipeline.contracting import contracting_docgen
 
     captured_put: dict = {}
 

@@ -27,8 +27,8 @@ from ..repositories.workflows.tasks_repo import (
     seed_missing_tasks_for_stage,
 )
 from ..repositories.agent.jobs_repo import create_job as create_agent_job
-from .slack_reply_tools import post_summary
-from .slack_web import chat_post_message_result
+from ..infrastructure.integrations.slack.slack_reply_tools import post_summary
+from ..infrastructure.integrations.slack.slack_web import chat_post_message_result
 
 log = get_logger("slack_action_executor")
 

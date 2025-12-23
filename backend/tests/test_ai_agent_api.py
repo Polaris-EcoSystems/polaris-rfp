@@ -27,7 +27,7 @@ def test_ai_agent_ask_returns_answer(monkeypatch):
     c = _authed_client(monkeypatch)
 
     from app.routers import ai_agent as router_mod
-    from app.services.slack_agent import SlackAgentAnswer
+    from app.domain.agents.slack_agent import SlackAgentAnswer
 
     def _fake_run(**_kwargs):
         return SlackAgentAnswer(text="hello", blocks=None, meta={"x": 1})

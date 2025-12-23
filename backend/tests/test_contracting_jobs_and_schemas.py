@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_validate_key_terms_returns_field_errors():
-    from app.services.contracting_schemas import validate_key_terms
+    from app.domain.pipeline.contracting.contracting_schemas import validate_key_terms
 
     # Invalid severity should produce a structured error.
     norm, errs = validate_key_terms(
@@ -19,7 +19,7 @@ def test_validate_key_terms_returns_field_errors():
 
 def test_contracting_job_idempotency_returns_same_job(monkeypatch):
     from app.db.dynamodb.errors import DdbConflict
-    from app.services import contracting_jobs_repo
+    from app.repositories.contracting import contracting_jobs_repo
 
     class FakeTable:
         table_name = "fake"

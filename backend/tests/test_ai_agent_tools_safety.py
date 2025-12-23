@@ -16,7 +16,7 @@ def test_s3_allowlist_blocks_disallowed_prefix(monkeypatch):
         raise AssertionError("should not call real s3 delete")
 
     # If allowlist works, aws_s3 should raise before calling s3_assets.delete_object.
-    from app.services import s3_assets
+    from app.infrastructure.storage import s3_assets
     monkeypatch.setattr(s3_assets, "delete_object", _boom)
 
     with pytest.raises(ValueError):

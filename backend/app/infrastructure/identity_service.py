@@ -18,7 +18,7 @@ from ..observability.logging import get_logger
 from ..settings import settings
 from . import cognito_idp
 from .integrations.slack.slack_web import get_user_info, slack_user_display_name
-from ...repositories.users.user_profiles_repo import (
+from ..repositories.users.user_profiles_repo import (
     get_user_profile,
     get_user_profile_by_slack_user_id,
     get_user_sub_by_email,

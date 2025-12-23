@@ -31,8 +31,8 @@ def test_execute_action_update_user_profile_autolinks_from_slack(monkeypatch):
     monkeypatch.setattr(sae, "upsert_user_profile", _fake_upsert)
 
     # Patch identity_service.resolve_from_slack at its module import location.
-    from app.services import identity_service as ids
-    from app.services.identity_service import UserIdentity
+    from app.infrastructure import identity_service as ids
+    from app.infrastructure.identity_service import UserIdentity
 
     def _fake_resolve_from_slack(*, slack_user_id: str | None, **kwargs):
         if slack_user_id == "U072S0H9318":
