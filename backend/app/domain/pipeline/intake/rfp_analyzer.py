@@ -9,12 +9,12 @@ from typing import Any
 import httpx
 from pypdf import PdfReader
 
-from ...ai.client import AiError, AiNotConfigured
-from ...ai.context import clip_text
-from ...ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI, RfpAnalysisAI
-from ...ai.verified_calls import call_json_verified
-from ...observability.logging import get_logger
-from ...settings import settings
+from ....ai.client import AiError, AiNotConfigured
+from ....ai.context import clip_text
+from ....ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI, RfpAnalysisAI
+from ....ai.verified_calls import call_json_verified
+from ....observability.logging import get_logger
+from ....settings import settings
 
 log = get_logger("rfp_analyzer")
 

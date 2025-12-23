@@ -6,8 +6,8 @@ from typing import Any
 
 import boto3
 
-from ..observability.logging import get_logger
-from ..settings import settings
+from ...observability.logging import get_logger
+from ...settings import settings
 
 
 log = get_logger("github_secrets")
