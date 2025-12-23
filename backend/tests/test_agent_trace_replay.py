@@ -2,7 +2,7 @@ from __future__ import annotations
 
 
 def test_replay_tool_call_trace_flags_unknown_tools():
-    from app.services.agent_trace_replay import replay_tool_call_trace
+    from app.domain.agents.jobs.agent_trace_replay import replay_tool_call_trace
 
     trace = [
         {"tool": "opportunity_load", "durationMs": 12, "argsKeys": ["rfpId"]},
@@ -14,7 +14,7 @@ def test_replay_tool_call_trace_flags_unknown_tools():
 
 
 def test_replay_tool_call_trace_accepts_valid_trace():
-    from app.services.agent_trace_replay import replay_tool_call_trace
+    from app.domain.agents.jobs.agent_trace_replay import replay_tool_call_trace
 
     trace = [
         {"tool": "opportunity_load", "durationMs": 12, "argsKeys": ["rfpId"]},

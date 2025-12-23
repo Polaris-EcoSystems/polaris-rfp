@@ -30,9 +30,9 @@ from ..domain.pipeline.contracting.contracting_docgen import generate_budget_xls
 from ..domain.pipeline.contracting.contracting_docgen import render_contract_docx as _render_contract_docx
 from ..infrastructure.integrations.esign_service import mark_signed as _esign_mark_signed
 from ..infrastructure.integrations.esign_service import send_envelope as _esign_send
-from ..repositories.contracting.jobs_repo import create_job as create_contracting_job
-from ..repositories.contracting.jobs_repo import get_job as get_contracting_job
-from ..repositories.contracting.jobs_repo import list_jobs_for_case
+from ..repositories.contracting.contracting_jobs_repo import create_job as create_contracting_job
+from ..repositories.contracting.contracting_jobs_repo import get_job as get_contracting_job
+from ..repositories.contracting.contracting_jobs_repo import list_jobs_for_case
 from ..domain.pipeline.contracting.contracting_queue import enqueue_contracting_job
 from ..infrastructure.storage.s3_assets import presign_get_object, presign_put_object
 
@@ -397,7 +397,7 @@ def generate_contract(request: Request, caseId: str, body: dict = Body(default_f
                     created_by_user_sub=_user_sub(request),
                 )
                 try:
-                    from ..repositories.contracting.jobs_repo import complete_job
+                    from ..repositories.contracting.contracting_jobs_repo import complete_job
 
                     complete_job(job_id=str(job.get("jobId") or ""), result={"contract": out.get("version")})
                 except Exception:
@@ -436,7 +436,7 @@ def generate_budget_xlsx(request: Request, caseId: str, body: dict = Body(defaul
                     created_by_user_sub=_user_sub(request),
                 )
                 try:
-                    from ..repositories.contracting.jobs_repo import complete_job
+                    from ..repositories.contracting.contracting_jobs_repo import complete_job
 
                     complete_job(job_id=str(job.get("jobId") or ""), result={"budget": out.get("version")})
                 except Exception:

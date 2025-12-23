@@ -13,7 +13,7 @@ from ..observability.logging import get_logger
 from ..settings import settings
 from ..repositories.agent.events_repo import append_event
 from ..tools.registry.read_registry import READ_TOOLS as READ_TOOLS_REGISTRY
-from ..repositories.slack.actions_repo import create_action, get_action, mark_action_done
+from ..repositories.slack.slack_actions_repo import create_action, get_action, mark_action_done
 from ..infrastructure.integrations.slack.slack_action_executor import execute_action
 from ..infrastructure.integrations.slack.slack_action_risk import classify_action_risk
 from ..infrastructure.integrations.slack.slack_formatting_guide import SLACK_FORMATTING_GUIDE
