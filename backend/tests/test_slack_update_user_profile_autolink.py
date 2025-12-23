@@ -6,7 +6,7 @@ def test_execute_action_update_user_profile_autolinks_from_slack(monkeypatch):
     If a Slack user is *not* manually linked (no UserProfile and no slackUserId GSI),
     `execute_action(update_user_profile)` should still work by resolving Slack -> email -> Cognito sub.
     """
-    from app.services import slack_action_executor as sae
+    from app.infrastructure.integrations.slack import slack_action_executor as sae
 
     # No profile exists yet.
     monkeypatch.setattr(sae, "get_user_profile", lambda *, user_sub: None)
