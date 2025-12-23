@@ -6,7 +6,7 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from ..db.dynamodb.table import get_main_table
+from ...db.dynamodb.table import get_main_table
 
 
 def now_iso() -> str:
