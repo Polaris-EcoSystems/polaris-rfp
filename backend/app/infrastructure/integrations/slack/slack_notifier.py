@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...settings import settings
-from ...repositories.rfp.rfps_repo import get_rfp_by_id
+from ....settings import settings
+from ....repositories.rfp.rfps_repo import get_rfp_by_id
 from .slack_secrets import get_secret_str
 from .sessions_repo import list_sessions_for_user
 from .slack_web import (
@@ -13,7 +13,7 @@ from .slack_web import (
     post_message,
     post_message_result,
 )
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 
 
 def _rfp_url(rfp_id: str) -> str:

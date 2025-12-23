@@ -1666,7 +1666,10 @@ def _process_scraper_job(job_id: str) -> None:
         saved_count = 0
         for candidate in candidates:
             try:
-                candidate_dict = candidate.to_dict() if hasattr(candidate, "to_dict") else candidate
+                if isinstance(candidate, dict):
+                    candidate_dict: dict[str, Any] = candidate
+                else:
+                    candidate_dict = candidate.to_dict()
                 create_scraped_rfp(
                     source=source,
                     source_url=str(candidate_dict.get("sourceUrl") or ""),

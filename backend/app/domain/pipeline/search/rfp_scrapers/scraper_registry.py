@@ -104,7 +104,8 @@ def get_scraper(source: str) -> BaseRfpScraper | None:
     scraper_class = _SCRAPERS.get(source)
     if not scraper_class:
         return None
-    return scraper_class()
+    # Subclasses override __init__ to take no arguments
+    return scraper_class()  # type: ignore[call-arg]
 
 
 def is_source_available(source: str) -> bool:
