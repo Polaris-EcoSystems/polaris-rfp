@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from .observability.logging import configure_logging, get_logger
-from .services import s3_assets
+from .infrastructure.storage import s3_assets
 from .settings import settings
 
 

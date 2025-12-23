@@ -772,6 +772,90 @@ export const rfpApi = {
     }>(proxyUrl(`/api/rfp/${cleanPathToken(id)}/drive-folder`)),
 }
 
+export interface ScraperSource {
+  id: string
+  name: string
+  description: string
+  baseUrl: string
+  requiresAuth: boolean
+  available: boolean
+}
+
+export interface ScraperJob {
+  id: string
+  source: string
+  status: 'queued' | 'running' | 'completed' | 'failed'
+  searchParams?: Record<string, any>
+  candidatesFound?: number
+  candidatesImported?: number
+  error?: string
+  createdAt?: string
+  startedAt?: string
+  completedAt?: string
+}
+
+export interface ScrapedCandidate {
+  _id: string
+  source: string
+  sourceUrl: string
+  title: string
+  detailUrl?: string
+  metadata?: Record<string, any>
+  status: 'pending' | 'imported' | 'skipped' | 'failed'
+  importedRfpId?: string
+  createdAt?: string
+}
+
+export const scraperApi = {
+  listSources: () =>
+    api.get<{ ok: boolean; sources: ScraperSource[] }>(
+      proxyUrl('/api/rfp/scrapers/sources'),
+    ),
+  run: (data: { source: string; searchParams?: Record<string, any> }) =>
+    api.post<{ ok: boolean; job: ScraperJob }>(
+      proxyUrl('/api/rfp/scrapers/run'),
+      data,
+    ),
+  listJobs: (params: {
+    source: string
+    status?: string
+    limit?: number
+    nextToken?: string
+  }) =>
+    api.get<{ ok: boolean; jobs: ScraperJob[]; nextToken?: string }>(
+      proxyUrl('/api/rfp/scrapers/jobs'),
+      { params },
+    ),
+  getJob: (jobId: string) =>
+    api.get<{ ok: boolean; job: ScraperJob }>(
+      proxyUrl(`/api/rfp/scrapers/jobs/${cleanPathToken(jobId)}`),
+    ),
+  listCandidates: (params: {
+    source: string
+    status?: string
+    limit?: number
+    nextToken?: string
+  }) =>
+    api.get<{
+      ok: boolean
+      candidates: ScrapedCandidate[]
+      nextToken?: string
+    }>(proxyUrl('/api/rfp/scrapers/candidates'), { params }),
+  getCandidate: (candidateId: string) =>
+    api.get<{ ok: boolean; candidate: ScrapedCandidate }>(
+      proxyUrl(
+        `/api/rfp/scrapers/candidates/${cleanPathToken(candidateId)}`,
+      ),
+    ),
+  importCandidate: (candidateId: string) =>
+    api.post<{ ok: boolean; rfp?: RFP }>(
+      proxyUrl(
+        `/api/rfp/scrapers/candidates/${cleanPathToken(candidateId)}/import`,
+      ),
+      null,
+    ),
+}
+
 export const tasksApi = {
   listForRfp: (rfpId: string) =>
     api.get<{ data: WorkflowTask[] }>(

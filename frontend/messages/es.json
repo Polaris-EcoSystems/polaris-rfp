@@ -47,8 +47,9 @@
   },
   "pipeline": {
     "title": "Pipeline",
-    "subtitle": "Tu flujo principal: ingreso → decisión → borrador → revisión → envío.",
+    "subtitle": "Tu flujo principal: buscador de RFP → ingreso → decisión → borrador → revisión → envío.",
     "workflow": {
+      "rfpFinder": "Buscador de RFP",
       "intake": "Ingreso",
       "bidDecision": "Decisión",
       "draft": "Borrador",

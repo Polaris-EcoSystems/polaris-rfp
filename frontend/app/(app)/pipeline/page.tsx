@@ -341,6 +341,11 @@ export default function PipelinePage() {
 
             <div className="mt-4 flex flex-wrap items-center gap-2 text-xs">
               <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-gray-700">
+                <MagnifyingGlassIcon className="h-4 w-4" aria-hidden="true" />
+                {t('pipeline.workflow.rfpFinder')}
+              </span>
+              <span className="text-gray-300">→</span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-gray-700">
                 <PlusIcon className="h-4 w-4" aria-hidden="true" />
                 {t('pipeline.workflow.intake')}
               </span>

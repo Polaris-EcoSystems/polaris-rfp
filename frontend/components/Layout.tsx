@@ -218,6 +218,13 @@ export default function Layout({ children }: LayoutProps) {
         current: pathname.startsWith('/pipeline'),
       },
       {
+        id: 'finder',
+        label: t('nav.rfpFinder'),
+        href: '/finder',
+        icon: FolderIcon,
+        current: pathname === '/finder',
+      },
+      {
         id: 'rfps',
         label: t('nav.rfps'),
         href: '/rfps',
@@ -270,13 +277,6 @@ export default function Layout({ children }: LayoutProps) {
         href: '/agents',
         icon: CpuChipIcon,
         current: pathname.startsWith('/agents'),
-      },
-      {
-        id: 'finder',
-        label: t('nav.rfpFinder'),
-        href: '/finder',
-        icon: FolderIcon,
-        current: pathname === '/finder',
       },
       {
         id: 'linkedin-finder',

@@ -48,8 +48,9 @@
   },
   "pipeline": {
     "title": "Pipeline",
-    "subtitle": "Your primary workflow: intake → bid decision → draft → review → submit.",
+    "subtitle": "Your primary workflow: RFP finder → intake → bid decision → draft → review → submit.",
     "workflow": {
+      "rfpFinder": "RFP Finder",
       "intake": "Intake",
       "bidDecision": "Bid decision",
       "draft": "Draft",
