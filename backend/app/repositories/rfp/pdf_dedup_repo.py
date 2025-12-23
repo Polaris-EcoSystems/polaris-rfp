@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from ..db.dynamodb.table import get_main_table
+from ...db.dynamodb.table import get_main_table
 
 DedupStatus = Literal["reserved", "processing", "completed", "failed"]
 
