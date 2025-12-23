@@ -951,9 +951,7 @@ function JobModal({
     },
   ] as const
 
-  const isCustomJobType = !knownJobTypes.some(
-    (jt) => jt.value === jobType,
-  )
+  const isCustomJobType = !knownJobTypes.some((jt) => jt.value === jobType)
 
   const effectiveJobType = isCustomJobType ? jobType || '__custom__' : jobType
 
@@ -990,7 +988,10 @@ function JobModal({
       }
     }
 
-    if (jobType === 'agent_perch_time' || jobType === 'telemetry_self_improve') {
+    if (
+      jobType === 'agent_perch_time' ||
+      jobType === 'telemetry_self_improve'
+    ) {
       return {
         hours,
         rescheduleMinutes,
@@ -1083,7 +1084,8 @@ function JobModal({
               </select>
               {isCustomJobType && jobType && (
                 <p className="mt-1 text-xs text-gray-500">
-                  Using custom job type: <span className="font-mono">{jobType}</span>
+                  Using custom job type:{' '}
+                  <span className="font-mono">{jobType}</span>
                 </p>
               )}
             </div>
