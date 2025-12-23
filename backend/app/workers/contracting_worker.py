@@ -8,7 +8,7 @@ import boto3
 
 from ..observability.logging import configure_logging, get_logger
 from ..domain.pipeline.contracting.contracting_docgen import generate_budget_xlsx, render_contract_docx
-from ..repositories.contracting.jobs_repo import (
+from ..repositories.contracting.contracting_jobs_repo import (
     complete_job,
     fail_job,
     get_job,
