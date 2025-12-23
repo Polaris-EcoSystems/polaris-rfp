@@ -7,8 +7,8 @@ from fastapi.responses import StreamingResponse
 
 from ..db.dynamodb.errors import DdbConflict
 from ..db.dynamodb.table import get_main_table
-from ..services.ai_section_titles import generate_section_titles
-from ..services.rfp_analyzer import analyze_rfp
+from ..domain.pipeline.proposal_generation.ai_section_titles import generate_section_titles
+from ..domain.pipeline.intake.rfp_analyzer import analyze_rfp
 from ..repositories.rfp.rfps_repo import (
     create_rfp_from_analysis,
     delete_rfp,
@@ -18,9 +18,9 @@ from ..repositories.rfp.rfps_repo import (
     now_iso,
     update_rfp,
 )
-from ..services.workflow_tasks_repo import compute_pipeline_stage, seed_missing_tasks_for_stage
-from ..services.attachments_repo import list_attachments
-from ..services.s3_assets import (
+from ..repositories.workflows.tasks_repo import compute_pipeline_stage, seed_missing_tasks_for_stage
+from ..repositories.attachments.attachments_repo import list_attachments
+from ..infrastructure.storage.s3_assets import (
     get_assets_bucket_name,
     get_object_bytes,
     head_object,
@@ -29,15 +29,29 @@ from ..services.s3_assets import (
     presign_put_object,
     to_s3_uri,
 )
-from ..services.rfp_upload_jobs_repo import create_job, get_job, get_job_item, update_job
-from ..services.rfp_pdf_dedup_repo import (
+from ..repositories.rfp.upload_jobs_repo import create_job, get_job, get_job_item, update_job
+from ..repositories.rfp.pdf_dedup_repo import (
     dedup_key,
     ensure_record,
     get_by_sha256,
     normalize_sha256,
     reset_stale_mapping,
 )
-from ..services.slack_notifier import (
+from ..repositories.rfp.scraper_jobs_repo import (
+    create_job as create_scraper_job,
+    get_job as get_scraper_job,
+    get_job_item as get_scraper_job_item,
+    list_jobs as list_scraper_jobs,
+    update_job as update_scraper_job,
+)
+from ..repositories.rfp.scraped_rfps_repo import (
+    create_scraped_rfp,
+    get_scraped_rfp_by_id,
+    list_scraped_rfps,
+    mark_scraped_rfp_imported,
+)
+from ..domain.pipeline.search.rfp_scrapers.scraper_registry import get_available_sources, get_scraper, is_source_available
+from ..infrastructure.integrations.slack.slack_notifier import (
     notify_rfp_upload_job_completed,
     notify_rfp_upload_job_failed,
 )
@@ -409,7 +423,7 @@ def _process_rfp_upload_job(job_id: str) -> None:
         if sha_actual != sha:
             # Don't poison de-dupe state with mismatched content; mark failed and allow retry.
             try:
-                from ..services.rfp_pdf_dedup_repo import mark_failed
+                from ..repositories.rfp.pdf_dedup_repo import mark_failed
 
                 mark_failed(sha256=sha, error="sha256 mismatch between claimed hash and uploaded object")
             except Exception:
@@ -618,7 +632,7 @@ def get_drive_folder(id: str):
     Returns the root folder URL and folder structure.
     """
     try:
-        from ..services.drive_project_setup import get_project_folders
+        from ..infrastructure.integrations.drive.drive_project_setup import get_project_folders
         
         folders_result = get_project_folders(rfp_id=id)
         if not folders_result.get("ok"):
@@ -1480,3 +1494,212 @@ def remove_buyer_profiles(id: str, body: dict = Body(...)):
 def remove_buyer_profiles_slash(id: str, body: dict = Body(...)):
     # Accept trailing slash to avoid 404s when clients normalize URLs.
     return remove_buyer_profiles(id=id, body=body)
+
+
+# --- RFP Scraper Endpoints ---
+
+
+@router.get("/scrapers/sources")
+def list_scraper_sources():
+    """Get list of available RFP scraper sources."""
+    sources = get_available_sources()
+    return {"ok": True, "sources": sources}
+
+
+@router.post("/scrapers/run", status_code=201)
+def run_scraper(request: Request, background_tasks: BackgroundTasks, body: dict = Body(...)):
+    """
+    Trigger a scraper job for a given source.
+    
+    Body:
+      - source: string (required) - source ID (e.g., "planning.org")
+      - searchParams: object (optional) - source-specific search parameters
+    """
+    user = getattr(getattr(request, "state", None), "user", None)
+    user_sub = str(getattr(user, "sub", "") or "").strip() if user else None
+
+    source = str((body or {}).get("source") or "").strip()
+    if not source:
+        raise HTTPException(status_code=400, detail="source is required")
+
+    if not is_source_available(source):
+        raise HTTPException(status_code=400, detail=f"Scraper not available for source: {source}")
+
+    search_params = (body or {}).get("searchParams")
+    if not isinstance(search_params, dict):
+        search_params = None
+
+    job = create_scraper_job(source=source, search_params=search_params, user_sub=user_sub)
+    background_tasks.add_task(_process_scraper_job, job["id"])
+
+    return {"ok": True, "job": job}
+
+
+@router.get("/scrapers/jobs")
+def list_scraper_jobs_endpoint(
+    source: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    nextToken: str | None = None,
+):
+    """List scraper jobs."""
+    try:
+        if not source:
+            raise HTTPException(status_code=400, detail="source parameter is required")
+        return list_scraper_jobs(source=source, status=status, limit=limit, next_token=nextToken)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.exception("list_scraper_jobs_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to list scraper jobs")
+
+
+@router.get("/scrapers/jobs/{jobId}")
+def get_scraper_job_endpoint(jobId: str):
+    """Get a specific scraper job."""
+    job = get_scraper_job(jobId)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"ok": True, "job": job}
+
+
+@router.get("/scrapers/candidates")
+def list_scraped_candidates(
+    source: str,
+    status: str | None = None,
+    limit: int = 50,
+    nextToken: str | None = None,
+):
+    """List scraped RFP candidates."""
+    try:
+        return list_scraped_rfps(source=source, status=status, limit=limit, next_token=nextToken)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.exception("list_scraped_candidates_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to list scraped candidates")
+
+
+@router.get("/scrapers/candidates/{candidateId}")
+def get_scraped_candidate(candidateId: str):
+    """Get a specific scraped RFP candidate."""
+    candidate = get_scraped_rfp_by_id(candidateId)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    return {"ok": True, "candidate": candidate}
+
+
+@router.post("/scrapers/candidates/{candidateId}/import", status_code=201)
+def import_scraped_candidate(candidateId: str, background_tasks: BackgroundTasks):
+    """
+    Import a scraped RFP candidate by analyzing its detail URL and creating an RFP.
+    """
+    candidate = get_scraped_rfp_by_id(candidateId)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+
+    status = str(candidate.get("status") or "").strip().lower()
+    if status == "imported":
+        raise HTTPException(status_code=409, detail="Candidate already imported")
+    if status == "failed":
+        raise HTTPException(status_code=409, detail="Candidate import previously failed")
+
+    detail_url = str(candidate.get("detailUrl") or "").strip()
+    if not detail_url:
+        raise HTTPException(status_code=400, detail="Candidate has no detail URL")
+
+    # Use analyze_url endpoint logic to create the RFP
+    try:
+        analysis = analyze_rfp(detail_url, detail_url)
+        saved = create_rfp_from_analysis(
+            analysis=analysis,
+            source_file_name=f"scraped_{candidate.get('source', 'unknown')}_{int(__import__('time').time()*1000)}",
+            source_file_size=0,
+        )
+        rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
+
+        # Mark candidate as imported
+        mark_scraped_rfp_imported(candidateId, rfp_id)
+
+        return {"ok": True, "rfp": saved, "candidateId": candidateId}
+    except Exception as e:
+        log.exception("import_scraped_candidate_failed", candidateId=candidateId, error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Failed to import candidate", "message": str(e)},
+        )
+
+
+def _process_scraper_job(job_id: str) -> None:
+    """Background task to process a scraper job."""
+    log.info("scraper_job_starting", jobId=job_id)
+    job = get_scraper_job_item(job_id) or {}
+    if not job:
+        return
+    if job.get("status") not in ("queued", "running"):
+        return
+
+    try:
+        update_scraper_job(
+            job_id=job_id,
+            updates_obj={
+                "status": "running",
+                "startedAt": now_iso(),
+            },
+        )
+
+        source = str(job.get("source") or "").strip()
+        search_params = job.get("searchParams") or {}
+
+        if not source or not is_source_available(source):
+            raise ValueError(f"Invalid or unavailable source: {source}")
+
+        scraper = get_scraper(source)
+        if not scraper:
+            raise ValueError(f"Failed to create scraper for source: {source}")
+
+        # Run the scraper
+        with scraper:
+            candidates = scraper.scrape(search_params=search_params)
+
+        # Save candidates to database
+        saved_count = 0
+        for candidate in candidates:
+            try:
+                candidate_dict = candidate.to_dict() if hasattr(candidate, "to_dict") else candidate
+                create_scraped_rfp(
+                    source=source,
+                    source_url=str(candidate_dict.get("sourceUrl") or ""),
+                    title=str(candidate_dict.get("title") or "Untitled RFP"),
+                    detail_url=str(candidate_dict.get("detailUrl") or ""),
+                    metadata=candidate_dict.get("metadata"),
+                )
+                saved_count += 1
+            except Exception as e:
+                log.warning("failed_to_save_candidate", candidate=str(candidate), error=str(e))
+
+        update_scraper_job(
+            job_id=job_id,
+            updates_obj={
+                "status": "completed",
+                "candidatesFound": len(candidates),
+                "candidatesImported": saved_count,
+                "finishedAt": now_iso(),
+            },
+        )
+        log.info(
+            "scraper_job_completed",
+            jobId=job_id,
+            candidates_found=len(candidates),
+            candidates_saved=saved_count,
+        )
+    except Exception as e:
+        update_scraper_job(
+            job_id=job_id,
+            updates_obj={
+                "status": "failed",
+                "error": str(e) or "Failed to process scraper job",
+                "finishedAt": now_iso(),
+            },
+        )
+        log.exception("scraper_job_failed", jobId=job_id)

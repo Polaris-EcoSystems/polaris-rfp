@@ -4,8 +4,8 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..repositories.rfp.rfps_repo import get_rfp_by_id, list_rfp_proposal_summaries
-from ..services.slack_notifier import notify_task_assigned, notify_task_completed
-from ..services.workflow_tasks_repo import (
+from ..infrastructure.integrations.slack.slack_notifier import notify_task_assigned, notify_task_completed
+from ..repositories.workflows.tasks_repo import (
     assign_task,
     complete_task,
     compute_pipeline_stage,

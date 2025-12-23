@@ -14,7 +14,7 @@ import {
 } from '@heroicons/react/24/outline'
 import { useEffect, useState } from 'react'
 
-type PageTab = 'overview' | 'jobs' | 'activity' | 'metrics'
+type PageTab = 'overview' | 'jobs' | 'activity' | 'metrics' | 'diagnostics'
 
 export default function AgentsPage() {
   const toast = useToast()
@@ -41,6 +41,11 @@ export default function AgentsPage() {
   const [metrics, setMetrics] = useState<any>(null)
   const [metricsLoading, setMetricsLoading] = useState(false)
   const [metricsHours, setMetricsHours] = useState(24)
+
+  // Diagnostics state
+  const [diagnostics, setDiagnostics] = useState<any>(null)
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [diagnosticsHours, setDiagnosticsHours] = useState(24)
 
   // Workers state
   const [workers, setWorkers] = useState<any>(null)
@@ -168,6 +173,32 @@ export default function AgentsPage() {
       cancelled = true
     }
   }, [activeTab, metricsHours, toast])
+
+  // Load diagnostics
+  useEffect(() => {
+    if (activeTab !== 'diagnostics') return
+
+    let cancelled = false
+    ;(async () => {
+      setDiagnosticsLoading(true)
+      try {
+        const resp = await agentsApi.getDiagnostics({
+          hours: diagnosticsHours,
+        })
+        if (cancelled) return
+        setDiagnostics(resp.data)
+      } catch (e) {
+        console.error('Failed to load diagnostics:', e)
+        toast.error('Failed to load diagnostics')
+      } finally {
+        if (!cancelled) setDiagnosticsLoading(false)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [activeTab, diagnosticsHours, toast])
 
   const handleCreateJob = () => {
     setSelectedJob(null)
@@ -323,6 +354,18 @@ export default function AgentsPage() {
           >
             <CpuChipIcon className="h-5 w-5 inline mr-2" />
             Metrics
+          </button>
+          <button
+            onClick={() => setActiveTab('diagnostics')}
+            className={`py-2 px-1 border-b-2 font-medium text-sm whitespace-nowrap ${
+              activeTab === 'diagnostics'
+                ? 'border-primary-500 text-primary-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+            type="button"
+          >
+            <CpuChipIcon className="h-5 w-5 inline mr-2" />
+            Diagnostics
           </button>
         </nav>
       </div>
@@ -724,6 +767,89 @@ export default function AgentsPage() {
         </div>
       )}
 
+      {/* Diagnostics Tab */}
+      {activeTab === 'diagnostics' && (
+        <div className="mt-6">
+          <div className="mb-4 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <label className="text-sm font-medium text-gray-700">
+                Hours:
+              </label>
+              <select
+                value={diagnosticsHours}
+                onChange={(e) => setDiagnosticsHours(Number(e.target.value))}
+                className="rounded-md border-gray-300 text-sm focus:border-primary-500 focus:ring-primary-500"
+              >
+                <option value={1}>1 hour</option>
+                <option value={6}>6 hours</option>
+                <option value={24}>24 hours</option>
+                <option value={72}>72 hours</option>
+              </select>
+            </div>
+          </div>
+
+          {diagnosticsLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600"></div>
+            </div>
+          ) : diagnostics ? (
+            <div className="space-y-6">
+              <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
+                <div className="px-6 py-4 border-b border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      Diagnostics Summary
+                    </h2>
+                    <span className="text-sm text-gray-500">
+                      Window:{' '}
+                      {new Date(
+                        diagnostics.window?.start || diagnostics.since,
+                      ).toLocaleString()}{' '}
+                      →{' '}
+                      {new Date(
+                        diagnostics.window?.end || Date.now(),
+                      ).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+                <div className="p-6 grid grid-cols-1 gap-6 md:grid-cols-3">
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-700">
+                      Metrics
+                    </h3>
+                    <pre className="mt-2 max-h-48 overflow-auto rounded bg-gray-50 p-3 text-xs text-gray-700">
+                      {JSON.stringify(diagnostics.metrics ?? {}, null, 2)}
+                    </pre>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-700">
+                      Recent Jobs
+                    </h3>
+                    <pre className="mt-2 max-h-48 overflow-auto rounded bg-gray-50 p-3 text-xs text-gray-700">
+                      {JSON.stringify(diagnostics.recentJobs ?? [], null, 2)}
+                    </pre>
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-700">
+                      Recent Activities
+                    </h3>
+                    <pre className="mt-2 max-h-48 overflow-auto rounded bg-gray-50 p-3 text-xs text-gray-700">
+                      {JSON.stringify(
+                        diagnostics.recentActivities ?? [],
+                        null,
+                        2,
+                      )}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">Failed to load diagnostics</p>
+          )}
+        </div>
+      )}
+
       {/* Job Modal - Simplified for now, can be enhanced */}
       {showJobModal && (
         <JobModal
@@ -757,6 +883,34 @@ function JobModal({
 }) {
   const [jobType, setJobType] = useState(job?.jobType || '')
   const [scopeRfpId, setScopeRfpId] = useState(job?.scope?.rfpId || '')
+  // Common job-specific fields
+  const [hours, setHours] = useState<number>(
+    typeof job?.payload?.hours === 'number' ? job.payload.hours : 4,
+  )
+  const [rescheduleHours, setRescheduleHours] = useState<number>(
+    typeof job?.payload?.rescheduleHours === 'number'
+      ? job.payload.rescheduleHours
+      : 4,
+  )
+  const [rescheduleMinutes, setRescheduleMinutes] = useState<number>(
+    typeof job?.payload?.rescheduleMinutes === 'number'
+      ? job.payload.rescheduleMinutes
+      : 60,
+  )
+  const [reportToSlack, setReportToSlack] = useState<boolean>(
+    typeof job?.payload?.reportToSlack === 'boolean'
+      ? job.payload.reportToSlack
+      : true,
+  )
+  const [slackChannel, setSlackChannel] = useState<string>(
+    (job?.payload as any)?.channel || '',
+  )
+  const [slackThreadTs, setSlackThreadTs] = useState<string>(
+    (job?.payload as any)?.threadTs || '',
+  )
+  const [slackText, setSlackText] = useState<string>(
+    (job?.payload as any)?.text || '',
+  )
   const [dueAt, setDueAt] = useState(
     job?.dueAt
       ? new Date(job.dueAt).toISOString().slice(0, 16)
@@ -766,14 +920,119 @@ function JobModal({
     job?.payload ? JSON.stringify(job.payload, null, 2) : '{}',
   )
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
+  const knownJobTypes = [
+    {
+      value: 'external_context_aggregation',
+      label: 'External context aggregation (GLOBAL)',
+    },
+    {
+      value: 'agent_daily_digest',
+      label: 'Agent daily digest (GLOBAL)',
+    },
+    {
+      value: 'agent_diagnostics_update',
+      label: 'Agent diagnostics update (GLOBAL)',
+    },
+    {
+      value: 'agent_perch_time',
+      label: 'Agent perch time (self-improve)',
+    },
+    {
+      value: 'telemetry_self_improve',
+      label: 'Telemetry self-improve',
+    },
+    {
+      value: 'slack_nudge',
+      label: 'Slack nudge (per-RFP)',
+    },
+    {
+      value: '__custom__',
+      label: 'Custom / Advanced (raw JSON payload)',
+    },
+  ] as const
 
+  const isCustomJobType = !knownJobTypes.some(
+    (jt) => jt.value === jobType,
+  )
+
+  const effectiveJobType = isCustomJobType ? jobType || '__custom__' : jobType
+
+  const buildPayloadForJob = (): Record<string, any> => {
+    // For unknown/custom types, trust the JSON editor.
+    if (effectiveJobType === '__custom__' || isCustomJobType) {
+      let payload: Record<string, any> = {}
+      try {
+        payload = JSON.parse(payloadJson || '{}')
+      } catch {
+        throw new Error('Invalid JSON in payload')
+      }
+      return payload
+    }
+
+    if (jobType === 'external_context_aggregation') {
+      return {
+        hours,
+        rescheduleHours,
+        reportToSlack,
+      }
+    }
+
+    if (jobType === 'agent_daily_digest') {
+      return {
+        hours,
+      }
+    }
+
+    if (jobType === 'agent_diagnostics_update') {
+      return {
+        hours,
+        rescheduleMinutes,
+      }
+    }
+
+    if (jobType === 'agent_perch_time' || jobType === 'telemetry_self_improve') {
+      return {
+        hours,
+        rescheduleMinutes,
+      }
+    }
+
+    if (jobType === 'slack_nudge') {
+      return {
+        channel: slackChannel,
+        threadTs: slackThreadTs || undefined,
+        text: slackText,
+      }
+    }
+
+    // Fallback: JSON
     let payload: Record<string, any> = {}
     try {
       payload = JSON.parse(payloadJson || '{}')
     } catch {
-      alert('Invalid JSON in payload')
+      throw new Error('Invalid JSON in payload')
+    }
+    return payload
+  }
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!jobType) {
+      alert('Job type is required')
+      return
+    }
+
+    if (jobType === 'slack_nudge' && !scopeRfpId) {
+      alert('Slack nudge jobs require an RFP ID in scope.')
+      return
+    }
+
+    let payload: Record<string, any>
+    try {
+      payload = buildPayloadForJob()
+    } catch (err: any) {
+      alert(err?.message || 'Invalid payload')
       return
     }
 
@@ -803,13 +1062,30 @@ function JobModal({
               <label className="block text-sm font-medium text-gray-700">
                 Job Type
               </label>
-              <input
-                type="text"
-                value={jobType}
-                onChange={(e) => setJobType(e.target.value)}
-                required
+              <select
+                value={effectiveJobType}
+                onChange={(e) => {
+                  const val = e.target.value
+                  if (val === '__custom__') {
+                    setJobType('')
+                  } else {
+                    setJobType(val)
+                  }
+                }}
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
-              />
+              >
+                <option value="">Select a job type</option>
+                {knownJobTypes.map((jt) => (
+                  <option key={jt.value} value={jt.value}>
+                    {jt.label}
+                  </option>
+                ))}
+              </select>
+              {isCustomJobType && jobType && (
+                <p className="mt-1 text-xs text-gray-500">
+                  Using custom job type: <span className="font-mono">{jobType}</span>
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700">
@@ -823,6 +1099,166 @@ function JobModal({
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
               />
             </div>
+            {/* Job-specific fields */}
+            {jobType === 'external_context_aggregation' && (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Hours (lookback window)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={hours}
+                    onChange={(e) => setHours(Number(e.target.value) || 1)}
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Reschedule Hours
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={rescheduleHours}
+                    onChange={(e) =>
+                      setRescheduleHours(Number(e.target.value) || 1)
+                    }
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                  />
+                </div>
+                <div className="flex items-center gap-2 pt-6">
+                  <input
+                    id="reportToSlack"
+                    type="checkbox"
+                    checked={reportToSlack}
+                    onChange={(e) => setReportToSlack(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  <label
+                    htmlFor="reportToSlack"
+                    className="text-sm font-medium text-gray-700"
+                  >
+                    Report to Slack
+                  </label>
+                </div>
+              </div>
+            )}
+            {jobType === 'agent_daily_digest' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  Hours (lookback window)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={hours}
+                  onChange={(e) => setHours(Number(e.target.value) || 1)}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                />
+              </div>
+            )}
+            {jobType === 'agent_diagnostics_update' && (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Hours (lookback window)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={hours}
+                    onChange={(e) => setHours(Number(e.target.value) || 1)}
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Reschedule Minutes
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={rescheduleMinutes}
+                    onChange={(e) =>
+                      setRescheduleMinutes(Number(e.target.value) || 1)
+                    }
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            )}
+            {(jobType === 'agent_perch_time' ||
+              jobType === 'telemetry_self_improve') && (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Hours
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={hours}
+                    onChange={(e) => setHours(Number(e.target.value) || 1)}
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Reschedule Minutes
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={rescheduleMinutes}
+                    onChange={(e) =>
+                      setRescheduleMinutes(Number(e.target.value) || 1)
+                    }
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            )}
+            {jobType === 'slack_nudge' && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Slack Channel ID
+                  </label>
+                  <input
+                    type="text"
+                    value={slackChannel}
+                    onChange={(e) => setSlackChannel(e.target.value)}
+                    required
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Thread TS (optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={slackThreadTs}
+                    onChange={(e) => setSlackThreadTs(e.target.value)}
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Message Text
+                  </label>
+                  <textarea
+                    value={slackText}
+                    onChange={(e) => setSlackText(e.target.value)}
+                    required
+                    rows={3}
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+            )}
             <div>
               <label className="block text-sm font-medium text-gray-700">
                 Due At
@@ -835,17 +1271,23 @@ function JobModal({
                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">
-                Payload (JSON)
-              </label>
-              <textarea
-                value={payloadJson}
-                onChange={(e) => setPayloadJson(e.target.value)}
-                rows={8}
-                className="mt-1 block w-full rounded-md border-gray-300 font-mono text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500"
-              />
-            </div>
+            {(effectiveJobType === '__custom__' || isCustomJobType) && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700">
+                  Payload (JSON)
+                </label>
+                <textarea
+                  value={payloadJson}
+                  onChange={(e) => setPayloadJson(e.target.value)}
+                  rows={8}
+                  className="mt-1 block w-full rounded-md border-gray-300 font-mono text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  For custom or advanced jobs, provide the full payload shape as
+                  JSON.
+                </p>
+              </div>
+            )}
             <div className="flex items-center justify-end gap-3 pt-4">
               <button
                 type="button"

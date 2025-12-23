@@ -7,8 +7,8 @@ from __future__ import annotations
 from typing import Any
 
 from ..observability.logging import get_logger
-from .drive_project_setup import setup_project_folders
-from .slack_web import download_slack_file
+from ..infrastructure.integrations.drive.drive_project_setup import setup_project_folders
+from ..infrastructure.integrations.slack.slack_web import download_slack_file
 from .rfp_analyzer import analyze_rfp
 from ..repositories.rfp.rfps_repo import create_rfp_from_analysis, get_rfp_by_id
 from ..tools.categories.google.google_drive import upload_file_to_drive, create_google_doc

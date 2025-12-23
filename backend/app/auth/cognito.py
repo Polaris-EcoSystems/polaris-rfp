@@ -10,7 +10,7 @@ from jose import jwt
 from jose.exceptions import JWTError
 
 from ..settings import settings
-from ..services import cognito_idp
+from ..infrastructure import cognito_idp
 
 
 @dataclass

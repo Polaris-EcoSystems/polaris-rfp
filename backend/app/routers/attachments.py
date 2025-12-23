@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from pypdf import PdfReader
 import docx2txt
 
-from ..services.attachments_repo import (
+from ..repositories.attachments.attachments_repo import (
     add_attachments,
     delete_attachment,
     get_attachment,

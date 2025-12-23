@@ -9,14 +9,14 @@ from __future__ import annotations
 from typing import Any
 
 from ...observability.logging import get_logger
-from ...services.external_context_fetcher import (
+from ...infrastructure.context.external_context_fetcher import (
     fetch_arxiv_research,
     fetch_business_news,
     fetch_financial_research,
     fetch_geopolitical_events,
     fetch_weather,
 )
-from ...services.external_context_service import format_external_context_for_prompt, get_external_context_for_query
+from ...infrastructure.context.external_context_service import format_external_context_for_prompt, get_external_context_for_query
 
 log = get_logger("external_context_tools")
 

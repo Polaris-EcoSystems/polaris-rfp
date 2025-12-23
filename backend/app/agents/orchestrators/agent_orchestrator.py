@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...agents.base.agent_interface import AgentRequest, AgentResponse
-from ...agents.tools.tool_agent import ToolAgent
+from ...agents.tool_agent.tool_agent import ToolAgent
 from ...observability.logging import get_logger
 
 log = get_logger("agent_orchestrator")

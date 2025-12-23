@@ -241,7 +241,7 @@ def search_google_drive_files(
         # Try to get project folder if RFP ID provided
         if rfp_id and not folder_id:
             try:
-                from ...services.drive_project_setup import get_project_folders
+                from ...infrastructure.integrations.drive.drive_project_setup import get_project_folders
                 folders_result = get_project_folders(rfp_id=rfp_id)
                 if folders_result.get("ok"):
                     folders = folders_result.get("folders", {})

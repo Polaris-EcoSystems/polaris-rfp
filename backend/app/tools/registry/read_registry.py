@@ -15,19 +15,19 @@ from pypdf import PdfReader
 from ...ai.context import clip_text, normalize_ws
 from ...db.dynamodb.table import get_main_table, get_table
 from ...settings import settings
-from ...services import content_repo  # content_repo stays in services for now
+from ...infrastructure.storage import content_repo
 from ...repositories.rfp.proposals_repo import get_proposal_by_id, list_proposals
 from ...repositories.rfp.rfps_repo import get_rfp_by_id, list_rfps
-from ...services.s3_assets import get_object_bytes
-from ...services.s3_assets import get_object_text as s3_get_object_text
-from ...services.s3_assets import list_objects as s3_list_objects
-from ...services.s3_assets import presign_get_object as s3_presign_get_object
+from ...infrastructure.storage.s3_assets import get_object_bytes
+from ...infrastructure.storage.s3_assets import get_object_text as s3_get_object_text
+from ...infrastructure.storage.s3_assets import list_objects as s3_list_objects
+from ...infrastructure.storage.s3_assets import presign_get_object as s3_presign_get_object
 from ...skills.registry.skills_repo import get_skill_index as skills_get_index
 from ...skills.registry.skills_repo import search_skills as skills_search_index
 from ...skills.storage.skills_store import get_skill_body_text as skills_get_body_text
 from ...repositories.users.tenant_memory_repo import list_blocks as tenant_memory_list
 from ...repositories.users.user_memory_repo import list_blocks as user_memory_list
-from ...services.workflow_tasks_repo import list_tasks_for_rfp
+from ...repositories.workflows.tasks_repo import list_tasks_for_rfp
 from ...memory.core.agent_memory_tools import get_memory_tools
 from ..categories.external_context_tools import EXTERNAL_CONTEXT_TOOLS
 from .allowlist import parse_csv, uniq, is_allowed_prefix
@@ -60,7 +60,7 @@ from ..categories.aws.aws_sqs import get_queue_attributes as sqs_get_queue_attri
 from ..categories.aws.aws_sqs import get_queue_depth as sqs_get_queue_depth
 from ..categories.aws.aws_dynamodb import describe_table as dynamodb_describe_table
 from ..categories.aws.aws_dynamodb import list_tables as dynamodb_list_tables
-from ...services.browser_worker_client import (
+from ...infrastructure.browser.browser_worker_client import (
     click as bw_click,
     close as bw_close,
     extract as bw_extract,

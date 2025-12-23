@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ...services.token_crypto import decrypt_string, encrypt_string
+from ...infrastructure.token_crypto import decrypt_string, encrypt_string
 from .errors import DdbValidation
 
 

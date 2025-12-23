@@ -7,16 +7,16 @@ from typing import Any
 import boto3
 
 from ..observability.logging import configure_logging, get_logger
-from ..services.contracting_docgen import generate_budget_xlsx, render_contract_docx
-from ..services.contracting_jobs_repo import (
+from ..domain.pipeline.contracting.contracting_docgen import generate_budget_xlsx, render_contract_docx
+from ..repositories.contracting.jobs_repo import (
     complete_job,
     fail_job,
     get_job,
     try_mark_running,
     update_progress,
 )
-from ..services.contracting_repo import get_client_package
-from ..services.s3_assets import get_object_bytes, put_object_bytes
+from ..repositories.contracting.contracting_repo import get_client_package
+from ..infrastructure.storage.s3_assets import get_object_bytes, put_object_bytes
 from ..settings import settings
 
 

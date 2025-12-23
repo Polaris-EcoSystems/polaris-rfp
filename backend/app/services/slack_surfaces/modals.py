@@ -5,11 +5,11 @@ from typing import Any
 
 from ...observability.logging import get_logger
 from ..slack_actor_context import resolve_actor_context
-from ..slack_actions_repo import create_action
+from ...repositories.slack.actions_repo import create_action
 from ..slack_agent import _blocks_for_proposed_action
-from ..slack_thread_bindings_repo import set_binding
+from ...repositories.slack.thread_bindings_repo import set_binding
 from ..slack_web import chat_post_message_result, slack_api_post
-from ..workflow_tasks_repo import list_tasks_for_rfp
+from ...repositories.workflows.tasks_repo import list_tasks_for_rfp
 
 log = get_logger("slack_modals")
 

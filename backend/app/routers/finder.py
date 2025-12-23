@@ -6,11 +6,11 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, Body, File, HTTPException, Request, UploadFile
 
 from ..auth.cognito import VerifiedUser
-from ..services import finder_repo
-from ..services.finder_worker import run_finder_job
-from ..services.linkedin_playwright import LinkedInSessionError, validate_linkedin_session
+from ..repositories.finder import finder_repo
+from ..domain.pipeline.search.finder_worker import run_finder_job
+from ..infrastructure.browser.linkedin_playwright import LinkedInSessionError, validate_linkedin_session
 from ..repositories.rfp.rfps_repo import get_rfp_by_id, update_rfp
-from ..services.token_crypto import decrypt_string, encrypt_string
+from ..infrastructure.token_crypto import decrypt_string, encrypt_string
 
 
 router = APIRouter(tags=["finder"])

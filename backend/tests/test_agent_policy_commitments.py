@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.agent_policy import sanitize_opportunity_patch
+from app.domain.agents.self_improvement.agent_policy import sanitize_opportunity_patch
 
 
 def test_commitments_append_requires_provenance():

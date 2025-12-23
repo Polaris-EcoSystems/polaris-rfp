@@ -9,7 +9,7 @@ from typing import Any
 from ..observability.logging import get_logger
 from ..repositories.rfp.rfps_repo import get_rfp_by_id
 from ..tools.categories.google.google_drive import create_google_folder, share_google_file
-from .slack_channel_projects_repo import get_channel_project, set_channel_project
+from ..repositories.slack.channel_projects_repo import get_channel_project, set_channel_project
 
 log = get_logger("drive_project_setup")
 
@@ -254,7 +254,7 @@ def get_project_folders(*, rfp_id: str) -> dict[str, Any]:
                     }
         
         # Fallback: try channel mapping
-        from .slack_channel_projects_repo import get_channel_by_rfp
+        from ..repositories.slack.channel_projects_repo import get_channel_by_rfp
         
         channel_mapping = get_channel_by_rfp(rfp_id=rid)
         if channel_mapping:

@@ -11,22 +11,22 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 
 from ..observability.logging import get_logger
 from ..settings import settings
-from ..services.rfp_analyzer import analyze_rfp
+from ..domain.pipeline.intake.rfp_analyzer import analyze_rfp
 from ..repositories.rfp.proposals_repo import list_proposals
-from ..services.rfp_upload_jobs_repo import get_job
+from ..repositories.rfp.upload_jobs_repo import get_job
 from ..repositories.rfp.rfps_repo import create_rfp_from_analysis, get_rfp_by_id, list_rfps
-from ..services.slack_agent import run_slack_agent_question
-from ..services.slack_operator_agent import run_slack_operator_for_mention
-from ..services.slack_surfaces.dispatcher import handle_event_callback, handle_interactivity
-from ..services.slack_surfaces.workflows import handle_workflow_step_execute
-from ..services.slack_action_executor import execute_action
-from ..services.slack_actions_repo import get_action, mark_action_done
-from ..services.slack_actions_repo import create_action
-from ..services.slack_rate_limiter import allow as slack_allow
-from ..services.slack_response_url import respond as respond_via_response_url
-from ..services.slack_secrets import get_secret_str
-from ..services.slack_actor_context import resolve_actor_context
-from ..services.slack_web import (
+from ..domain.agents.slack_agent import run_slack_agent_question
+from ..domain.agents.slack_operator_agent import run_slack_operator_for_mention
+from ..infrastructure.integrations.slack.surfaces.dispatcher import handle_event_callback, handle_interactivity
+from ..infrastructure.integrations.slack.surfaces.workflows import handle_workflow_step_execute
+from ..infrastructure.integrations.slack.slack_action_executor import execute_action
+from ..repositories.slack.actions_repo import get_action, mark_action_done
+from ..repositories.slack.actions_repo import create_action
+from ..infrastructure.integrations.slack.slack_rate_limiter import allow as slack_allow
+from ..infrastructure.integrations.slack.slack_response_url import respond as respond_via_response_url
+from ..infrastructure.integrations.slack.slack_secrets import get_secret_str
+from ..infrastructure.integrations.slack.slack_actor_context import resolve_actor_context
+from ..infrastructure.integrations.slack.slack_web import (
     download_slack_file,
     get_bot_token,
     is_slack_configured,
@@ -35,9 +35,9 @@ from ..services.slack_web import (
     chat_post_message_result,
     slack_api_get,
 )
-from ..services.slack_pending_thread_links_repo import create_pending_link, get_pending_link, consume_pending_link
-from ..services.slack_thread_bindings_repo import set_binding
-from ..services.agent_events_repo import append_event
+from ..repositories.slack.pending_thread_links_repo import create_pending_link, get_pending_link, consume_pending_link
+from ..repositories.slack.thread_bindings_repo import set_binding
+from ..repositories.agent.events_repo import append_event
 
 
 router = APIRouter(tags=["integrations"])
@@ -620,7 +620,7 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
     if sub in ("diag", "diagnostics"):
         # Comprehensive diagnostics including credentials, infrastructure, tools, and capabilities
         try:
-            from ..services.comprehensive_diagnostics import get_comprehensive_diagnostics, format_diagnostics_for_slack
+            from ..domain.agents.telemetry.comprehensive_diagnostics import get_comprehensive_diagnostics, format_diagnostics_for_slack
             
             # Get comprehensive diagnostics
             diagnostics = get_comprehensive_diagnostics()
@@ -1267,7 +1267,7 @@ async def slack_commands(request: Request, background_tasks: BackgroundTasks):
         job_id = str(args[0]).strip()
         
         # Try agent job first
-        from ..services.agent_jobs_repo import get_job as get_agent_job
+        from ..repositories.agent.jobs_repo import get_job as get_agent_job
         agent_job = get_agent_job(job_id=job_id)
         
         if agent_job and isinstance(agent_job, dict):

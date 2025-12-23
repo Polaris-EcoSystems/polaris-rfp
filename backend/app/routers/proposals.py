@@ -12,10 +12,11 @@ from ..ai.client import AiError
 from ..ai.user_context import load_user_profile_from_request, user_context_block
 from ..ai.verified_calls import call_text_verified
 from ..settings import settings
-from ..services import content_repo, templates_repo
-from ..services.ai_jobs_repo import create_job as create_ai_job
-from ..services.ai_jobs_repo import update_job as update_ai_job
-from ..services.contracting_repo import create_case, get_case_by_proposal_id
+from ..infrastructure.storage import content_repo
+from ..repositories.templates import templates_repo
+from ..repositories.ai.jobs_repo import create_job as create_ai_job
+from ..repositories.ai.jobs_repo import update_job as update_ai_job
+from ..repositories.contracting.contracting_repo import create_case, get_case_by_proposal_id
 from ..repositories.rfp.proposals_repo import (
     create_proposal,
     delete_proposal,
@@ -26,15 +27,15 @@ from ..repositories.rfp.proposals_repo import (
 )
 from ..repositories.rfp.rfps_repo import get_rfp_by_id
 from ..repositories.rfp.rfps_repo import list_rfp_proposal_summaries
-from ..services.shared_section_formatters import (
+from ..domain.pipeline.proposal_generation.shared_section_formatters import (
     format_cover_letter_section,
     format_experience_section,
     format_title_section,
 )
-from ..services.slack_notifier import notify_proposal_created
-from ..services.workflow_tasks_repo import compute_pipeline_stage, seed_missing_tasks_for_stage
-from ..services.team_member_profiles import pick_team_member_bio, pick_team_member_experience
-from ..services.templates_catalog import get_builtin_template, to_generator_template
+from ..infrastructure.integrations.slack.slack_notifier import notify_proposal_created
+from ..repositories.workflows.tasks_repo import compute_pipeline_stage, seed_missing_tasks_for_stage
+from ..domain.pipeline.proposal_generation.team_member_profiles import pick_team_member_bio, pick_team_member_experience
+from ..domain.pipeline.proposal_generation.templates_catalog import get_builtin_template, to_generator_template
 from ..observability.logging import get_logger
 
 router = APIRouter(tags=["proposals"])

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
-from ..services.agent_infrastructure_config import get_infrastructure_config
+from ..domain.agents.infrastructure.agent_infrastructure_config import get_infrastructure_config
 
 router = APIRouter(tags=["integrations", "googledrive"])
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..services.ai_jobs_repo import get_job, list_recent_jobs
+from ..repositories.ai.jobs_repo import get_job, list_recent_jobs
 
 router = APIRouter(tags=["ai_jobs"])
 

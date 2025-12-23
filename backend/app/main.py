@@ -76,7 +76,7 @@ def create_app() -> FastAPI:
     
     # Initialize agent infrastructure configuration at startup (pre-load static config)
     try:
-        from .services.agent_infrastructure_config import initialize_infrastructure_config
+        from .domain.agents.infrastructure.agent_infrastructure_config import initialize_infrastructure_config
         initialize_infrastructure_config()
     except Exception as e:
         log.warning("infrastructure_config_startup_failed", error=str(e))

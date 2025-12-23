@@ -11,12 +11,12 @@ from ..ai.context import clip_text, normalize_ws
 from ..ai.tuning import tuning_for
 from ..observability.logging import get_logger
 from ..settings import settings
-from .agent_events_repo import append_event
+from ..repositories.agent.events_repo import append_event
 from ..tools.registry.read_registry import READ_TOOLS as READ_TOOLS_REGISTRY
-from .slack_actions_repo import create_action, get_action, mark_action_done
-from .slack_action_executor import execute_action
-from .slack_action_risk import classify_action_risk
-from .slack_formatting_guide import SLACK_FORMATTING_GUIDE
+from ..repositories.slack.actions_repo import create_action, get_action, mark_action_done
+from ..infrastructure.integrations.slack.slack_action_executor import execute_action
+from ..infrastructure.integrations.slack.slack_action_risk import classify_action_risk
+from ..infrastructure.integrations.slack.slack_formatting_guide import SLACK_FORMATTING_GUIDE
 
 # Slack bot token scopes - capabilities the agent has
 # (Note: This is duplicated in slack_operator_agent.py to avoid circular imports)
@@ -691,7 +691,7 @@ def run_slack_agent_question(
                         slack_user_id_for_memory = user_id
                         cognito_user_id_for_memory = user_sub_from_profile  # user_sub should be cognito sub
                         try:
-                            from .identity_service import resolve_from_slack
+                            from ..infrastructure.identity_service import resolve_from_slack
                             actor_identity = resolve_from_slack(slack_user_id=user_id)
                             if actor_identity.user_sub:
                                 cognito_user_id_for_memory = actor_identity.user_sub

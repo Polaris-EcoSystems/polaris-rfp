@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ..observability.logging import configure_logging, get_logger
-from ..services.agent_events_repo import append_event
-from ..services.daily_report_builder import build_northstar_daily_report
-from ..services.slack_web import chat_post_message_result
+from ..repositories.agent.events_repo import append_event
+from ..domain.agents.jobs.daily_report_builder import build_northstar_daily_report
+from ..infrastructure.integrations.slack.slack_web import chat_post_message_result
 from ..settings import settings
 
 

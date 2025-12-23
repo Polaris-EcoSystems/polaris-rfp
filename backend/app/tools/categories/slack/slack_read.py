@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ....settings import settings
-from ....services.slack_web import slack_api_get, slack_api_post
+from ....infrastructure.integrations.slack.slack_web import slack_api_get, slack_api_post
 from ...registry.allowlist import parse_csv, uniq, is_allowed_exact
 
 

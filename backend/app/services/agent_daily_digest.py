@@ -9,7 +9,7 @@ from .agent_events_repo import append_event, list_recent_events_global
 from .agent_jobs_repo import create_job
 from .daily_report_builder import build_northstar_daily_report
 from .email_ses import send_text_email
-from .slack_web import chat_post_message_result
+from ..infrastructure.integrations.slack.slack_web import chat_post_message_result
 from ..settings import settings
 
 

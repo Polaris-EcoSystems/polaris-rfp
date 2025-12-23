@@ -10,9 +10,10 @@ from fastapi.responses import RedirectResponse, Response
 from jose import jwt
 
 from ..settings import settings
-from ..services import canva_repo, content_repo
+from ..repositories.integrations import canva_repo as canva_repo_module
+from ..infrastructure.storage import content_repo
 from ..repositories.rfp import proposals_repo, rfps_repo
-from ..services.canva_client import (
+from ..infrastructure.integrations.canva.canva_client import (
     build_authorize_url,
     create_autofill_job,
     create_export_job,
@@ -27,8 +28,8 @@ from ..services.canva_client import (
     poll_job,
     upsert_connection_for_user,
 )
-from ..services.canva_mapper import build_dataset_values, diagnose_dataset_values
-from ..services.token_crypto import decrypt_string, encrypt_string
+from ..infrastructure.integrations.canva.canva_mapper import build_dataset_values, diagnose_dataset_values
+from ..infrastructure.token_crypto import decrypt_string, encrypt_string
 
 router = APIRouter(tags=["integrations_canva"])
 
@@ -101,7 +102,7 @@ def _ensure_canva_design_for_proposal(*, user_id: str, proposal: dict[str, Any],
 
     if force:
         try:
-            canva_repo.delete_proposal_design_cache(
+            canva_repo_module.delete_proposal_design_cache(
                 proposal_id=str(proposal.get("_id") or proposal.get("proposalId") or ""),
                 company_id=company_id,
                 brand_template_id=brand_template_id,
@@ -118,7 +119,7 @@ def _ensure_canva_design_for_proposal(*, user_id: str, proposal: dict[str, Any],
         except Exception:
             proposal_updated_at = None
 
-    existing = canva_repo.get_proposal_design_cache(
+    existing = canva_repo_module.get_proposal_design_cache(
         proposal_id=proposal_id,
         company_id=company_id,
         brand_template_id=brand_template_id,
@@ -144,12 +145,12 @@ def _ensure_canva_design_for_proposal(*, user_id: str, proposal: dict[str, Any],
     team_members = content_repo.get_team_members_by_ids(team_ids) if team_ids else []
     references = content_repo.get_project_references_by_ids(ref_ids) if ref_ids else []
 
-    company_logo = canva_repo.get_asset_link("company", company_id, "logo") or {}
+    company_logo = canva_repo_module.get_asset_link("company", company_id, "logo") or {}
     company_logo_asset_id = str(company_logo.get("canvaAssetId") or "").strip()
 
     headshot_by_member_id: dict[str, str] = {}
     for mid in team_ids:
-        link = canva_repo.get_asset_link("teamMember", mid, "headshot")
+        link = canva_repo_module.get_asset_link("teamMember", mid, "headshot")
         if link and link.get("ownerId") and link.get("canvaAssetId"):
             headshot_by_member_id[str(link["ownerId"])] = str(link["canvaAssetId"])
 
@@ -185,7 +186,7 @@ def _ensure_canva_design_for_proposal(*, user_id: str, proposal: dict[str, Any],
     now = datetime.now(timezone.utc)
     temp_urls_expire_at = (now + timedelta(days=29)).isoformat().replace("+00:00", "Z")
 
-    record = canva_repo.upsert_proposal_design_cache(
+    record = canva_repo_module.upsert_proposal_design_cache(
         proposal_id=proposal_id,
         company_id=company_id,
         brand_template_id=brand_template_id,
@@ -215,7 +216,7 @@ def status_slash(request: Request):
 
 def _status_impl(request: Request):
     user_id = _user_id_from_request(request)
-    conn = canva_repo.get_connection_for_user(user_id)
+    conn = canva_repo_module.get_connection_for_user(user_id)
     if not conn:
         return {"connected": False, "connection": None}
     safe = dict(conn)
@@ -227,7 +228,7 @@ def _status_impl(request: Request):
 @router.post("/disconnect")
 def disconnect(request: Request):
     user_id = _user_id_from_request(request)
-    canva_repo.delete_connection_for_user(user_id)
+    canva_repo_module.delete_connection_for_user(user_id)
     return {"ok": True}
 
 
@@ -248,7 +249,7 @@ def connect_url(request: Request, returnTo: str = "/integrations/canva"):
         algorithm="HS256",
     )
 
-    canva_repo.upsert_pkce_for_user(
+    canva_repo_module.upsert_pkce_for_user(
         user_id,
         pkce_id,
         {"codeVerifierEnc": encrypt_string(verifier), "expiresAt": expires_at},
@@ -286,7 +287,7 @@ def callback(code: str = "", state: str = "", error: str = ""):
     if not user_id:
         return RedirectResponse(f"{_frontend_base_url()}/integrations/canva?error=missing_user")
 
-    pkce = canva_repo.get_pkce_for_user(user_id, pkce_id) if pkce_id else None
+    pkce = canva_repo_module.get_pkce_for_user(user_id, pkce_id) if pkce_id else None
     if not pkce or not pkce.get("codeVerifierEnc"):
         return RedirectResponse(f"{_frontend_base_url()}/integrations/canva?error=missing_pkce")
 
@@ -294,12 +295,12 @@ def callback(code: str = "", state: str = "", error: str = ""):
         try:
             exp = datetime.fromisoformat(str(pkce["expiresAt"]).replace("Z", "+00:00"))
             if datetime.now(timezone.utc) > exp:
-                canva_repo.delete_pkce_for_user(user_id, pkce_id)
+                canva_repo_module.delete_pkce_for_user(user_id, pkce_id)
                 return RedirectResponse(f"{_frontend_base_url()}/integrations/canva?error=pkce_expired")
         except Exception:
             pass
 
-    canva_repo.delete_pkce_for_user(user_id, pkce_id)
+    canva_repo_module.delete_pkce_for_user(user_id, pkce_id)
 
     verifier = decrypt_string(pkce.get("codeVerifierEnc"))
     if not verifier:
@@ -343,7 +344,7 @@ def list_company_mappings_slash(request: Request):
 
 def _list_company_mappings_impl(request: Request):
     _ = _user_id_from_request(request)
-    items = canva_repo.list_company_mappings(limit=200)
+    items = canva_repo_module.list_company_mappings(limit=200)
     return {"data": items}
 
 
@@ -357,7 +358,7 @@ def save_company_mapping(companyId: str, request: Request, body: dict):
         raise HTTPException(status_code=400, detail={"error": "companyId is required"})
     if not brand_template_id:
         raise HTTPException(status_code=400, detail={"error": "brandTemplateId is required"})
-    doc = canva_repo.upsert_company_mapping(company_id, brand_template_id, field_mapping if isinstance(field_mapping, dict) else {})
+    doc = canva_repo_module.upsert_company_mapping(company_id, brand_template_id, field_mapping if isinstance(field_mapping, dict) else {})
     return doc
 
 
@@ -367,7 +368,7 @@ def get_company_logo(companyId: str, request: Request):
     company_id = str(companyId or "").strip()
     if not company_id:
         raise HTTPException(status_code=400, detail={"error": "companyId is required"})
-    link = canva_repo.get_asset_link("company", company_id, "logo")
+    link = canva_repo_module.get_asset_link("company", company_id, "logo")
     if link:
         link = dict(link)
         link["assetId"] = link.get("canvaAssetId")
@@ -402,7 +403,7 @@ def upload_company_logo(companyId: str, request: Request, body: dict):
     if not asset_id:
         raise HTTPException(status_code=400, detail={"error": "Canva asset upload failed"})
 
-    link = canva_repo.upsert_asset_link(
+    link = canva_repo_module.upsert_asset_link(
         "company",
         company_id,
         "logo",
@@ -421,7 +422,7 @@ def get_team_headshot(memberId: str, request: Request):
     member_id = str(memberId or "").strip()
     if not member_id:
         raise HTTPException(status_code=400, detail={"error": "memberId is required"})
-    link = canva_repo.get_asset_link("teamMember", member_id, "headshot")
+    link = canva_repo_module.get_asset_link("teamMember", member_id, "headshot")
     if link:
         link = dict(link)
         link["assetId"] = link.get("canvaAssetId")
@@ -457,7 +458,7 @@ def upload_team_headshot(memberId: str, request: Request, body: dict):
     if not asset_id:
         raise HTTPException(status_code=400, detail={"error": "Canva asset upload failed"})
 
-    link = canva_repo.upsert_asset_link(
+    link = canva_repo_module.upsert_asset_link(
         "teamMember",
         member_id,
         "headshot",
@@ -479,7 +480,7 @@ def create_design_from_proposal(proposalId: str, request: Request, force: str | 
     if not proposal.get("companyId"):
         raise HTTPException(status_code=400, detail={"error": "Proposal has no companyId; select a company/branding first."})
 
-    cfg = canva_repo.get_company_mapping(str(proposal.get("companyId")))
+    cfg = canva_repo_module.get_company_mapping(str(proposal.get("companyId")))
     if not cfg:
         raise HTTPException(status_code=400, detail={"error": "No Canva template configured for this company."})
 
@@ -508,7 +509,7 @@ def validate_proposal(proposalId: str, request: Request):
     company_id = str(proposal.get("companyId") or "").strip()
     if not company_id:
         raise HTTPException(status_code=400, detail={"error": "Proposal has no companyId; select a company/branding first."})
-    cfg = canva_repo.get_company_mapping(company_id)
+    cfg = canva_repo_module.get_company_mapping(company_id)
     if not cfg:
         raise HTTPException(status_code=400, detail={"error": "No Canva template configured for this company."})
 
@@ -522,12 +523,12 @@ def validate_proposal(proposalId: str, request: Request):
     team_members = content_repo.get_team_members_by_ids(team_ids) if team_ids else []
     references = content_repo.get_project_references_by_ids(ref_ids) if ref_ids else []
 
-    company_logo = canva_repo.get_asset_link("company", company_id, "logo") or {}
+    company_logo = canva_repo_module.get_asset_link("company", company_id, "logo") or {}
     company_logo_asset_id = str(company_logo.get("canvaAssetId") or "").strip()
 
     headshot_by_member_id: dict[str, str] = {}
     for mid in team_ids:
-        link = canva_repo.get_asset_link("teamMember", mid, "headshot")
+        link = canva_repo_module.get_asset_link("teamMember", mid, "headshot")
         if link and link.get("ownerId") and link.get("canvaAssetId"):
             headshot_by_member_id[str(link["ownerId"])] = str(link["canvaAssetId"])
 
@@ -561,7 +562,7 @@ def export_proposal_pdf(proposalId: str, request: Request, mode: str | None = No
     company_id = str(proposal.get("companyId") or "").strip()
     if not company_id:
         raise HTTPException(status_code=400, detail={"error": "Proposal has no companyId; select a company/branding first."})
-    cfg = canva_repo.get_company_mapping(company_id)
+    cfg = canva_repo_module.get_company_mapping(company_id)
     if not cfg:
         raise HTTPException(status_code=400, detail={"error": "No Canva template configured for this company."})
 

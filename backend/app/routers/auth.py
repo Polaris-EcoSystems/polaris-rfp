@@ -11,8 +11,8 @@ from pydantic import BaseModel, EmailStr, Field
 from botocore.exceptions import ClientError
 
 from ..observability.logging import get_logger
-from ..services import cognito_idp
-from ..services.magic_links_repo import (
+from ..infrastructure import cognito_idp
+from ..repositories.auth.magic_links_repo import (
     delete_magic_session,
     delete_magic_session_for_email,
     get_magic_session,
@@ -20,8 +20,8 @@ from ..services.magic_links_repo import (
     put_magic_session,
     put_magic_session_for_email,
 )
-from ..services.password_reset import consume_password_reset, create_password_reset
-from ..services.sessions_repo import (
+from ..infrastructure.auth.password_reset import consume_password_reset, create_password_reset
+from ..repositories.sessions.sessions_repo import (
     cache_access_token,
     delete_session,
     get_session,
@@ -32,7 +32,7 @@ from ..services.sessions_repo import (
     try_acquire_refresh_lock,
     try_get_recent_cached_access_token,
 )
-from ..services.token_crypto import decrypt_string, encrypt_string
+from ..infrastructure.token_crypto import decrypt_string, encrypt_string
 from ..settings import settings
 from ..auth.cognito import verify_bearer_token
 

@@ -10,8 +10,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from ..observability.logging import get_logger
-from ..services.agent_infrastructure_config import get_infrastructure_config
-from ..services.canva_repo import get_connection_for_user
+from ..domain.agents.infrastructure.agent_infrastructure_config import get_infrastructure_config
+from ..repositories.integrations.canva_repo import get_connection_for_user
 
 log = get_logger("integrations_router")
 
@@ -154,7 +154,7 @@ def _get_integrations_status_impl(request: Request) -> dict[str, Any]:
         else:
             # Try to validate the connection by checking if we can get a valid token
             try:
-                from ..services.canva_client import get_valid_access_token_for_user
+                from ..infrastructure.integrations.canva.canva_client import get_valid_access_token_for_user
                 access_token, updated_conn = get_valid_access_token_for_user(user_id)
                 
                 if access_token:
@@ -192,7 +192,7 @@ def _get_integrations_status_impl(request: Request) -> dict[str, Any]:
     
     # Slack Status
     try:
-        from ..services.slack_web import is_slack_configured, slack_api_get
+        from ..infrastructure.integrations.slack.slack_web import is_slack_configured, slack_api_get
         
         configured = is_slack_configured()
         token_valid = False
@@ -338,7 +338,7 @@ def _get_recent_activities_impl(request: Request, limit: int = 5) -> dict[str, A
     activities: list[dict[str, Any]] = []
     
     try:
-        from ..services.agent_events_repo import list_recent_events_global
+        from ..repositories.agent.events_repo import list_recent_events_global
         
         events = list_recent_events_global(since_iso=since_iso, limit=lim * 10)  # Get more for filtering
         

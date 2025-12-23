@@ -6,8 +6,8 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ..services.s3_assets import get_assets_bucket_name, presign_get_object, presign_put_object, to_s3_uri
-from ..services.user_profile_team_sync import upsert_linked_team_member_from_user_profile
+from ..infrastructure.storage.s3_assets import get_assets_bucket_name, presign_get_object, presign_put_object, to_s3_uri
+from ..domain.users.user_profile_team_sync import upsert_linked_team_member_from_user_profile
 from ..repositories.users.user_profiles_repo import (
     get_user_profile,
     mark_profile_complete,

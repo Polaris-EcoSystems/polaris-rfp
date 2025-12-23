@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services import daily_report_builder
+from app.domain.agents.jobs import daily_report_builder
 
 
 def test_build_northstar_daily_report_compact(monkeypatch):

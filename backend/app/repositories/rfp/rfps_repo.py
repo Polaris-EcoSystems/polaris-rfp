@@ -74,8 +74,8 @@ def create_rfp_from_analysis(
     
     # Trigger folder creation, template population, and PDF upload (background, best-effort)
     try:
-        from ...services.drive_project_setup import setup_project_folders
-        from ...services.drive_template_populator import populate_project_templates
+        from ...infrastructure.integrations.drive.drive_project_setup import setup_project_folders
+        from ...infrastructure.integrations.drive.drive_template_populator import populate_project_templates
         from ...repositories.rfp.opportunity_state_repo import ensure_state_exists, patch_state
         
         # Create folders
@@ -118,7 +118,7 @@ def create_rfp_from_analysis(
                     
                     # If we don't have PDF data but have S3 key, download it
                     if not pdf_data and source_s3_key:
-                        from ...services.s3_assets import get_object_bytes
+                        from ...infrastructure.storage.s3_assets import get_object_bytes
                         try:
                             pdf_data = get_object_bytes(key=source_s3_key, max_bytes=60 * 1024 * 1024)
                         except Exception:

@@ -148,7 +148,7 @@ class AgentRouter:
         Returns:
             AgentMessage ready to be handled
         """
-        from .identity_service import resolve_from_slack
+        from ..infrastructure.identity_service import resolve_from_slack
         
         # Resolve user identity
         user_identity = None

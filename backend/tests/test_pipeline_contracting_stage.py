@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services.workflow_tasks_repo import compute_pipeline_stage
+from app.repositories.workflows.tasks_repo import compute_pipeline_stage
 
 
 def test_pipeline_stage_is_contracting_when_latest_proposal_won():

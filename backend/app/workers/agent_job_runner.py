@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from ..observability.logging import configure_logging, get_logger
-from ..services.agent_events_repo import append_event
-from ..services.agent_jobs_repo import (
+from ..repositories.agent.events_repo import append_event
+from ..repositories.agent.jobs_repo import (
     claim_due_jobs,
     complete_job,
     create_job,
@@ -15,15 +15,15 @@ from ..services.agent_jobs_repo import (
     try_mark_running,
 )
 from ..repositories.rfp.opportunity_state_repo import ensure_state_exists, patch_state, seed_from_platform
-from ..services.opportunity_compactor import run_opportunity_compaction
-from ..services.agent_daily_digest import run_daily_digest_and_reschedule
-from ..services.agent_diagnostics_scheduler import run_diagnostics_update_and_reschedule
-from ..services.agent_self_improve import run_perch_time_once
-from ..services.external_context_aggregator_scheduler import run_external_context_aggregation_and_reschedule
-from ..services.slack_reply_tools import post_summary
-from ..services.self_modify_pipeline import get_pr_checks, open_pr_for_change_proposal, verify_ecs_rollout
-from ..services.slack_web import chat_post_message_result
-from ..services.slack_agent import run_slack_agent_question
+from ..domain.rfp.opportunity_compactor import run_opportunity_compaction
+from ..domain.agents.jobs.agent_daily_digest import run_daily_digest_and_reschedule
+from ..domain.agents.agent_diagnostics_scheduler import run_diagnostics_update_and_reschedule
+from ..domain.agents.self_improvement.agent_self_improve import run_perch_time_once
+from ..infrastructure.context.external_context_aggregator_scheduler import run_external_context_aggregation_and_reschedule
+from ..infrastructure.integrations.slack.slack_reply_tools import post_summary
+from ..domain.agents.self_improvement.self_modify_pipeline import get_pr_checks, open_pr_for_change_proposal, verify_ecs_rollout
+from ..infrastructure.integrations.slack.slack_web import chat_post_message_result
+from ..domain.agents.slack_agent import run_slack_agent_question
 from ..settings import settings
 
 
@@ -123,7 +123,7 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
             # Check if job has dependencies that aren't completed
             depends_on = job.get("dependsOn")
             if isinstance(depends_on, list) and depends_on:
-                from ..services.agent_jobs_repo import get_job as get_job_by_id
+                from ..repositories.agent.jobs_repo import get_job as get_job_by_id
                 all_deps_complete = True
                 for dep_job_id in depends_on:
                     dep_job = get_job_by_id(job_id=str(dep_job_id).strip())
@@ -354,8 +354,8 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
 
                 if job_type == "ai_agent_analyze_rfps":
                     # Long-running: Analyze multiple RFPs
-                    from ..services.agent_long_running import create_analysis_orchestrator
-                    from ..services.agent_checkpoint import get_latest_checkpoint
+                    from ..domain.agents.agent_long_running import create_analysis_orchestrator
+                    from ..domain.agents.jobs.agent_checkpoint import get_latest_checkpoint
                     
                     rfp_ids_raw = payload.get("rfpIds")
                     rfp_ids = [str(r).strip() for r in rfp_ids_raw] if isinstance(rfp_ids_raw, list) else []
@@ -367,8 +367,8 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     resume = bool(checkpoint_id)
                     
                     # Initialize token budget tracker for long-running job
-                    from ..services.long_running_job_helpers import initialize_token_budget_for_job
-                    from ..services.agent_checkpoint import get_latest_checkpoint as get_checkpoint
+                    from ..domain.agents.jobs.long_running_job_helpers import initialize_token_budget_for_job
+                    from ..domain.agents.jobs.agent_checkpoint import get_latest_checkpoint as get_checkpoint
                     
                     checkpoint_for_budget: dict[str, Any] | None = None
                     if resume and checkpoint_id:
@@ -457,7 +457,7 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
 
                 if job_type == "ai_agent_execute":
                     # Universal job executor - can handle any request
-                    from ..services.agent_universal_executor import execute_universal_job
+                    from ..domain.agents.agent_universal_executor import execute_universal_job
                     
                     # Check if resuming from checkpoint
                     checkpoint_id = str(job.get("checkpointId") or "").strip() or None
@@ -487,7 +487,7 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                         elapsed = time.time() - job_start_time
                         if elapsed > (max_duration - 60):  # 1 minute before timeout
                             # Save checkpoint and mark job as checkpointed
-                            from ..services.agent_checkpoint import get_latest_checkpoint
+                            from ..domain.agents.jobs.agent_checkpoint import get_latest_checkpoint
                             latest_checkpoint = get_latest_checkpoint(rfp_id=rid or "rfp_universal_job", job_id=jid)
                             checkpoint_id = str(latest_checkpoint.get("eventId") or "").strip() if latest_checkpoint else None
                             mark_checkpointed(job_id=jid, checkpoint_id=checkpoint_id)
@@ -510,7 +510,7 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     except Exception as e:
                         # On error, try to checkpoint if possible
                         try:
-                            from ..services.agent_checkpoint import get_latest_checkpoint
+                            from ..domain.agents.jobs.agent_checkpoint import get_latest_checkpoint
                             latest_checkpoint = get_latest_checkpoint(rfp_id=rid or "rfp_universal_job", job_id=jid)
                             checkpoint_id = str(latest_checkpoint.get("eventId") or "").strip() if latest_checkpoint else None
                             if checkpoint_id:

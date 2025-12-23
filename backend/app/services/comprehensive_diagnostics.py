@@ -58,7 +58,7 @@ def _get_credentials_diagnostics() -> dict[str, Any]:
     # GitHub
     try:
         from .agent_infrastructure_config import get_infrastructure_config
-        from .github_secrets import get_github_secret
+        from ..infrastructure.github.github_secrets import get_github_secret
         from ..infrastructure.github.github_api import _token
         
         infra_config = get_infrastructure_config()
@@ -130,13 +130,13 @@ def _get_credentials_diagnostics() -> dict[str, Any]:
     
     # Slack
     try:
-        from .slack_web import get_bot_token
+        from ..infrastructure.integrations.slack.slack_web import get_bot_token
         token_present = bool(get_bot_token())
         
         # Try to validate token works
         auth_ok = False
         try:
-            from ..services.slack_web import slack_api_get
+            from ..infrastructure.integrations.slack.slack_web import slack_api_get
             if token_present:
                 auth = slack_api_get(method="auth.test", params={})
                 auth_ok = bool(auth.get("ok"))

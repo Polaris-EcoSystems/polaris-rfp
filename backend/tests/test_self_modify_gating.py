@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.services import self_modify_pipeline
+from app.domain.agents.self_improvement import self_modify_pipeline
 from app.settings import settings
 
 

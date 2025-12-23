@@ -4,7 +4,7 @@ from typing import Any
 
 from ..core.agent_memory import add_episodic_memory, add_procedural_memory, update_existing_memory
 from ..relationships.agent_memory_relationships import add_relationship, auto_detect_relationships
-from ...services.agent_message_history import link_message_to_memory, store_message
+from ...domain.agents.context.agent_message_history import link_message_to_memory, store_message
 from ...observability.logging import get_logger
 
 log = get_logger("agent_memory_hooks")

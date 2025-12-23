@@ -8,7 +8,7 @@ from ...settings import settings
 from ...domain.rfp.rfp_analyzer import analyze_rfp
 from ...repositories.rfp.rfps_repo import create_rfp_from_analysis
 from ..slack_agent import _blocks_for_proposed_action, run_slack_agent_question
-from ..slack_thread_bindings_repo import get_binding as get_thread_binding
+from ...repositories.slack.thread_bindings_repo import get_binding as get_thread_binding
 from ..slack_web import (
     chat_post_message_result,
     download_slack_file,
@@ -194,7 +194,7 @@ def handle_shortcut(*, payload: dict[str, Any], background_tasks: Any) -> dict[s
                         assignee_ctx = resolve_actor_context(slack_user_id=assignee_slack_id, slack_team_id=None, slack_enterprise_id=None)
                         if assignee_ctx.user_sub:
                             # Auto-assign review if mentioned user is recognized
-                            from ..slack_actions_repo import create_action
+                            from ...repositories.slack.actions_repo import create_action
                             saved = create_action(
                                 kind="assign_rfp_review",
                                 payload={
