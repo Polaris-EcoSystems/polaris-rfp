@@ -3,19 +3,19 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ...observability.logging import get_logger
-from ...settings import settings
-from ...domain.rfp.rfp_analyzer import analyze_rfp
-from ...repositories.rfp.rfps_repo import create_rfp_from_analysis
-from ...domain.agents.slack_agent import _blocks_for_proposed_action, run_slack_agent_question
-from ...repositories.slack.thread_bindings_repo import get_binding as get_thread_binding
+from .....observability.logging import get_logger
+from .....settings import settings
+from .....domain.rfp.rfp_analyzer import analyze_rfp
+from .....repositories.rfp.rfps_repo import create_rfp_from_analysis
+from .....domain.agents.slack_agent import _blocks_for_proposed_action, run_slack_agent_question
+from .....repositories.slack.slack_thread_bindings_repo import get_binding as get_thread_binding
 from ..slack_web import (
     chat_post_message_result,
     download_slack_file,
     get_user_info,
     slack_user_display_name,
 )
-from ...repositories.users.user_profiles_repo import get_user_profile_by_slack_user_id
+from .....repositories.users.user_profiles_repo import get_user_profile_by_slack_user_id
 from . import modals as modals_surface
 
 log = get_logger("slack_shortcuts")
@@ -194,7 +194,7 @@ def handle_shortcut(*, payload: dict[str, Any], background_tasks: Any) -> dict[s
                         assignee_ctx = resolve_actor_context(slack_user_id=assignee_slack_id, slack_team_id=None, slack_enterprise_id=None)
                         if assignee_ctx.user_sub:
                             # Auto-assign review if mentioned user is recognized
-                            from ...repositories.slack.actions_repo import create_action
+                            from .....repositories.slack.slack_actions_repo import create_action
                             saved = create_action(
                                 kind="assign_rfp_review",
                                 payload={

@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ..services import cognito_idp
+from ..infrastructure import cognito_idp
 from ..settings import settings
 
 router = APIRouter(tags=["profile"])

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, TypeVar
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 
 log = get_logger("agent_resilience")
 

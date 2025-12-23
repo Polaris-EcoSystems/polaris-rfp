@@ -5,8 +5,8 @@ from typing import Any
 
 import httpx
 
-from ...observability.logging import get_logger
-from ...settings import settings
+from ....observability.logging import get_logger
+from ....settings import settings
 from .slack_secrets import get_secret_str
 
 

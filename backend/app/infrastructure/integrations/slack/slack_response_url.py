@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 
 
 log = get_logger("slack_response_url")

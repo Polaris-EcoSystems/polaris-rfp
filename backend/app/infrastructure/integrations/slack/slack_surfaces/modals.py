@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ...observability.logging import get_logger
+from .....observability.logging import get_logger
 from ..slack_actor_context import resolve_actor_context
-from ...repositories.slack.actions_repo import create_action
-from ...domain.agents.slack_agent import _blocks_for_proposed_action
-from ...repositories.slack.thread_bindings_repo import set_binding
+from .....repositories.slack.slack_actions_repo import create_action
+from .....domain.agents.slack_agent import _blocks_for_proposed_action
+from .....repositories.slack.slack_thread_bindings_repo import set_binding
 from ..slack_web import chat_post_message_result, slack_api_post
-from ...repositories.workflows.tasks_repo import list_tasks_for_rfp
+from .....repositories.workflows.tasks_repo import list_tasks_for_rfp
 
 log = get_logger("slack_modals")
 
@@ -95,7 +95,7 @@ def open_assign_task_modal(*, trigger_id: str, channel_id: str, thread_ts: str, 
 
 def open_assign_review_modal(*, trigger_id: str, channel_id: str, thread_ts: str, rfp_id: str) -> bool:
     """Open modal to assign bid/no-bid review to a user."""
-    from ...repositories.rfp.rfps_repo import get_rfp_by_id
+    from .....repositories.rfp.rfps_repo import get_rfp_by_id
     
     rfp = get_rfp_by_id(rfp_id) or {}
     review_raw = rfp.get("review")
@@ -127,7 +127,7 @@ def open_assign_review_modal(*, trigger_id: str, channel_id: str, thread_ts: str
 
 def open_bid_decision_modal(*, trigger_id: str, channel_id: str, thread_ts: str, rfp_id: str) -> bool:
     """Open modal for bid/no-bid decision, showing current assignee if any."""
-    from ...repositories.rfp.rfps_repo import get_rfp_by_id
+    from .....repositories.rfp.rfps_repo import get_rfp_by_id
     
     rfp = get_rfp_by_id(rfp_id) or {}
     review_raw = rfp.get("review")

@@ -13,7 +13,7 @@ from ...memory.blocks.agent_memory_blocks import list_memory_blocks
 from ...memory.core.agent_memory_db import MemoryType
 from ...memory.retrieval.agent_memory_retrieval import retrieve_relevant_memories
 from ...ai.context import clip_text
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 
 log = get_logger("agent_context_hierarchy")
 

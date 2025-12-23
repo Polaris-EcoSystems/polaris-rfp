@@ -4,7 +4,7 @@ import io
 from datetime import datetime, timezone
 from typing import Any
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 from ..infrastructure.storage import content_repo
 from ...repositories.contracting.contracting_repo import (
     add_budget_version,

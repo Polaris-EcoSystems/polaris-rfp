@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 from ...infrastructure.integrations.drive.drive_project_setup import setup_project_folders
 from ...infrastructure.integrations.slack.slack_web import download_slack_file
 from .rfp_analyzer import analyze_rfp

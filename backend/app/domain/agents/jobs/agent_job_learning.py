@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 from .agent_jobs_repo import list_recent_jobs, get_job
 from ...memory.core.agent_memory import add_procedural_memory, retrieve_relevant_memories
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 
 log = get_logger("drive_file_router")
 

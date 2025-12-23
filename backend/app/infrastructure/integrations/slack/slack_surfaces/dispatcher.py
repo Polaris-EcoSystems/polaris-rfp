@@ -4,17 +4,17 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from ...observability.logging import get_logger
-from ...settings import settings
+from .....observability.logging import get_logger
+from .....settings import settings
 from . import home as home_surface
 from . import modals as modals_surface
 from . import shortcuts as shortcuts_surface
 from . import workflows as workflows_surface
-from ...repositories.slack.events_repo import mark_seen as slack_event_mark_seen
+from .....repositories.slack.slack_events_repo import mark_seen as slack_event_mark_seen
 from ..slack_rate_limiter import allow as slack_allow
 from ..slack_reply_tools import ack_reaction
 from ..slack_web import is_slack_configured
-from ..slack_operator_agent import run_slack_operator_for_mention
+from .....domain.agents.slack_operator_agent import run_slack_operator_for_mention
 
 log = get_logger("slack_dispatcher")
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...observability.logging import get_logger
-from ...repositories.agent.events_repo import append_event
-from ...repositories.slack.events_repo import mark_seen
+from .....observability.logging import get_logger
+from .....repositories.agent.events_repo import append_event
+from .....repositories.slack.slack_events_repo import mark_seen
 from ..slack_web import chat_post_message_result, slack_api_post
 
 log = get_logger("slack_workflows")

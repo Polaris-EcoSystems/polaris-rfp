@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 from ...settings import settings
 from .token_budget_tracker import TokenBudgetTracker
 

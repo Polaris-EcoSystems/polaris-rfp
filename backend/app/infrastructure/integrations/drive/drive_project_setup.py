@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 from ...repositories.rfp.rfps_repo import get_rfp_by_id
 from ...tools.categories.google.google_drive import create_google_folder, share_google_file
 from ...repositories.slack.channel_projects_repo import get_channel_project, set_channel_project

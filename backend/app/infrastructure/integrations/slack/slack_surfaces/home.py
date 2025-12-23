@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...observability.logging import get_logger
-from ...settings import settings
+from .....observability.logging import get_logger
+from .....settings import settings
 from ..slack_actor_context import resolve_actor_context
 from ..slack_web import slack_api_post
-from ...repositories.rfp.rfps_repo import get_rfp_by_id, list_rfps
-from ...repositories.workflows.tasks_repo import list_tasks_for_rfp
+from .....repositories.rfp.rfps_repo import get_rfp_by_id, list_rfps
+from .....repositories.workflows.tasks_repo import list_tasks_for_rfp
 
 log = get_logger("slack_home")
 

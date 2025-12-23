@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 from ...settings import settings
 
 log = get_logger("comprehensive_diagnostics")

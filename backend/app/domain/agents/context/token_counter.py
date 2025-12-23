@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import tiktoken
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 
 log = get_logger("token_counter")
 

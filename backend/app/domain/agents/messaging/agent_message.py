@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 
 log = get_logger("agent_message")
 

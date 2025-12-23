@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 from .token_counter import calculate_cost, count_tokens, tokens_to_time_budget
 
 log = get_logger("token_budget_tracker")

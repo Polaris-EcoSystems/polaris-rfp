@@ -17,11 +17,11 @@ from ..repositories.rfp.upload_jobs_repo import get_job
 from ..repositories.rfp.rfps_repo import create_rfp_from_analysis, get_rfp_by_id, list_rfps
 from ..domain.agents.slack_agent import run_slack_agent_question
 from ..domain.agents.slack_operator_agent import run_slack_operator_for_mention
-from ..infrastructure.integrations.slack.surfaces.dispatcher import handle_event_callback, handle_interactivity
-from ..infrastructure.integrations.slack.surfaces.workflows import handle_workflow_step_execute
+from ..infrastructure.integrations.slack.slack_surfaces.dispatcher import handle_event_callback, handle_interactivity
+from ..infrastructure.integrations.slack.slack_surfaces.workflows import handle_workflow_step_execute
 from ..infrastructure.integrations.slack.slack_action_executor import execute_action
-from ..repositories.slack.actions_repo import get_action, mark_action_done
-from ..repositories.slack.actions_repo import create_action
+from ..repositories.slack.slack_actions_repo import get_action, mark_action_done
+from ..repositories.slack.slack_actions_repo import create_action
 from ..infrastructure.integrations.slack.slack_rate_limiter import allow as slack_allow
 from ..infrastructure.integrations.slack.slack_response_url import respond as respond_via_response_url
 from ..infrastructure.integrations.slack.slack_secrets import get_secret_str
@@ -35,8 +35,8 @@ from ..infrastructure.integrations.slack.slack_web import (
     chat_post_message_result,
     slack_api_get,
 )
-from ..repositories.slack.pending_thread_links_repo import create_pending_link, get_pending_link, consume_pending_link
-from ..repositories.slack.thread_bindings_repo import set_binding
+from ..repositories.slack.slack_pending_thread_links_repo import create_pending_link, get_pending_link, consume_pending_link
+from ..repositories.slack.slack_thread_bindings_repo import set_binding
 from ..repositories.agent.events_repo import append_event
 
 

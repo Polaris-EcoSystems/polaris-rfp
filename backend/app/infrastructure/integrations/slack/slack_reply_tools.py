@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...observability.logging import get_logger
-from .agent_events_repo import append_event
-from ...repositories.rfp.agent_journal_repo import append_entry
-from ...repositories.rfp.opportunity_state_repo import patch_state
+from ....observability.logging import get_logger
+from ....repositories.agent.events_repo import append_event
+from ....repositories.rfp.agent_journal_repo import append_entry
+from ....repositories.rfp.opportunity_state_repo import patch_state
 from .slack_web import chat_post_message_result, slack_api_post
 
 

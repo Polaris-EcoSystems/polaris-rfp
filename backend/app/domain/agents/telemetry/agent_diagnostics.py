@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from ...observability.logging import get_logger
-from .agent_events_repo import list_recent_events_global
-from .agent_jobs_repo import list_recent_jobs
-from ...memory.core.agent_memory import add_diagnostics_memory
+from ....observability.logging import get_logger
+from ....repositories.agent.events_repo import list_recent_events_global
+from ....repositories.agent.jobs_repo import list_recent_jobs
+from ....memory.core.agent_memory import add_diagnostics_memory
 from .agent_telemetry import get_agent_metrics
-from .daily_report_builder import build_northstar_daily_report
+from ..jobs.daily_report_builder import build_northstar_daily_report
 
 log = get_logger("agent_diagnostics")
 

@@ -3,10 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ...ai.client import AiError
-from ...ai.verified_calls import call_json_verified
-from ...ai.schemas import BuyerEnrichmentAI
-from ...settings import settings
+from ....ai.client import AiError
+from ....ai.verified_calls import call_json_verified
+from ....ai.schemas import BuyerEnrichmentAI
+from ....settings import settings
 
 
 def _norm(s: Any) -> str:

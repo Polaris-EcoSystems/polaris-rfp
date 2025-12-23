@@ -6,7 +6,7 @@ from ..ai.client import AiNotConfigured, AiUpstreamError
 from ..ai.user_context import load_user_profile_from_request
 from ..domain.agents.telemetry.agent_diagnostics import build_agent_diagnostics
 from ..infrastructure.integrations.slack.slack_action_executor import execute_action
-from ..repositories.slack.actions_repo import create_action, get_action, mark_action_done
+from ..repositories.slack.slack_actions_repo import create_action, get_action, mark_action_done
 from ..domain.agents.slack_agent import run_slack_agent_question
 from ..settings import settings
 

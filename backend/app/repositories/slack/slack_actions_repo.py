@@ -4,8 +4,8 @@ import time
 import uuid
 from typing import Any
 
-from ..db.dynamodb.errors import DdbConflict
-from ..db.dynamodb.table import get_main_table
+from ...db.dynamodb.errors import DdbConflict
+from ...db.dynamodb.table import get_main_table
 
 
 def _now_iso() -> str:

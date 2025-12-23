@@ -4,11 +4,11 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from ...observability.logging import get_logger
-from ...settings import settings
-from ...infrastructure import cognito_idp
+from ....observability.logging import get_logger
+from ....settings import settings
+from ...cognito_idp import admin_get_user
 from .slack_web import get_user_info, slack_user_display_name
-from ...repositories.users.user_profiles_repo import (
+from ....repositories.users.user_profiles_repo import (
     get_user_profile,
     get_user_profile_by_slack_user_id,
     get_user_sub_by_email,
@@ -87,7 +87,7 @@ def resolve_actor_context(
             pool_id = str(settings.cognito_user_pool_id or "").strip()
             if not pool_id:
                 raise ValueError("missing_cognito_user_pool_id")
-            cu = cognito_idp.admin_get_user(user_pool_id=pool_id, username=email)
+            cu = admin_get_user(user_pool_id=pool_id, username=email)
             attrs = cu.get("UserAttributes") if isinstance(cu, dict) else None
             for a in (attrs if isinstance(attrs, list) else []):
                 if isinstance(a, dict) and str(a.get("Name") or "").strip() == "sub":

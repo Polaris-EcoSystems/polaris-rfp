@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from .agent_memory_db import MemoryType, create_memory
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 
 log = get_logger("agent_memory_error_logs")
 

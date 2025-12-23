@@ -5,7 +5,7 @@ from typing import Any
 from ....settings import settings
 from ....repositories.rfp.rfps_repo import get_rfp_by_id
 from .slack_secrets import get_secret_str
-from .sessions_repo import list_sessions_for_user
+from ....repositories.sessions.sessions_repo import list_sessions_for_user
 from .slack_web import (
     chat_post_message_result,
     lookup_user_id_by_email,

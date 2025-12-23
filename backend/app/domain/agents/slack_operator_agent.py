@@ -26,7 +26,7 @@ from ...repositories.agent.jobs_repo import (
 from .self_improvement.agent_policy import sanitize_opportunity_patch
 from ...repositories.change_proposals.change_proposals_repo import create_change_proposal
 from ...repositories.rfp.opportunity_state_repo import ensure_state_exists, get_state, patch_state
-from ...repositories.slack.thread_bindings_repo import get_binding as get_thread_binding, set_binding as set_thread_binding
+from ...repositories.slack.slack_thread_bindings_repo import get_binding as get_thread_binding, set_binding as set_thread_binding
 from ...infrastructure.integrations.slack.slack_reply_tools import ask_clarifying_question, post_summary
 from ...tools.categories.slack.slack_read import get_thread as slack_get_thread
 from ...infrastructure.integrations.slack.slack_web import get_user_info, slack_user_display_name

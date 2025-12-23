@@ -6,8 +6,8 @@ from typing import Any, Literal
 
 from boto3.dynamodb.conditions import Key
 
-from ..db.dynamodb.errors import DdbConflict
-from ..db.dynamodb.table import get_main_table
+from ...db.dynamodb.errors import DdbConflict
+from ...db.dynamodb.table import get_main_table
 
 
 JobStatus = Literal["queued", "running", "checkpointed", "completed", "failed", "cancelled"]

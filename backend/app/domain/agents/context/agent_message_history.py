@@ -14,7 +14,7 @@ from typing import Any
 from boto3.dynamodb.conditions import Key
 
 from ...db.dynamodb.table import DynamoTable, get_table
-from ...observability.logging import get_logger
+from ....observability.logging import get_logger
 from ...settings import settings
 
 log = get_logger("agent_message_history")

@@ -9,9 +9,9 @@ from typing import Any
 
 import httpx
 
-from ...settings import settings
-from ...repositories.integrations import canva_repo
-from ...infrastructure.token_crypto import decrypt_string, encrypt_string
+from ....settings import settings
+from ....repositories.integrations import canva_repo
+from ....infrastructure.token_crypto import decrypt_string, encrypt_string
 
 CANVA_API_BASE = "https://api.canva.com/rest"
 CANVA_AUTH_URL = "https://www.canva.com/api/oauth/authorize"
