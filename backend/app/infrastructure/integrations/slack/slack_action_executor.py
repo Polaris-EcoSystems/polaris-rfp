@@ -179,7 +179,7 @@ def execute_action(*, action_id: str, kind: str, args: dict[str, Any]) -> dict[s
         # This removes the need for manual "link Slack user id" for basic personalization.
         if not user_sub and actor_slack:
             try:
-                from .identity_service import resolve_from_slack
+                from ...identity_service import resolve_from_slack
 
                 identity = resolve_from_slack(slack_user_id=actor_slack)
                 if identity.email:
