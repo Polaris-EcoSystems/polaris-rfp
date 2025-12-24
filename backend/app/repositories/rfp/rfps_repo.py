@@ -71,6 +71,25 @@ def create_rfp_from_analysis(
     )
     get_main_table().put_item(item=item, condition_expression="attribute_not_exists(pk)")
     result = normalize_rfp_for_api(item) or {}
+
+    # Create/ensure Opportunity profile row (back-compat: opportunityId == rfpId)
+    # Best-effort: do not fail RFP creation if this fails.
+    try:
+        from ...modules.opportunities.opportunity_service import ensure_from_rfp
+        from ..workflows.tasks_repo import compute_pipeline_stage
+        from ..rfp.proposals_repo import list_proposals_by_rfp
+
+        stage = None
+        try:
+            # Initial stage derived from current platform state (usually BidDecision).
+            proposals = list_proposals_by_rfp(rfp_id) or []
+            stage = compute_pipeline_stage(rfp=result, proposals_for_rfp=proposals)
+        except Exception:
+            stage = None
+
+        ensure_from_rfp(rfp_id=rfp_id, created_by_user_sub=None, initial_stage=stage)
+    except Exception:
+        pass
     
     # Trigger folder creation, template population, and PDF upload (background, best-effort)
     try:

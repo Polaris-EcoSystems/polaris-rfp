@@ -8,6 +8,7 @@ from ..repositories.rfp.opportunity_state_repo import ensure_state_exists, patch
 from ..repositories.rfp.proposals_repo import list_proposals
 from ..repositories.rfp.rfps_repo import list_rfps
 from ..repositories.workflows.tasks_repo import compute_pipeline_stage
+from .outbox_worker import run_once as run_outbox_once
 
 
 log = get_logger("ambient_tick")
@@ -100,7 +101,19 @@ def run_once(*, limit: int = 200) -> dict[str, Any]:
             continue
 
     finished_at = _now_iso()
-    out = {"ok": True, "startedAt": started_at, "finishedAt": finished_at, "rfpsScanned": len(rfps), "touched": touched}
+    # Best-effort: dispatch a few outbox events on each tick.
+    try:
+        outbox = run_outbox_once(limit=30)
+    except Exception:
+        outbox = {"ok": False}
+    out = {
+        "ok": True,
+        "startedAt": started_at,
+        "finishedAt": finished_at,
+        "rfpsScanned": len(rfps),
+        "touched": touched,
+        "outbox": outbox,
+    }
     try:
         log.info("ambient_tick_done", **out)
     except Exception:

@@ -4,7 +4,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from ...registry.aws_clients import logs_client
+from ....infrastructure.aws_clients import logs_client
 from .aws_logs import _allowed_log_groups, _require_allowed_log_group
 
 

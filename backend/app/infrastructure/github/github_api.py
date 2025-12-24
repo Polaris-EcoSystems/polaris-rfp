@@ -6,7 +6,7 @@ import httpx
 
 from ...settings import settings
 from .github_secrets import get_secret_str as github_secret_str
-from ...tools.registry.allowlist import parse_csv, uniq
+from ..allowlist import parse_csv, uniq
 
 
 def _allowed_repos() -> list[str]:

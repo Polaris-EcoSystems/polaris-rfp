@@ -26,14 +26,13 @@ from ..repositories.rfp.proposals_repo import (
     update_proposal_review,
 )
 from ..repositories.rfp.rfps_repo import get_rfp_by_id
-from ..repositories.rfp.rfps_repo import list_rfp_proposal_summaries
 from ..domain.pipeline.proposal_generation.shared_section_formatters import (
     format_cover_letter_section,
     format_experience_section,
     format_title_section,
 )
-from ..infrastructure.integrations.slack.slack_notifier import notify_proposal_created
-from ..repositories.workflows.tasks_repo import compute_pipeline_stage, seed_missing_tasks_for_stage
+from ..repositories.outbox.outbox_repo import enqueue_event
+from ..modules.workflow.workflow_service import sync_for_rfp
 from ..domain.pipeline.proposal_generation.team_member_profiles import pick_team_member_bio, pick_team_member_experience
 from ..domain.pipeline.proposal_generation.templates_catalog import get_builtin_template, to_generator_template
 from ..observability.logging import get_logger
@@ -525,24 +524,31 @@ def generate(body: dict, background_tasks: BackgroundTasks, request: Request = N
         background_tasks.add_task(_run_async_generation)
 
     try:
-        notify_proposal_created(
-            proposal_id=str(proposal.get("_id") or ""),
-            rfp_id=str(proposal.get("rfpId") or str(rfp_id)),
-            title=str(proposal.get("title") or title),
+        pid = str(proposal.get("_id") or "").strip()
+        rid = str(proposal.get("rfpId") or str(rfp_id) or "").strip()
+        ttl = str(proposal.get("title") or title or "").strip()
+        enqueue_event(
+            event_type="slack.proposal_created",
+            payload={"proposalId": pid, "rfpId": rid, "title": ttl},
+            dedupe_key=f"proposal_created:{pid}",
         )
     except Exception:
         # Best-effort only
         pass
 
-    # Best-effort: seed workflow tasks for the current stage (proposal just created).
+    # Best-effort: sync workflow stage + seed tasks (proposal just created).
     try:
         rid = str(proposal.get("rfpId") or rfp_id or "").strip()
         if rid:
-            r = get_rfp_by_id(rid) or {}
-            ps = list_rfp_proposal_summaries(rid) or []
-            stage = compute_pipeline_stage(rfp=r, proposals_for_rfp=ps)
             pid = str(proposal.get("_id") or "").strip() or None
-            seed_missing_tasks_for_stage(rfp_id=rid, stage=stage, proposal_id=pid)
+            actor_sub = None
+            try:
+                if request is not None:
+                    u = getattr(getattr(request, "state", None), "user", None)
+                    actor_sub = str(getattr(u, "sub", "") or "").strip() if u else None
+            except Exception:
+                actor_sub = None
+            sync_for_rfp(rfp_id=rid, actor_user_sub=actor_sub, proposal_id=pid)
     except Exception:
         pass
 
@@ -772,14 +778,13 @@ def update_one(id: str, request: Request, body: dict):
     except Exception:
         pass
 
-    # Best-effort: seed tasks on status transitions (stage is computed from latest proposal state).
+    # Best-effort: sync workflow stage + seed tasks on status transitions.
     try:
         rid = str((updated or {}).get("rfpId") or "").strip()
         if rid:
-            r = get_rfp_by_id(rid) or {}
-            ps = list_rfp_proposal_summaries(rid) or []
-            stage = compute_pipeline_stage(rfp=r, proposals_for_rfp=ps)
-            seed_missing_tasks_for_stage(rfp_id=rid, stage=stage, proposal_id=str(id))
+            user = getattr(getattr(request, "state", None), "user", None)
+            actor_sub = str(getattr(user, "sub", "") or "").strip() if user else None
+            sync_for_rfp(rfp_id=rid, actor_user_sub=actor_sub, proposal_id=str(id))
     except Exception:
         pass
     return updated
@@ -990,14 +995,11 @@ def update_review(id: str, body: dict):
     }
 
     updated = update_proposal_review(id, next_review)
-    # Best-effort: stage may change based on review workflow; seed tasks.
+    # Best-effort: stage may change based on review workflow; sync + seed tasks.
     try:
         rid = str((updated or {}).get("rfpId") or "").strip()
         if rid:
-            r = get_rfp_by_id(rid) or {}
-            ps = list_rfp_proposal_summaries(rid) or []
-            stage = compute_pipeline_stage(rfp=r, proposals_for_rfp=ps)
-            seed_missing_tasks_for_stage(rfp_id=rid, stage=stage, proposal_id=str(id))
+            sync_for_rfp(rfp_id=rid, actor_user_sub=None, proposal_id=str(id))
     except Exception:
         pass
     return updated

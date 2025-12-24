@@ -7,6 +7,8 @@ from typing import Any
 from boto3.dynamodb.conditions import Key
 
 from ...db.dynamodb.table import get_main_table
+from ...repositories.identity.slack_identity_links_repo import upsert_slack_identity_link
+from ...modules.identity.roles import normalize_roles
 
 
 def now_iso() -> str:
@@ -151,6 +153,8 @@ def upsert_user_profile(*, user_sub: str, email: str | None, updates: dict[str, 
         # AI agent personalization (bounded; stored per user)
         "aiPreferences": {},
         "aiMemorySummary": None,
+        # Authorization roles (app-controlled; not user-controlled)
+        "roles": ["Member"],
     }
 
     # Merge existing fields first, then apply updates.
@@ -178,12 +182,23 @@ def upsert_user_profile(*, user_sub: str, email: str | None, updates: dict[str, 
     # Optional GSI1 mapping: Slack user id → user profile
     suid = str(item.get("slackUserId") or "").strip()
     if suid:
+        # Best-effort: also upsert an explicit identity link record.
+        try:
+            upsert_slack_identity_link(slack_user_id=suid, user_sub=sub)
+        except Exception:
+            pass
         item["gsi1pk"] = f"SLACK_USER#{suid}"
         item["gsi1sk"] = f"USER#{sub}"
     else:
         # User profiles don't otherwise use GSI1; keep index clean.
         item.pop("gsi1pk", None)
         item.pop("gsi1sk", None)
+
+    # Normalize roles (defensive; prevents bad shapes from leaking in).
+    try:
+        item["roles"] = normalize_roles(item.get("roles"))
+    except Exception:
+        item["roles"] = ["Member"]
 
     get_main_table().put_item(item=item)
     return normalize_user_profile_for_api(item) or {}

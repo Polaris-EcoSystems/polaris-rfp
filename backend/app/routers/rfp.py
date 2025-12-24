@@ -18,7 +18,7 @@ from ..repositories.rfp.rfps_repo import (
     now_iso,
     update_rfp,
 )
-from ..repositories.workflows.tasks_repo import compute_pipeline_stage, seed_missing_tasks_for_stage
+from ..modules.workflow.workflow_service import sync_for_rfp
 from ..repositories.attachments.attachments_repo import list_attachments
 from ..infrastructure.storage.s3_assets import (
     get_assets_bucket_name,
@@ -51,10 +51,7 @@ from ..repositories.rfp.scraped_rfps_repo import (
     mark_scraped_rfp_imported,
 )
 from ..domain.pipeline.search.rfp_scrapers.scraper_registry import get_available_sources, get_scraper, is_source_available
-from ..infrastructure.integrations.slack.slack_notifier import (
-    notify_rfp_upload_job_completed,
-    notify_rfp_upload_job_failed,
-)
+from ..repositories.outbox.outbox_repo import enqueue_event
 from ..observability.logging import get_logger
 from ..settings import settings
 from ..ai.client import AiNotConfigured, AiError, AiUpstreamError
@@ -140,11 +137,15 @@ async def upload(file: UploadFile = File(...)):
         # Best-effort: notify Slack (machine channel) for direct uploads too.
         try:
             rfp_id = str(saved.get("_id") or saved.get("rfpId") or "").strip()
-            notify_rfp_upload_job_completed(
-                job_id="direct_upload",
-                rfp_id=rfp_id,
-                file_name=file.filename or "upload.pdf",
-                channel=str(settings.slack_rfp_machine_channel or "").strip() or None,
+            enqueue_event(
+                event_type="slack.rfp_upload_completed",
+                payload={
+                    "jobId": "direct_upload",
+                    "rfpId": rfp_id,
+                    "fileName": file.filename or "upload.pdf",
+                    "channel": str(settings.slack_rfp_machine_channel or "").strip() or None,
+                },
+                dedupe_key=f"rfp_upload_completed:direct_upload:{rfp_id}",
             )
         except Exception:
             pass
@@ -349,10 +350,10 @@ def _process_rfp_upload_job(job_id: str) -> None:
                     "updatedAt": now_iso(),
                 },
             )
-            notify_rfp_upload_job_failed(
-                job_id=job_id,
-                file_name=file_name,
-                error="Missing sha256 on upload job",
+            enqueue_event(
+                event_type="slack.rfp_upload_failed",
+                payload={"jobId": job_id, "fileName": file_name, "error": "Missing sha256 on upload job"},
+                dedupe_key=f"rfp_upload_failed:{job_id}",
             )
             return
 
@@ -381,11 +382,15 @@ def _process_rfp_upload_job(job_id: str) -> None:
                         rfpId=existing_rfp_id,
                         sha256=sha,
                     )
-                    notify_rfp_upload_job_completed(
-                        job_id=job_id,
-                        rfp_id=existing_rfp_id,
-                        file_name=file_name,
-                        channel=str(settings.slack_rfp_machine_channel or "").strip() or None,
+                    enqueue_event(
+                        event_type="slack.rfp_upload_completed",
+                        payload={
+                            "jobId": job_id,
+                            "rfpId": existing_rfp_id,
+                            "fileName": file_name,
+                            "channel": str(settings.slack_rfp_machine_channel or "").strip() or None,
+                        },
+                        dedupe_key=f"rfp_upload_completed:{job_id}:{existing_rfp_id}",
                     )
                     return
                 else:
@@ -412,10 +417,10 @@ def _process_rfp_upload_job(job_id: str) -> None:
                     "updatedAt": now_iso(),
                 },
             )
-            notify_rfp_upload_job_failed(
-                job_id=job_id,
-                file_name=file_name,
-                error="Uploaded object is empty",
+            enqueue_event(
+                event_type="slack.rfp_upload_failed",
+                payload={"jobId": job_id, "fileName": file_name, "error": "Uploaded object is empty"},
+                dedupe_key=f"rfp_upload_failed:{job_id}",
             )
             return
 
@@ -438,10 +443,14 @@ def _process_rfp_upload_job(job_id: str) -> None:
                     "updatedAt": now_iso(),
                 },
             )
-            notify_rfp_upload_job_failed(
-                job_id=job_id,
-                file_name=file_name,
-                error="sha256 mismatch between claimed hash and uploaded object",
+            enqueue_event(
+                event_type="slack.rfp_upload_failed",
+                payload={
+                    "jobId": job_id,
+                    "fileName": file_name,
+                    "error": "sha256 mismatch between claimed hash and uploaded object",
+                },
+                dedupe_key=f"rfp_upload_failed:{job_id}",
             )
             return
 
@@ -539,11 +548,15 @@ def _process_rfp_upload_job(job_id: str) -> None:
             },
         )
         log.info("rfp_upload_job_completed", jobId=job_id, rfpId=rfp_id)
-        notify_rfp_upload_job_completed(
-            job_id=job_id,
-            rfp_id=rfp_id,
-            file_name=file_name,
-            channel=str(settings.slack_rfp_machine_channel or "").strip() or None,
+        enqueue_event(
+            event_type="slack.rfp_upload_completed",
+            payload={
+                "jobId": job_id,
+                "rfpId": rfp_id,
+                "fileName": file_name,
+                "channel": str(settings.slack_rfp_machine_channel or "").strip() or None,
+            },
+            dedupe_key=f"rfp_upload_completed:{job_id}:{rfp_id}",
         )
     except Exception as e:
         update_job(
@@ -555,11 +568,15 @@ def _process_rfp_upload_job(job_id: str) -> None:
                 "updatedAt": now_iso(),
             },
         )
-        notify_rfp_upload_job_failed(
-            job_id=job_id,
-            file_name=str(job.get("fileName") or "").strip() or file_name,
-            error=str(e) or "Failed to process RFP",
-            channel=str(settings.slack_rfp_machine_channel or "").strip() or None,
+        enqueue_event(
+            event_type="slack.rfp_upload_failed",
+            payload={
+                "jobId": job_id,
+                "fileName": str(job.get("fileName") or "").strip() or file_name,
+                "error": str(e) or "Failed to process RFP",
+                "channel": str(settings.slack_rfp_machine_channel or "").strip() or None,
+            },
+            dedupe_key=f"rfp_upload_failed:{job_id}",
         )
         log.exception("rfp_upload_job_failed", jobId=job_id)
 
@@ -1369,10 +1386,9 @@ def update_review(id: str, request: Request, body: dict = Body(...)):
     if not updated:
         raise HTTPException(status_code=404, detail="RFP not found")
 
-    # Best-effort: seed workflow tasks for the current pipeline stage.
+    # Best-effort: sync workflow stage + seed tasks.
     try:
         proposals = list_rfp_proposal_summaries(id)
-        stage = compute_pipeline_stage(rfp=updated or {}, proposals_for_rfp=proposals or [])
         proposal_id: str | None = None
         try:
             if proposals:
@@ -1380,7 +1396,9 @@ def update_review(id: str, request: Request, body: dict = Body(...)):
                 proposal_id = str(p.get("proposalId") or "").strip() or None
         except Exception:
             proposal_id = None
-        seed_missing_tasks_for_stage(rfp_id=id, stage=stage, proposal_id=proposal_id)
+        user = getattr(getattr(request, "state", None), "user", None)
+        actor_sub = str(getattr(user, "sub", "") or "").strip() if user else ""
+        sync_for_rfp(rfp_id=id, actor_user_sub=actor_sub or None, proposal_id=proposal_id)
     except Exception:
         pass
 

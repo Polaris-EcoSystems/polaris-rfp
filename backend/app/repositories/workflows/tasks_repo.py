@@ -9,6 +9,7 @@ from boto3.dynamodb.conditions import Key
 from ...db.dynamodb.errors import DdbConflict
 from ...db.dynamodb.table import get_main_table
 from ...domain.pipeline.workflow_task_templates import STAGE_TASK_TEMPLATES, PipelineStage, StageTaskTemplate
+from ...modules.workflow.stage_machine import compute_stage as _compute_stage
 
 
 TaskStatus = str  # open|done|cancelled
@@ -308,36 +309,6 @@ def cancel_task(*, task_id: str) -> dict[str, Any] | None:
 
 
 def compute_pipeline_stage(*, rfp: dict[str, Any], proposals_for_rfp: Iterable[dict[str, Any]]) -> PipelineStage:
-    """
-    Mirror frontend pipeline stage logic (frontend/app/(app)/pipeline/page.tsx).
-    """
-    try:
-        if bool((rfp or {}).get("isDisqualified")):
-            return "Disqualified"
-        review = (rfp or {}).get("review") if isinstance((rfp or {}).get("review"), dict) else {}
-        decision = str((review or {}).get("decision") or "").strip().lower()
-        if decision == "no_bid":
-            return "NoBid"
-        if decision != "bid":
-            return "BidDecision"
-
-        ps = [p for p in (proposals_for_rfp or []) if isinstance(p, dict)]
-        if not ps:
-            return "ProposalDraft"
-
-        p = sorted(ps, key=lambda x: str(x.get("updatedAt") or ""), reverse=True)[0]
-        status = str(p.get("status") or "").strip().lower()
-        if status == "won":
-            return "Contracting"
-        if status == "submitted":
-            return "Submitted"
-        if status == "ready_to_submit":
-            return "ReadyToSubmit"
-        if status in ("rework", "needs_changes"):
-            return "Rework"
-        if status == "in_review":
-            return "ReviewRebuttal"
-        return "ProposalDraft"
-    except Exception:
-        return "BidDecision"
+    # Backwards-compatible wrapper; canonical logic lives in workflow module.
+    return _compute_stage(rfp=rfp, proposals_for_rfp=proposals_for_rfp)
 

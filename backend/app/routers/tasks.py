@@ -4,16 +4,15 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..repositories.rfp.rfps_repo import get_rfp_by_id, list_rfp_proposal_summaries
-from ..infrastructure.integrations.slack.slack_notifier import notify_task_assigned, notify_task_completed
+from ..repositories.outbox.outbox_repo import enqueue_event
 from ..repositories.workflows.tasks_repo import (
     assign_task,
     complete_task,
-    compute_pipeline_stage,
     get_task_by_id,
     list_tasks_for_rfp,
     reopen_task,
-    seed_missing_tasks_for_stage,
 )
+from ..modules.workflow.workflow_service import sync_for_rfp
 
 
 router = APIRouter(tags=["tasks"])
@@ -56,7 +55,6 @@ def _seed_rfp_tasks_impl(rfpId: str):
         raise HTTPException(status_code=404, detail="RFP not found")
 
     proposals = list_rfp_proposal_summaries(rid) or []
-    stage = compute_pipeline_stage(rfp=rfp, proposals_for_rfp=proposals)
 
     proposal_id: str | None = None
     try:
@@ -66,14 +64,13 @@ def _seed_rfp_tasks_impl(rfpId: str):
     except Exception:
         proposal_id = None
 
-    created = seed_missing_tasks_for_stage(rfp_id=rid, stage=stage, proposal_id=proposal_id)
+    sync = sync_for_rfp(rfp_id=rid, actor_user_sub=None, proposal_id=proposal_id)
     tasks = list_tasks_for_rfp(rfp_id=rid, limit=500, next_token=None)
     return {
         "ok": True,
         "rfpId": rid,
-        "stage": stage,
-        "createdCount": len(created),
-        "created": created,
+        "stage": sync.get("stage"),
+        "createdCount": int(sync.get("seededTasks") or 0),
         **tasks,
     }
 
@@ -118,7 +115,11 @@ def assign_one_task(taskId: str, request: Request, body: AssignTaskRequest):
 
     # Best-effort Slack notifications.
     try:
-        notify_task_assigned(task=updated, actor_user_sub=actor_sub or None)
+        enqueue_event(
+            event_type="slack.task_assigned",
+            payload={"task": updated, "actorUserSub": actor_sub or None},
+            dedupe_key=f"task_assigned:{str(updated.get('_id') or updated.get('taskId') or '')}:{str(updated.get('updatedAt') or '')}",
+        )
     except Exception:
         pass
 
@@ -141,7 +142,11 @@ def complete_one_task(taskId: str, request: Request, body: dict = Body(default_f
         raise HTTPException(status_code=404, detail="Task not found")
 
     try:
-        notify_task_completed(task=updated, actor_user_sub=actor_sub)
+        enqueue_event(
+            event_type="slack.task_completed",
+            payload={"task": updated, "actorUserSub": actor_sub},
+            dedupe_key=f"task_completed:{str(updated.get('_id') or updated.get('taskId') or '')}:{str(updated.get('updatedAt') or '')}",
+        )
     except Exception:
         pass
 

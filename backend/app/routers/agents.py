@@ -59,7 +59,9 @@ def _get_infrastructure_info_impl() -> dict[str, Any]:
     return {
         "ok": True,
         "infrastructure": {
-            "baseAgentClass": "app.agents.base.agent.Agent",
+            # Legacy note: previous agent base class lived at app.agents.base.agent.Agent.
+            # That layer was removed; keep this as informational-only.
+            "baseAgentClass": "app.domain.agents.*",
             "workers": [
                 {
                     "name": "ambient_tick_worker",

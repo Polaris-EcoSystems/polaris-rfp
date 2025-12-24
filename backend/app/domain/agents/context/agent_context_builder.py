@@ -491,60 +491,25 @@ def build_memory_context(
         Formatted memory context string
     """
     try:
-            # Use hierarchy if enabled and token budget tracker provided
-        if use_hierarchy and token_budget_tracker and user_sub:
-            from .agent_context_hierarchy import ContextHierarchy
-            
-            hierarchy = ContextHierarchy()
-            context_str, included = hierarchy.build_hierarchical_context(
-                token_budget_tracker=token_budget_tracker,
-                query=query_text or "",
-                user_sub=user_sub,
-                rfp_id=rfp_id,
-                channel_id=channel_id,
-                thread_ts=thread_ts,
-            )
-            return context_str
-        
-        # Also use message history if available (even without hierarchy)
-        # This integrates message history into standard context building
-        try:
-            from .agent_message_history import get_recent_messages
-            recent_msgs = get_recent_messages(user_sub=user_sub or "", limit=5)
-            if recent_msgs:
-                # Messages will be included in context hierarchy if enabled
-                # For now, just ensure they're available
-                pass
-        except Exception:
-            pass  # Non-critical
-        # Build context dict for scope expansion
-        expansion_context: dict[str, Any] = {}
-        if rfp_id:
-            # Try to get RFP participants and channels from opportunity state
-            try:
-                from ...repositories.rfp.opportunity_state_repo import get_state
-                rfp_state = get_state(rfp_id=rfp_id)
-                if rfp_state:
-                    # Extract participants, channels from state if available
-                    expansion_context["rfp_id"] = rfp_id
-            except Exception:
-                pass
-        
-        if channel_id:
-            expansion_context["channel_id"] = channel_id
-            if thread_ts:
-                expansion_context["thread_ts"] = thread_ts
-        
+        # Memory simplification:
+        # Keep only what we actively use for personalization + continuity today.
+        # - SEMANTIC: stable preferences/facts
+        # - EPISODIC: recent interactions
+        #
+        # Disable hierarchy, cross-scope expansion, and diagnostics/global memory
+        # to keep prompts predictable and low-noise.
         memories = get_memories_for_context(
             user_sub=user_sub,
             rfp_id=rfp_id,
             tenant_id=tenant_id,
             query_text=query_text,
+            memory_types=["EPISODIC", "SEMANTIC"],
             limit=limit,
+            include_global_diagnostics=False,
             channel_id=channel_id,
             thread_ts=thread_ts,
-            context=expansion_context or context,
-            expand_scopes=True,  # Enable contextual scope expansion
+            context=context,
+            expand_scopes=False,
         )
         
         # Pass token budget tracker to retrieval if available
@@ -559,52 +524,30 @@ def build_memory_context(
             lines.append(f"[Retrieved based on query: {query_text[:100]}]")
         lines.append("")
         
-        # Group memories by type for better organization
-        by_type: dict[str, list[dict[str, Any]]] = {}
-        for mem in memories[:limit]:
-            mem_type = str(mem.get("memoryType", "")).upper()
-            if mem_type not in by_type:
-                by_type[mem_type] = []
-            by_type[mem_type].append(mem)
-        
-        # Format by type (all memory types)
-        type_order = [
-            "EPISODIC",
-            "SEMANTIC",
-            "PROCEDURAL",
-            "COLLABORATION_CONTEXT",
-            "TEMPORAL_EVENT",
-            "DIAGNOSTICS",
-            "EXTERNAL_CONTEXT",
-        ]
-        for mem_type in type_order:
-            if mem_type not in by_type:
-                continue
-            type_label = mem_type.lower().replace("_", " ").title()
-            lines.append(f"{type_label} memories:")
-            for mem in by_type[mem_type][:10]:  # Limit per type
+        episodic = [m for m in memories if str(m.get("memoryType") or "").upper() == "EPISODIC"]
+        semantic = [m for m in memories if str(m.get("memoryType") or "").upper() == "SEMANTIC"]
+
+        if semantic:
+            lines.append("Semantic memories (preferences / facts):")
+            for mem in semantic[:10]:
                 summary = mem.get("summary") or mem.get("content", "")
-                created_at = mem.get("createdAt", "")
-                tags = mem.get("tags", [])
-                
-                # For procedural memories, include tool sequence if available
-                if mem_type == "PROCEDURAL":
-                    metadata = mem.get("metadata", {})
-                    tool_seq = metadata.get("toolSequence", [])
-                    if tool_seq and isinstance(tool_seq, list) and len(tool_seq) > 0:
-                        seq_str = " → ".join([str(t) for t in tool_seq[:5]])  # Limit to 5 tools
-                        summary = f"Tools: {seq_str} | {summary}"
-                
-                # Format: summary (created: date) [tags]
+                created_at = str(mem.get("createdAt") or "").strip()
                 line = f"  - {clip_text(summary, max_chars=200)}"
                 if created_at:
-                    # Extract date part from ISO timestamp
                     date_part = created_at.split("T")[0] if "T" in created_at else created_at[:10]
                     line += f" ({date_part})"
-                if tags and isinstance(tags, list):
-                    tag_str = ", ".join([str(t) for t in tags[:3]])
-                    if tag_str:
-                        line += f" [{tag_str}]"
+                lines.append(line)
+            lines.append("")
+
+        if episodic:
+            lines.append("Episodic memories (recent interactions):")
+            for mem in episodic[:10]:
+                summary = mem.get("summary") or mem.get("content", "")
+                created_at = str(mem.get("createdAt") or "").strip()
+                line = f"  - {clip_text(summary, max_chars=200)}"
+                if created_at:
+                    date_part = created_at.split("T")[0] if "T" in created_at else created_at[:10]
+                    line += f" ({date_part})"
                 lines.append(line)
             lines.append("")
         

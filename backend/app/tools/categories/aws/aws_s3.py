@@ -4,7 +4,7 @@ from typing import Any
 
 from ....settings import settings
 from ....infrastructure.storage import s3_assets
-from ...registry.allowlist import is_allowed_prefix, parse_csv, uniq
+from ....infrastructure.allowlist import is_allowed_prefix, parse_csv, uniq
 
 
 def _allowed_prefixes() -> list[str]:

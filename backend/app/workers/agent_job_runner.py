@@ -23,7 +23,6 @@ from ..infrastructure.context.external_context_aggregator_scheduler import run_e
 from ..infrastructure.integrations.slack.slack_reply_tools import post_summary
 from ..domain.agents.self_improvement.self_modify_pipeline import get_pr_checks, open_pr_for_change_proposal, verify_ecs_rollout
 from ..infrastructure.integrations.slack.slack_web import chat_post_message_result
-from ..domain.agents.slack_agent import run_slack_agent_question
 from ..settings import settings
 
 
@@ -324,34 +323,6 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     completed += 1
                     continue
 
-                if job_type == "ai_agent_ask":
-                    # AI agent question/answer workload (sandboxed execution)
-                    question = str(payload.get("question") or "").strip()
-                    user_id = str(payload.get("userId") or payload.get("slackUserId") or "").strip() or None
-                    user_display_name = str(payload.get("userDisplayName") or "").strip() or None
-                    user_email = str(payload.get("userEmail") or "").strip() or None
-                    user_profile = payload.get("userProfile") if isinstance(payload.get("userProfile"), dict) else None
-                    channel_id = str(payload.get("channelId") or "").strip() or None
-                    thread_ts = str(payload.get("threadTs") or "").strip() or None
-                    max_steps = max(1, min(20, int(payload.get("maxSteps") or 6)))
-
-                    if not question:
-                        raise RuntimeError("missing_question_in_payload")
-
-                    ans = run_slack_agent_question(
-                        question=question,
-                        user_id=user_id,
-                        user_display_name=user_display_name,
-                        user_email=user_email,
-                        user_profile=user_profile,
-                        channel_id=channel_id,
-                        thread_ts=thread_ts,
-                        max_steps=max_steps,
-                    )
-                    complete_job(job_id=jid, result={"ok": True, "text": ans.text, "blocks": ans.blocks, "meta": ans.meta})
-                    completed += 1
-                    continue
-
                 if job_type == "ai_agent_analyze_rfps":
                     # Long-running: Analyze multiple RFPs
                     from ..domain.agents.agent_long_running import create_analysis_orchestrator
@@ -453,83 +424,6 @@ def run_once(*, limit: int = 25) -> dict[str, Any]:
                     # TODO: Implement specific analysis types as needed
                     complete_job(job_id=jid, result={"ok": True, "analysisType": analysis_type, "status": "not_implemented"})
                     completed += 1
-                    continue
-
-                if job_type == "ai_agent_execute":
-                    # Universal job executor - can handle any request
-                    from ..domain.agents.agent_universal_executor import execute_universal_job
-                    
-                    # Check if resuming from checkpoint
-                    checkpoint_id = str(job.get("checkpointId") or "").strip() or None
-                    resume = bool(checkpoint_id)
-                    
-                    # Execute with timeout handling
-                    job_start_time = time.time()
-                    max_duration = 25 * 60  # 25 minutes (safety margin for ECS task)
-                    
-                    try:
-                        result_raw = execute_universal_job(
-                            job_id=jid,
-                            payload=payload,
-                            rfp_id=rid,
-                            resume=resume,
-                        )
-                        
-                        # Result is a dict, not OrchestrationResult
-                        if not isinstance(result_raw, dict):
-                            fail_job(job_id=jid, error="universal_job_execution_failed: invalid_result_type")
-                            failed += 1
-                            continue
-                        
-                        universal_result: dict[str, Any] = result_raw
-                        
-                        # Check if we're approaching timeout
-                        elapsed = time.time() - job_start_time
-                        if elapsed > (max_duration - 60):  # 1 minute before timeout
-                            # Save checkpoint and mark job as checkpointed
-                            from ..domain.agents.jobs.agent_checkpoint import get_latest_checkpoint
-                            latest_checkpoint = get_latest_checkpoint(rfp_id=rid or "rfp_universal_job", job_id=jid)
-                            checkpoint_id = str(latest_checkpoint.get("eventId") or "").strip() if latest_checkpoint else None
-                            mark_checkpointed(job_id=jid, checkpoint_id=checkpoint_id)
-                            # Reschedule job for next run
-                            next_due = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
-                            create_job(
-                                job_type="ai_agent_execute",
-                                scope=job.get("scope", {}),
-                                due_at=next_due,
-                                payload=payload,
-                            )
-                            completed += 1
-                            continue
-                        
-                        if universal_result.get("ok"):
-                            complete_job(job_id=jid, result=universal_result)
-                        else:
-                            fail_job(job_id=jid, error=str(universal_result.get("error") or "universal_job_execution_failed"))
-                        completed += 1
-                    except Exception as e:
-                        # On error, try to checkpoint if possible
-                        try:
-                            from ..domain.agents.jobs.agent_checkpoint import get_latest_checkpoint
-                            latest_checkpoint = get_latest_checkpoint(rfp_id=rid or "rfp_universal_job", job_id=jid)
-                            checkpoint_id = str(latest_checkpoint.get("eventId") or "").strip() if latest_checkpoint else None
-                            if checkpoint_id:
-                                mark_checkpointed(job_id=jid, checkpoint_id=checkpoint_id)
-                                # Reschedule for retry
-                                next_due = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
-                                create_job(
-                                    job_type="ai_agent_execute",
-                                    scope=job.get("scope", {}),
-                                    due_at=next_due,
-                                    payload=payload,
-                                )
-                                completed += 1
-                            else:
-                                fail_job(job_id=jid, error=str(e) or "universal_job_execution_failed")
-                                failed += 1
-                        except Exception:
-                            fail_job(job_id=jid, error=str(e) or "universal_job_execution_failed")
-                            failed += 1
                     continue
 
                 raise RuntimeError(f"unknown_job_type:{job_type or 'unknown'}")

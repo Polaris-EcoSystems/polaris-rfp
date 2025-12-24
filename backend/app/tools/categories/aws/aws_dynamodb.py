@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from ....settings import settings
-from ...registry.allowlist import parse_csv, uniq, is_allowed_exact
-from ...registry.aws_clients import dynamodb_client
+from ....infrastructure.allowlist import parse_csv, uniq, is_allowed_exact
+from ....infrastructure.aws_clients import dynamodb_client
 
 
 def _allowed_tables() -> list[str]:

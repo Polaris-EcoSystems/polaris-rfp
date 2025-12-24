@@ -4,8 +4,8 @@ import json
 from typing import Any
 
 from ....settings import settings
-from ...registry.allowlist import parse_csv, uniq
-from ...registry.aws_clients import secretsmanager_client
+from ....infrastructure.allowlist import parse_csv, uniq
+from ....infrastructure.aws_clients import secretsmanager_client
 from ....observability.logging import get_logger
 
 log = get_logger("aws_secrets")

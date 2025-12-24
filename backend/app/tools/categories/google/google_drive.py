@@ -7,14 +7,25 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+try:
+    from google.oauth2 import service_account  # type: ignore
+    from googleapiclient.discovery import build  # type: ignore
+    from googleapiclient.errors import HttpError  # type: ignore
+except Exception:  # pragma: no cover - optional dependency in some environments
+    service_account = None  # type: ignore[assignment]
+    build = None  # type: ignore[assignment]
+    HttpError = Exception  # type: ignore[misc,assignment]
 
-from ...registry.aws_clients import secretsmanager_client
+from ....infrastructure.aws_clients import secretsmanager_client
 from ....observability.logging import get_logger
 
 log = get_logger("google_drive")
+
+def _require_google_deps() -> None:
+    if service_account is None or build is None:
+        raise RuntimeError(
+            "Google Drive dependencies are not installed (missing google-auth/google-api-python-client)."
+        )
 
 
 def _get_google_credentials(*, use_api_key: bool = False) -> Any:
@@ -28,6 +39,7 @@ def _get_google_credentials(*, use_api_key: bool = False) -> Any:
     Returns:
         Credentials object or API key string
     """
+    _require_google_deps()
     if use_api_key:
         secret_arn = "arn:aws:secretsmanager:us-east-1:211125621822:secret:GOOGLE_API_KEY-yPu460"
     else:

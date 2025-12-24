@@ -5,12 +5,12 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
 
-from ...repositories.agent.events_repo import append_event, list_recent_events_global
-from ...repositories.agent.jobs_repo import create_job
+from app.repositories.agent.events_repo import append_event, list_recent_events_global
+from app.repositories.agent.jobs_repo import create_job
 from .daily_report_builder import build_northstar_daily_report
-from .email_ses import send_text_email
-from ...infrastructure.integrations.slack.slack_web import chat_post_message_result
-from ...settings import settings
+from app.infrastructure.notifications.email_ses import send_text_email
+from app.infrastructure.integrations.slack.slack_web import chat_post_message_result
+from app.settings import settings
 
 
 def _utcnow() -> datetime:

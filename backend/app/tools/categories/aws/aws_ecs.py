@@ -7,8 +7,8 @@ import httpx
 
 from ....observability.logging import get_logger
 from ....settings import settings
-from ...registry.allowlist import parse_csv, uniq
-from ...registry.aws_clients import ecs_client
+from ....infrastructure.allowlist import parse_csv, uniq
+from ....infrastructure.aws_clients import ecs_client
 
 # Import settings at module level for use in metadata_introspect
 

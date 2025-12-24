@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from ....settings import settings
-from ...registry.allowlist import parse_csv, uniq
-from ...registry.aws_clients import cognito_idp_client
+from ....infrastructure.allowlist import parse_csv, uniq
+from ....infrastructure.aws_clients import cognito_idp_client
 
 
 def _allowed_user_pools() -> list[str]:

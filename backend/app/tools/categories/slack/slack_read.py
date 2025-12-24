@@ -4,7 +4,7 @@ from typing import Any
 
 from ....settings import settings
 from ....infrastructure.integrations.slack.slack_web import slack_api_get, slack_api_post
-from ...registry.allowlist import parse_csv, uniq, is_allowed_exact
+from ....infrastructure.allowlist import parse_csv, uniq, is_allowed_exact
 
 
 def _allowed_channels() -> list[str]:

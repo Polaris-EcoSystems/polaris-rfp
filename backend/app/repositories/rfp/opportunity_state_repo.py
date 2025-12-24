@@ -103,7 +103,7 @@ def seed_from_platform(*, rfp_id: str) -> dict[str, Any]:
     from .contracting_repo import get_case_by_proposal_id
     from ..repositories.rfp.proposals_repo import list_proposals_by_rfp
     from ..repositories.rfp.rfps_repo import get_rfp_by_id
-    from .workflow_tasks_repo import compute_pipeline_stage
+    from ...modules.workflow.stage_machine import compute_stage as compute_pipeline_stage
 
     rfp = get_rfp_by_id(rid) or {}
     proposals = list_proposals_by_rfp(rid) or []

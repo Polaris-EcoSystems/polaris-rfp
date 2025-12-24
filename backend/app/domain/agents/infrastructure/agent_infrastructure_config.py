@@ -12,16 +12,35 @@ pre-loaded for faster access.
 from __future__ import annotations
 
 import time
+from functools import lru_cache
 from typing import Any
+
+import boto3
+from botocore.config import Config
 
 from ....observability.logging import get_logger
 from ....settings import settings
-from ....tools.registry.aws_clients import logs_client
 from ....tools.categories.aws.aws_ecs import _allowed_clusters, _allowed_services
 from ....tools.categories.aws.aws_logs import _allowed_log_groups
 from ....infrastructure.github.github_api import _allowed_repos
+from ....infrastructure.allowlist import parse_csv, uniq
 
 log = get_logger("agent_infrastructure_config")
+
+
+@lru_cache(maxsize=1)
+def _botocore_config() -> Config:
+    # Conservative timeouts; adaptive retries.
+    return Config(
+        retries={"max_attempts": 10, "mode": "adaptive"},
+        connect_timeout=2,
+        read_timeout=12,
+    )
+
+
+@lru_cache(maxsize=1)
+def _logs_client():
+    return boto3.client("logs", region_name=settings.aws_region, config=_botocore_config())
 
 
 class InfrastructureConfig:
@@ -123,33 +142,27 @@ class InfrastructureConfig:
         
         # DynamoDB
         if settings.agent_allowed_ddb_tables:
-            from ....tools.registry.allowlist import parse_csv, uniq
             self.dynamodb_tables = uniq(parse_csv(settings.agent_allowed_ddb_tables))
         
         # S3
         if settings.agent_allowed_s3_buckets:
-            from ....tools.registry.allowlist import parse_csv, uniq
             self.s3_buckets = uniq(parse_csv(settings.agent_allowed_s3_buckets))
         
         if settings.agent_allowed_s3_prefixes:
-            from ....tools.registry.allowlist import parse_csv, uniq
             self.s3_prefixes = uniq(parse_csv(settings.agent_allowed_s3_prefixes))
         
         # SQS
         if settings.agent_allowed_sqs_queue_urls:
-            from ....tools.registry.allowlist import parse_csv, uniq
             self.sqs_queues = uniq(parse_csv(settings.agent_allowed_sqs_queue_urls))
         
         # Cognito
         if settings.agent_allowed_cognito_user_pool_ids:
-            from ....tools.registry.allowlist import parse_csv, uniq
             self.cognito_user_pools = uniq(parse_csv(settings.agent_allowed_cognito_user_pool_ids))
         elif settings.cognito_user_pool_id:
             self.cognito_user_pools = [settings.cognito_user_pool_id]
         
         # Secrets Manager
         if settings.agent_allowed_secrets_arns:
-            from ....tools.registry.allowlist import parse_csv, uniq
             self.secrets_arns = uniq(parse_csv(settings.agent_allowed_secrets_arns))
         
         # Google Drive credentials validation
@@ -209,7 +222,7 @@ class InfrastructureConfig:
             # Method 1: Query CloudWatch Logs for log groups matching common patterns
             # We limit to /ecs/ and /aws/ prefixes to avoid expensive queries
             try:
-                logs = logs_client()
+                logs = _logs_client()
                 paginator = logs.get_paginator("describe_log_groups")
                 discovered: list[str] = []
                 

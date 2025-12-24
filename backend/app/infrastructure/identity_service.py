@@ -24,6 +24,7 @@ from ..repositories.users.user_profiles_repo import (
     get_user_sub_by_email,
     upsert_user_email_index,
 )
+from ..repositories.identity.slack_identity_links_repo import get_user_sub_by_slack_user_id as get_user_sub_by_slack_link
 from ..domain.agents.messaging.agent_message import UserIdentity
 
 log = get_logger("identity_service")
@@ -99,6 +100,15 @@ def resolve_user_identity(
     
     # Resolution strategy 1: Start from Slack user ID
     if slack_user_id:
+        # Preferred: explicit SlackIdentityLink (1:1 mapping, admin-managed)
+        try:
+            linked_sub = get_user_sub_by_slack_link(slack_user_id=slack_user_id, slack_team_id=slack_team_id)
+            if linked_sub:
+                resolved_user_sub = linked_sub
+                resolved_user_profile = get_user_profile(user_sub=linked_sub)
+        except Exception:
+            pass
+
         resolved_slack_user = get_user_info(user_id=slack_user_id, force_refresh=bool(force_refresh))
         resolved_display_name = slack_user_display_name(resolved_slack_user) if resolved_slack_user else None
         

@@ -32,10 +32,9 @@ from .routers.proposals import router as proposals_router
 from .routers.templates import router as templates_router
 from .routers.ai import router as ai_router
 from .routers.ai_jobs import router as ai_jobs_router
-from .routers.ai_agent import router as ai_agent_router
 from .routers.integrations import router as integrations_router
 from .routers.integrations_canva import router as canva_router
-from .routers.integrations_googledrive import router as googledrive_router
+from .routers.googledrive_public import router as googledrive_public_router
 from .routers.integrations_slack import router as slack_router
 from .routers.northstar_audit import router as northstar_audit_router
 from .routers.profile import router as profile_router
@@ -119,10 +118,9 @@ def create_app() -> FastAPI:
     app.include_router(content_router, prefix="/api/content")
     app.include_router(ai_router, prefix="/api/ai")
     app.include_router(ai_jobs_router, prefix="/api/ai")
-    app.include_router(ai_agent_router, prefix="/api/ai")
     app.include_router(integrations_router, prefix="/api/integrations")
     app.include_router(canva_router, prefix="/api/integrations/canva")
-    app.include_router(googledrive_router, prefix="/api/googledrive")
+    app.include_router(googledrive_public_router, prefix="/googledrive")
     app.include_router(slack_router, prefix="/api/integrations")
     app.include_router(northstar_audit_router, prefix="/api")
     app.include_router(profile_router, prefix="/api/profile")
@@ -133,6 +131,7 @@ def create_app() -> FastAPI:
     app.include_router(contract_templates_router, prefix="/api")
     app.include_router(client_portal_router, prefix="/api")
     app.include_router(agents_router, prefix="/api/agents")
+    # NOTE: opportunities/admin APIs intentionally removed from public surface during pruning.
 
     # Instrument after routers/middleware are attached.
     instrument_app(app)

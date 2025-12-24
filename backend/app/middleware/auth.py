@@ -49,8 +49,9 @@ async def require_auth(request: Request):
     if request.method.upper() == "OPTIONS":
         return
 
-    # Only enforce auth for API routes. Non-API paths should return legacy 404s.
-    if not path.startswith("/api/"):
+    # Only enforce auth for API routes (and select integration paths proxied by the frontend BFF).
+    # Non-API paths should return legacy 404s.
+    if not (path.startswith("/api/") or path.startswith("/googledrive/")):
         return
 
     if is_public_path(path):
