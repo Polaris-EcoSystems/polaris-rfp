@@ -67,7 +67,24 @@ class FakeTable:
 
         # Super-minimal parser: supports "SET a = :x, b = :y, ..."
         assert update_expression.startswith("SET ")
-        assigns = update_expression[len("SET ") :].split(",")
+        # Need to split on commas that are NOT inside parentheses (e.g. if_not_exists(createdAt, :ca)).
+        expr = update_expression[len("SET ") :]
+        assigns: list[str] = []
+        buf: list[str] = []
+        depth = 0
+        for ch in expr:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth = max(0, depth - 1)
+            if ch == "," and depth == 0:
+                assigns.append("".join(buf).strip())
+                buf = []
+                continue
+            buf.append(ch)
+        tail = "".join(buf).strip()
+        if tail:
+            assigns.append(tail)
 
         # Resolve attribute names (e.g. #s => status)
         def name(n: str) -> str:

@@ -10,8 +10,8 @@ SOURCE: dict[str, Any] = {
     "name": "American Planning Association",
     "description": "Daily RFP/RFQ listings for planning consultants",
     "baseUrl": "https://www.planning.org/consultants/rfp/search/",
-    "kind": "browser",  # type: ScraperKind
-    "authKind": "none",  # type: AuthKind
+    "kind": "browser",
+    "authKind": "none",
     "requiresAuth": False,
     "implemented": True,
 }

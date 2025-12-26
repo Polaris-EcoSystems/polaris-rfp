@@ -10,8 +10,8 @@ SOURCE: dict[str, Any] = {
     "name": "Custom Website (Links)",
     "description": "Scrape a listing page and collect links matching a pattern",
     "baseUrl": "",
-    "kind": "browser",  # type: ScraperKind
-    "authKind": "none",  # type: AuthKind
+    "kind": "browser",
+    "authKind": "none",
     "requiresAuth": False,
     "implemented": True,
 }
