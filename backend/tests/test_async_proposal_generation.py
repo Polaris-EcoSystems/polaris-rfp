@@ -173,3 +173,4 @@ def test_async_generate_sets_error_on_failure(monkeypatch):
     assert updates[-1]["generationStatus"] == "error"
     assert "generationError" in updates[-1]
 
+

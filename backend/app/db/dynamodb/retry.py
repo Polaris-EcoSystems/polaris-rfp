@@ -210,3 +210,4 @@ def ddb_call(
     raise DdbInternal(message="DynamoDB request failed", operation=operation, table_name=table_name, key=key)
 
 
+

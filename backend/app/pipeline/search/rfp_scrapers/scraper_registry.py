@@ -1,114 +1,113 @@
 from __future__ import annotations
 
+import importlib
+import pkgutil
 from typing import Any
 
-from ..rfp_scraper_base import BaseRfpScraper
-from .planning_org_scraper import PlanningOrgScraper
+from .framework import ScraperContext
+from .framework import RfpScraper
+from ....settings import settings
 
-# Registry of available scrapers
-_SCRAPERS: dict[str, type[BaseRfpScraper]] = {
-    "planning.org": PlanningOrgScraper,
-    # Add more scrapers here as they are implemented
-}
+_CACHE: dict[str, dict[str, Any]] | None = None
 
-# Metadata about each source
-_SOURCE_METADATA: dict[str, dict[str, Any]] = {
-    "planning.org": {
-        "name": "American Planning Association",
-        "description": "Daily RFP/RFQ listings for planning consultants",
-        "baseUrl": "https://www.planning.org/consultants/rfp/search/",
-        "requiresAuth": False,
-    },
-    "linkedin": {
-        "name": "LinkedIn",
-        "description": "Search for RFPs within your network",
-        "baseUrl": "https://www.linkedin.com/search/results/content/",
-        "requiresAuth": True,
-        "available": False,  # Not yet implemented
-    },
-    "google": {
-        "name": "Google Search",
-        "description": "Search with 'last week' filter for recent RFPs",
-        "baseUrl": "https://www.google.com/search",
-        "requiresAuth": False,
-        "available": False,  # Not yet implemented
-    },
-    "bidnetdirect": {
-        "name": "Bidnet Direct",
-        "description": "Supplier solicitations and RFP search",
-        "baseUrl": "https://www.bidnetdirect.com/private/supplier/solicitations/search",
-        "requiresAuth": True,
-        "available": False,  # Not yet implemented
-    },
-    "f6s": {
-        "name": "F6S",
-        "description": "Programs and opportunities for startups",
-        "baseUrl": "https://www.f6s.com/programs",
-        "requiresAuth": False,
-        "available": False,  # Not yet implemented
-    },
-    "opengov": {
-        "name": "OpenGov Procurement",
-        "description": "Government procurement opportunities",
-        "baseUrl": "https://procurement.opengov.com/login",
-        "requiresAuth": True,
-        "available": False,  # Not yet implemented
-    },
-    "techwerx": {
-        "name": "TechWerx",
-        "description": "Technology opportunities (alerts recommended)",
-        "baseUrl": "https://www.techwerx.org/opportunities",
-        "requiresAuth": False,
-        "available": False,  # Not yet implemented
-    },
-    "energywerx": {
-        "name": "EnergyWerx",
-        "description": "Energy sector opportunities (alerts recommended)",
-        "baseUrl": "https://www.energywerx.org/opportunities",
-        "requiresAuth": False,
-        "available": False,  # Not yet implemented
-    },
-    "herox": {
-        "name": "HeroX",
-        "description": "Innovation challenges and opportunities",
-        "baseUrl": "https://www.herox.com/",
-        "requiresAuth": False,
-        "available": False,  # Not yet implemented
-    },
-}
+
+def _settings_ready(meta: dict[str, Any]) -> bool:
+    req = meta.get("requiredSettings")
+    if not isinstance(req, list) or not req:
+        return True
+    for k in req:
+        name = str(k or "").strip()
+        if not name:
+            continue
+        val = getattr(settings, name, None)
+        if val is None:
+            return False
+        if isinstance(val, str) and not val.strip():
+            return False
+    return True
 
 
 def get_available_sources() -> list[dict[str, Any]]:
-    """Get list of available scraper sources with metadata."""
-    sources: list[dict[str, Any]] = []
-    for source_id, metadata in _SOURCE_METADATA.items():
-        # Use 'available' from metadata if present, otherwise check if scraper exists
-        available = metadata.get("available", source_id in _SCRAPERS)
-        if "available" in metadata:
-            # Remove the internal 'available' flag from metadata
-            metadata_copy = {k: v for k, v in metadata.items() if k != "available"}
-        else:
-            metadata_copy = metadata.copy()
-        sources.append(
+    """Get list of scraper sources with metadata (discovered from source modules)."""
+    reg = _discover_sources()
+    out: list[dict[str, Any]] = []
+    for sid, spec in reg.items():
+        meta = dict(spec.get("SOURCE") or {})
+        implemented = bool(meta.get("implemented"))
+        available = bool(implemented and _settings_ready(meta))
+        out.append(
             {
-                "id": source_id,
-                **metadata_copy,
+                "id": sid,
+                "name": meta.get("name") or sid,
+                "description": meta.get("description") or "",
+                "baseUrl": meta.get("baseUrl") or "",
+                "requiresAuth": bool(meta.get("requiresAuth")),
                 "available": available,
+                "kind": meta.get("kind") or "browser",
+                "authKind": meta.get("authKind") or ("user_session" if meta.get("requiresAuth") else "none"),
             }
         )
-    return sources
+    # Stable ordering for UI
+    out.sort(key=lambda x: str(x.get("name") or ""))
+    return out
 
 
-def get_scraper(source: str) -> BaseRfpScraper | None:
-    """Get a scraper instance for the given source."""
-    scraper_class = _SCRAPERS.get(source)
-    if not scraper_class:
+def get_scraper(
+    source: str,
+    search_params: dict[str, Any] | None = None,
+    *,
+    user_sub: str | None = None,
+) -> RfpScraper | None:
+    """Get a scraper instance for the given source via its source module factory."""
+    sid = str(source or "").strip()
+    if not sid:
         return None
-    # Subclasses override __init__ to take no arguments
-    return scraper_class()  # type: ignore[call-arg]
+    reg = _discover_sources()
+    spec = reg.get(sid)
+    if not spec:
+        return None
+    create = spec.get("create")
+    if not callable(create):
+        return None
+    ctx = ScraperContext(user_sub=str(user_sub).strip() if user_sub else None)
+    sp = search_params if isinstance(search_params, dict) else None
+    try:
+        return create(search_params=sp, ctx=ctx)
+    except Exception:
+        return None
 
 
 def is_source_available(source: str) -> bool:
-    """Check if a scraper is available for the given source."""
-    return source in _SCRAPERS
+    """Check if a scraper is implemented and runnable for the given source."""
+    sid = str(source or "").strip()
+    if not sid:
+        return False
+    reg = _discover_sources()
+    spec = reg.get(sid) or {}
+    meta = spec.get("SOURCE") or {}
+    return bool(meta.get("implemented") and _settings_ready(meta))
+
+
+def _discover_sources() -> dict[str, dict[str, Any]]:
+    global _CACHE
+    if isinstance(_CACHE, dict):
+        return _CACHE
+
+    reg: dict[str, dict[str, Any]] = {}
+    pkg = importlib.import_module("app.pipeline.search.rfp_scrapers.sources")
+    for m in pkgutil.iter_modules(pkg.__path__):  # type: ignore[attr-defined]
+        if not m.name or m.ispkg:
+            continue
+        mod = importlib.import_module(f"app.pipeline.search.rfp_scrapers.sources.{m.name}")
+        meta = getattr(mod, "SOURCE", None)
+        create = getattr(mod, "create", None)
+        if not isinstance(meta, dict):
+            continue
+        sid = str(meta.get("id") or "").strip()
+        if not sid:
+            continue
+        reg[sid] = {"SOURCE": meta, "create": create}
+
+    _CACHE = reg
+    return reg
 

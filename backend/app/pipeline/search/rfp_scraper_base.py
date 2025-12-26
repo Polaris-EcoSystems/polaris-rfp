@@ -51,9 +51,10 @@ class RfpScrapedCandidate:
 class BaseRfpScraper(ABC):
     """Base class for RFP scrapers using Playwright."""
 
-    def __init__(self, source_name: str, base_url: str):
+    def __init__(self, source_name: str, base_url: str, *, storage_state: dict[str, Any] | None = None):
         self.source_name = source_name
         self.base_url = base_url
+        self.storage_state = storage_state if isinstance(storage_state, dict) else None
         self.context_id: str | None = None
         self.page_id: str | None = None
 
@@ -63,6 +64,7 @@ class BaseRfpScraper(ABC):
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             viewport_width=1280,
             viewport_height=800,
+            storage_state=self.storage_state,
         )
         if not ctx_result.get("ok"):
             raise RuntimeError(f"Failed to create browser context: {ctx_result.get('error')}")
@@ -124,6 +126,29 @@ class BaseRfpScraper(ABC):
         if not result.get("ok"):
             return ""
         return str(result.get("value") or "").strip()
+
+    def extract_links(self, selector: str = "a") -> list[dict[str, str]]:
+        """
+        Extract (href, text) pairs from all elements matching selector.
+        Requires browser_worker support for mode="links_all".
+        """
+        if not self.page_id:
+            raise RuntimeError("No page available (call within context manager)")
+        res = extract(page_id=self.page_id, selector=selector, mode="links_all")
+        if not res.get("ok"):
+            return []
+        links = res.get("links")
+        if not isinstance(links, list):
+            return []
+        out: list[dict[str, str]] = []
+        for it in links[:1000]:
+            if not isinstance(it, dict):
+                continue
+            href = str(it.get("href") or "").strip()
+            text = str(it.get("text") or "").strip()
+            if href or text:
+                out.append({"href": href, "text": text})
+        return out
 
     @abstractmethod
     def scrape_listing_page(self, search_params: dict[str, Any] | None = None) -> list[RfpScrapedCandidate]:

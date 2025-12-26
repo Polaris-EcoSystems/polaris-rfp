@@ -41,3 +41,4 @@ def table_resource(table_name: str):
     return dynamodb_resource().Table(table_name)
 
 
+

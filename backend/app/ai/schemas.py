@@ -102,3 +102,4 @@ class AiGenerateContentResponse(BaseModel):
     content: str
     prompt: str
     contentType: str
+

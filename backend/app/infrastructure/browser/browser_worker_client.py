@@ -50,10 +50,21 @@ def _post(path: str, payload: dict[str, Any], timeout_s: float = 30.0) -> dict[s
         return data
 
 
-def new_context(*, user_agent: str | None = None, viewport_width: int | None = None, viewport_height: int | None = None) -> dict[str, Any]:
+def new_context(
+    *,
+    user_agent: str | None = None,
+    viewport_width: int | None = None,
+    viewport_height: int | None = None,
+    storage_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return _post(
         "/v1/context",
-        {"userAgent": user_agent, "viewportWidth": viewport_width, "viewportHeight": viewport_height},
+        {
+            "userAgent": user_agent,
+            "viewportWidth": viewport_width,
+            "viewportHeight": viewport_height,
+            "storageState": storage_state,
+        },
         timeout_s=30.0,
     )
 

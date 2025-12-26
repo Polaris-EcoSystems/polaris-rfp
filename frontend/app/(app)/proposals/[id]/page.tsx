@@ -1832,3 +1832,4 @@ export default function ProposalDetailPage() {
     </div>
   )
 }
+

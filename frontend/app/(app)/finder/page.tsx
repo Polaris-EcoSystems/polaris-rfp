@@ -11,6 +11,8 @@ import {
   type ScraperJob,
   type ScraperSource,
   type ScrapedCandidate,
+  type ScraperIntakeItem,
+  type ScraperSchedule,
 } from '@/lib/api'
 import {
   ArrowTopRightOnSquareIcon,
@@ -26,20 +28,25 @@ import { useEffect, useState } from 'react'
 export default function FinderPage() {
   const [sources, setSources] = useState<ScraperSource[]>([])
   const [sourcesLoading, setSourcesLoading] = useState(true)
-  const [googleQueries, setGoogleQueries] = useState<string[]>([])
-  const [newQuery, setNewQuery] = useState('')
   const [runningJobs, setRunningJobs] = useState<Record<string, boolean>>({})
   const [jobs, setJobs] = useState<ScraperJob[]>([])
   const [candidates, setCandidates] = useState<ScrapedCandidate[]>([])
-  const [activeTab, setActiveTab] = useState<'sources' | 'queries' | 'jobs' | 'candidates'>('sources')
+  const [intake, setIntake] = useState<ScraperIntakeItem[]>([])
+  const [schedules, setSchedules] = useState<ScraperSchedule[]>([])
+  const [activeTab, setActiveTab] = useState<'sources' | 'schedules' | 'jobs' | 'intake' | 'candidates'>('intake')
   const [urlsText, setUrlsText] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [results, setResults] = useState<any[]>([])
   const [error, setError] = useState<string | null>(null)
 
+  // Custom source quick-run / schedule form
+  const [customListingUrl, setCustomListingUrl] = useState('')
+  const [customLinkPattern, setCustomLinkPattern] = useState('rfp')
+
   useEffect(() => {
     loadSources()
-    loadGoogleQueries()
+    loadSchedules()
+    loadIntake()
   }, [])
 
   const loadSources = async () => {
@@ -54,82 +61,22 @@ export default function FinderPage() {
     }
   }
 
-  const loadGoogleQueries = () => {
-    // Load from localStorage
-    const stored = localStorage.getItem('google-rfp-queries')
-    if (stored) {
+  const loadSchedules = async () => {
       try {
-        setGoogleQueries(JSON.parse(stored))
+      const resp = await scraperApi.listSchedules({ limit: 100 })
+      setSchedules(resp.data?.schedules || [])
       } catch (e) {
-        console.error('Failed to parse stored queries:', e)
-      }
+      console.error('Failed to load schedules:', e)
     }
   }
 
-  const saveGoogleQueries = (queries: string[]) => {
-    setGoogleQueries(queries)
-    localStorage.setItem('google-rfp-queries', JSON.stringify(queries))
-  }
-
-  const addQuery = () => {
-    if (!newQuery.trim()) return
-    const updated = [...googleQueries, newQuery.trim()]
-    saveGoogleQueries(updated)
-    setNewQuery('')
-  }
-
-  const removeQuery = (index: number) => {
-    const updated = googleQueries.filter((_, i) => i !== index)
-    saveGoogleQueries(updated)
-  }
-
-  const handleCsvImport = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      const text = e.target?.result as string
-      // Parse CSV - looking for tribe names in the "Tribe" column
-      const lines = text.split('\n')
-      const headers = lines[0]?.split(',') || []
-      const tribeIndex = headers.findIndex((h) =>
-        h.toLowerCase().includes('tribe'),
-      )
-
-      if (tribeIndex === -1) {
-        alert('Could not find "Tribe" column in CSV')
-        return
-      }
-
-      const tribeNames = new Set<string>()
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i]
-        if (!line.trim()) continue
-        const values = line.split(',')
-        const tribeName = values[tribeIndex]?.trim().replace(/^"|"$/g, '')
-        if (tribeName) {
-          tribeNames.add(tribeName)
-        }
-      }
-
-      // Add queries like "TribeName RFP"
-      const newQueries = Array.from(tribeNames)
-        .map((name) => `${name} RFP`)
-        .filter((q) => !googleQueries.includes(q))
-
-      if (newQueries.length === 0) {
-        alert('No new tribe names found in CSV')
-        return
-      }
-
-      const updated = [...googleQueries, ...newQueries]
-      saveGoogleQueries(updated)
-      alert(`Added ${newQueries.length} search queries from CSV`)
+  const loadIntake = async () => {
+    try {
+      const resp = await scraperApi.listIntake({ status: 'pending', limit: 100 })
+      setIntake(resp.data?.items || [])
+    } catch (e) {
+      console.error('Failed to load intake queue:', e)
     }
-    reader.readAsText(file)
-    // Reset input
-    event.target.value = ''
   }
 
   const runScraper = async (sourceId: string, searchParams?: Record<string, any>) => {
@@ -149,25 +96,10 @@ export default function FinderPage() {
     }
   }
 
-  const runGoogleSearches = async () => {
-    if (googleQueries.length === 0) {
-      alert('Please add at least one search query')
-      return
-    }
-
-    // For now, we'll run them sequentially
-    // In the future, this should trigger a job that runs all queries
-    for (const query of googleQueries) {
-      await runScraper('google', { query, timeFilter: 'week' })
-      // Small delay between requests
-      await new Promise((resolve) => setTimeout(resolve, 500))
-    }
-  }
-
   const loadJobs = async (source?: string) => {
     if (!source && sources.length > 0) {
       // Load jobs for the first available source
-      source = sources.find((s) => s.available)?.id
+      source = sources.find((s) => s.available && s.id !== 'custom')?.id
     }
     if (!source) return
 
@@ -181,7 +113,7 @@ export default function FinderPage() {
 
   const loadCandidates = async (source?: string, status?: string) => {
     if (!source && sources.length > 0) {
-      source = sources.find((s) => s.available)?.id
+      source = sources.find((s) => s.available && s.id !== 'custom')?.id
     }
     if (!source) return
 
@@ -196,6 +128,10 @@ export default function FinderPage() {
   useEffect(() => {
     if (activeTab === 'jobs') {
       loadJobs()
+    } else if (activeTab === 'schedules') {
+      loadSchedules()
+    } else if (activeTab === 'intake') {
+      loadIntake()
     } else if (activeTab === 'candidates') {
       loadCandidates()
     }
@@ -228,11 +164,65 @@ export default function FinderPage() {
       const resp = await scraperApi.importCandidate(candidateId)
       if (resp.data?.rfp) {
         alert('Candidate imported successfully!')
+        loadIntake()
         loadCandidates()
       }
     } catch (e: any) {
       alert(`Failed to import: ${e?.response?.data?.detail || e?.message || 'Unknown error'}`)
     }
+  }
+
+  const skipCandidate = async (candidateId: string) => {
+    try {
+      await scraperApi.skipCandidate(candidateId)
+      loadIntake()
+      loadCandidates()
+    } catch (e: any) {
+      alert(`Failed to skip: ${e?.response?.data?.detail || e?.message || 'Unknown error'}`)
+    }
+  }
+
+  const createCustomDailySchedule = async () => {
+    const listingUrl = customListingUrl.trim()
+    if (!listingUrl) {
+      alert('Listing URL is required')
+      return
+    }
+    try {
+      await scraperApi.createSchedule({
+        name: `Custom: ${listingUrl}`,
+        source: 'custom',
+        frequency: 'daily',
+        enabled: true,
+        searchParams: {
+          listingUrl,
+          linkPattern: customLinkPattern.trim() || 'rfp',
+          linkPatternIsRegex: false,
+          linkSelector: 'a',
+          maxCandidates: 50,
+        },
+      })
+      await loadSchedules()
+      alert('Daily schedule created')
+    } catch (e: any) {
+      alert(`Failed to create schedule: ${e?.response?.data?.detail || e?.message || 'Unknown error'}`)
+    }
+  }
+
+  const runCustomNow = async () => {
+    const listingUrl = customListingUrl.trim()
+    if (!listingUrl) {
+      alert('Listing URL is required')
+      return
+    }
+    await runScraper('custom', {
+      listingUrl,
+      linkPattern: customLinkPattern.trim() || 'rfp',
+      linkPatternIsRegex: false,
+      linkSelector: 'a',
+      maxCandidates: 50,
+    })
+    loadIntake()
   }
 
   const getStatusIcon = (status: string) => {
@@ -291,8 +281,9 @@ export default function FinderPage() {
         <nav className="-mb-px flex space-x-8">
           {[
             { id: 'sources', label: 'Sources' },
-            { id: 'queries', label: 'Google Queries' },
+            { id: 'schedules', label: 'Schedules' },
             { id: 'jobs', label: 'Recent Jobs' },
+            { id: 'intake', label: 'Intake Queue' },
             { id: 'candidates', label: 'Candidates' },
           ].map((tab) => (
             <button
@@ -384,6 +375,7 @@ export default function FinderPage() {
                               {runningJobs[source.id] ? 'Running...' : 'Run Scraper'}
                             </button>
                           )}
+                          {Boolean(source.baseUrl) && (
                           <a
                             href={source.baseUrl}
                             target="_blank"
@@ -394,6 +386,7 @@ export default function FinderPage() {
                             Open Site{' '}
                             <ArrowTopRightOnSquareIcon className="w-4 h-4" />
                           </a>
+                          )}
                         </div>
                       </div>
                     </CardBody>
@@ -468,88 +461,179 @@ export default function FinderPage() {
         </div>
       )}
 
-      {/* Google Queries Tab */}
-      {activeTab === 'queries' && (
+      {/* Schedules Tab */}
+      {activeTab === 'schedules' && (
         <div className="space-y-6">
-          <div className="bg-white shadow rounded-lg p-6">
-            <div className="flex items-center justify-between mb-4">
+          <div className="bg-white shadow rounded-lg p-6 space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Daily schedules</h2>
+              <p className="mt-1 text-sm text-gray-600">
+                Schedules are executed by the backend scheduler worker (daily). You can also run any schedule manually.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="md:col-span-2">
+                <label className="block text-xs font-medium text-gray-700 mb-1">Custom listing URL</label>
+                <input
+                  value={customListingUrl}
+                  onChange={(e) => setCustomListingUrl(e.target.value)}
+                  placeholder="https://example.com/opportunities"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">
-                  Google Search Queries
-                </h2>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Link pattern (substring)</label>
+                <input
+                  value={customLinkPattern}
+                  onChange={(e) => setCustomLinkPattern(e.target.value)}
+                  placeholder="rfp"
+                  className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={runCustomNow}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+              >
+                <PlayIcon className="h-4 w-4" />
+                Run Custom Now
+              </button>
+              <button
+                onClick={createCustomDailySchedule}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md text-white bg-gray-900 hover:bg-gray-800"
+              >
+                <PlusIcon className="h-4 w-4" />
+                Create Daily Schedule
+              </button>
+              <button
+                onClick={loadSchedules}
+                className="text-sm text-primary-600 hover:text-primary-800"
+              >
+                Refresh
+              </button>
+            </div>
+            </div>
+
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-900">Configured schedules</h3>
+              <button onClick={loadSchedules} className="text-sm text-primary-600 hover:text-primary-800">
+                Refresh
+              </button>
+            </div>
+            <div className="px-6 py-4">
+              {schedules.length === 0 ? (
+                <p className="text-sm text-gray-500 italic">No schedules yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {schedules.map((s) => (
+                    <div key={s.scheduleId} className="p-4 border border-gray-200 rounded-lg flex items-center justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="font-medium text-gray-900 truncate">{s.name}</div>
+                        <div className="text-xs text-gray-500">
+                          Source: {s.source} · Next: {s.nextRunAt ? new Date(s.nextRunAt).toLocaleString() : '—'} · Enabled:{' '}
+                          {s.enabled ? 'Yes' : 'No'}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={async () => {
+                            await scraperApi.updateSchedule(s.scheduleId, { enabled: !s.enabled })
+                            loadSchedules()
+                          }}
+                          className="px-3 py-1.5 text-sm rounded-md border border-gray-300 hover:bg-gray-50"
+                        >
+                          {s.enabled ? 'Disable' : 'Enable'}
+                        </button>
+                        <button
+                          onClick={async () => {
+                            await scraperApi.runSchedule(s.scheduleId)
+                            loadJobs(s.source)
+                            loadIntake()
+                          }}
+                          className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                        >
+                          <PlayIcon className="h-4 w-4" />
+                          Run
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Intake Queue Tab */}
+      {activeTab === 'intake' && (
+        <div className="space-y-6">
+          <div className="bg-white shadow rounded-lg">
+            <div className="px-6 py-5 border-b border-gray-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Intake Queue</h2>
                 <p className="mt-1 text-sm text-gray-600">
-                  Manage search terms for daily Google scraping. Each query will be searched with a "last week" filter.
+                  De-duplicated candidates from all sources. Import to create an RFP, or skip to remove from the queue.
                 </p>
               </div>
               <button
-                onClick={runGoogleSearches}
-                disabled={googleQueries.length === 0}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={loadIntake}
+                className="text-sm text-primary-600 hover:text-primary-800"
               >
-                <PlayIcon className="h-4 w-4" />
-                Run All Searches
+                Refresh
               </button>
             </div>
-
-            {/* CSV Import */}
-            <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Import Tribal Directory CSV
-              </label>
-              <p className="text-xs text-gray-600 mb-3">
-                Upload a CSV file with a "Tribe" column to automatically generate search queries (e.g., "TribeName RFP").
-              </p>
-              <input
-                type="file"
-                accept=".csv"
-                onChange={handleCsvImport}
-                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-primary-50 file:text-primary-700 hover:file:bg-primary-100"
-              />
-            </div>
-
-            {/* Add Query */}
-            <div className="flex gap-2 mb-4">
-              <input
-                type="text"
-                value={newQuery}
-                onChange={(e) => setNewQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    addQuery()
-                  }
-                }}
-                placeholder="e.g., 'solar RFP', 'tribal energy procurement'"
-                className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm"
-              />
-              <button
-                onClick={addQuery}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
-              >
-                <PlusIcon className="h-4 w-4" />
-                Add
-              </button>
-            </div>
-
-            {/* Query List */}
-            <div className="space-y-2">
-              {googleQueries.length === 0 ? (
-                <p className="text-sm text-gray-500 italic">No search queries configured yet.</p>
+            <div className="px-6 py-4">
+              {intake.length === 0 ? (
+                <p className="text-sm text-gray-500 italic">No pending intake items.</p>
               ) : (
-                googleQueries.map((query, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center justify-between p-3 bg-gray-50 rounded-md border border-gray-200"
-                  >
-                    <span className="text-sm text-gray-900 font-medium">{query}</span>
-                    <button
-                      onClick={() => removeQuery(index)}
-                      className="text-red-600 hover:text-red-800"
+                <div className="space-y-3">
+                  {intake.map((it) => (
+                    <div
+                      key={it.candidateId}
+                      className="flex items-start justify-between p-4 border border-gray-200 rounded-lg"
                     >
-                      <XCircleIcon className="h-5 w-5" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <h3 className="font-medium text-gray-900 truncate">{it.title}</h3>
+                          {getStatusBadge(it.status)}
+                        </div>
+                        <div className="text-xs text-gray-500 mb-2">
+                          Source: {it.source || '—'} · Added:{' '}
+                          {it.createdAt ? new Date(it.createdAt).toLocaleString() : '—'}
+                        </div>
+                        {it.detailUrl && (
+                          <a
+                            href={it.detailUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-primary-600 hover:text-primary-800 inline-flex items-center gap-1"
+                          >
+                            View Original <ArrowTopRightOnSquareIcon className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
+                      <div className="ml-4 flex items-center gap-2">
+                        <button
+                          onClick={() => skipCandidate(it.candidateId)}
+                          className="px-3 py-1.5 text-sm rounded-md border border-gray-300 hover:bg-gray-50"
+                        >
+                          Skip
+                        </button>
+                        <button
+                          onClick={() => importCandidate(it.candidateId)}
+                          className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700"
+                        >
+                          Import
                     </button>
                   </div>
-                ))
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
           </div>

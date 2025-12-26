@@ -36,3 +36,4 @@ export function pickLocaleFromAcceptLanguage(
 
   return DEFAULT_LOCALE
 }
+

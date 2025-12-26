@@ -256,3 +256,4 @@ def get_table(table_name: str) -> DynamoTable:
     return DynamoTable(table_name=table_name)
 
 
+

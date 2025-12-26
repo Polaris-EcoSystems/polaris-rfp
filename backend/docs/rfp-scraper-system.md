@@ -20,9 +20,16 @@ The scraper system allows you to:
    - Provides common methods: navigate, extract_text, extract_html, etc.
 
 2. **Scraper Registry** (`rfp_scrapers/scraper_registry.py`)
-   - Maintains list of available scrapers
+   - Discovers scraper “source modules” under `rfp_scrapers/sources/`
    - Provides metadata about each source
-   - Factory method to create scraper instances
+   - Factory method to create scraper instances via per-source `create()`
+
+3. **Source Modules** (`rfp_scrapers/sources/*.py`)
+   - Each source is its own module (LinkedIn, Google, BidNet Direct, etc.)
+   - Exposes:
+     - `SOURCE`: a manifest dict (id/name/description/baseUrl/authKind/kind/implemented)
+     - `create(search_params, ctx)`: factory returning a scraper instance
+   - This keeps the backend **extensible**: adding a source is just adding a new module.
 
 3. **Scraped RFPs Repository** (`repositories/rfp/scraped_rfps_repo.py`)
    - Stores scraped RFP candidates before they become full RFPs
@@ -77,70 +84,38 @@ The scraper system allows you to:
 
 ## Creating a New Scraper
 
-To add a scraper for a new source:
+To add a scraper for a new source (modular “source module” approach):
 
-1. **Create scraper class** in `services/rfp_scrapers/`:
-
-```python
-from ..rfp_scraper_base import BaseRfpScraper, RfpScrapedCandidate
-
-class MySourceScraper(BaseRfpScraper):
-    def __init__(self):
-        super().__init__(
-            source_name="mysource",
-            base_url="https://example.com/rfps",
-        )
-
-    def get_search_url(self, search_params: dict[str, Any] | None = None) -> str:
-        # Build search URL based on params
-        return f"{self.base_url}?q={search_params.get('query', '')}"
-
-    def _wait_for_listing_content(self) -> None:
-        # Wait for listings to load
-        self.wait_for_selector(".rfp-listings", timeout_ms=30000)
-
-    def scrape_listing_page(self, search_params: dict[str, Any] | None = None) -> list[RfpScrapedCandidate]:
-        candidates = []
-        
-        # Extract listing items (adjust selectors based on actual page structure)
-        # This is a simplified example
-        html = self.extract_html(".rfp-listing-item")
-        # Parse HTML and extract title, URL, etc.
-        
-        # For each listing:
-        title = self.extract_text(".rfp-title")
-        detail_url = self.extract_attribute(".rfp-link", "href")
-        
-        candidate = self.create_candidate(
-            title=title,
-            detail_url=detail_url,
-            metadata={"extracted_field": "value"},
-        )
-        candidates.append(candidate)
-        
-        return candidates
-```
-
-2. **Register scraper** in `scraper_registry.py`:
+1. **Create a new source module** in `app/pipeline/search/rfp_scrapers/sources/`:
 
 ```python
-from .my_source_scraper import MySourceScraper
+from __future__ import annotations
 
-_SCRAPERS = {
-    "mysource": MySourceScraper,
-    # ... existing scrapers
+from typing import Any
+
+from ..framework import ScraperContext
+from ..framework import UnimplementedScraper
+
+SOURCE: dict[str, Any] = {
+    "id": "mysource",
+    "name": "My Source",
+    "description": "Describe the source workflow",
+    "baseUrl": "https://example.com/rfps",
+    "kind": "browser",          # browser|api|hybrid
+    "authKind": "none",         # none|user_session|api_key|...
+    "requiresAuth": False,
+    "implemented": False,       # flip to True once implemented
 }
 
-_SOURCE_METADATA = {
-    "mysource": {
-        "name": "My Source",
-        "description": "Description of the source",
-        "baseUrl": "https://example.com/rfps",
-        "requiresAuth": False,
-    },
-    # ... existing metadata
-}
+def create(*, search_params: dict[str, Any] | None, ctx: ScraperContext):
+    _ = (search_params, ctx)
+    return UnimplementedScraper(source_id="mysource", reason="fill_in_workflow")
 ```
+
+2. **Implement the scraper** (browser-based scrapers can still use `BaseRfpScraper`)
+   - For complex sources (LinkedIn/Google/BidNet/OpenGov), implement a dedicated
+     workflow with auth/session management and pagination.
+   - When ready, set `SOURCE["implemented"] = True`.
 
 ## Example Usage
 
@@ -293,4 +268,38 @@ Response:
 - Add bulk import functionality
 - Add webhook notifications for new candidates
 - Add candidate deduplication (prevent importing same RFP twice)
+
+## LinkedIn Scraper (Playwright storageState auth)
+
+The `linkedin` source is implemented as a Playwright/browser-worker workflow and **does not use Selenium**.
+
+### Auth model
+- The backend expects a Playwright `storageState` (cookies/localStorage) for LinkedIn.
+- Upload this via the existing Finder endpoint: `POST /api/finder/linkedin/storage-state`.
+- Scraper jobs for `source="linkedin"` run as the authenticated user (job.userSub), and will fail if no storageState exists for that user.
+
+### Required config
+- Ensure `AGENT_ALLOWED_BROWSER_DOMAINS` includes `linkedin.com` (and any other domains you want to follow out to).
+- Ensure `BROWSER_WORKER_URL` is configured and the browser worker is deployed with the updated `/v1/context` that accepts `storageState`.
+
+### Search params
+Provide one of:
+- `searchParams.searchUrl`: a full LinkedIn content search URL (recommended)
+- `searchParams.query`: keywords (the scraper will build a best-effort search URL)
+
+## Google Search Scraper (Custom Search API)
+
+The `google` source is implemented using **Google Custom Search JSON API** (CSE), not browser automation.
+
+### Required config
+- `GOOGLE_CSE_API_KEY`
+- `GOOGLE_CSE_CX` (Search engine ID)
+
+If either is missing, the source will show as **unavailable**.
+
+### Search params
+- `searchParams.query` (required)
+- `searchParams.dateRestrict` (optional): e.g. `d7` for last 7 days
+- `searchParams.siteSearch` (optional): restrict to a domain
+- `searchParams.maxCandidates` (optional): cap results
 

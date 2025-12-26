@@ -40,17 +40,17 @@ from ..repositories.rfp_pdf_dedup_repo import (
 from ..repositories.rfp_scraper_jobs_repo import (
     create_job as create_scraper_job,
     get_job as get_scraper_job,
-    get_job_item as get_scraper_job_item,
     list_jobs as list_scraper_jobs,
-    update_job as update_scraper_job,
 )
+from ..repositories import rfp_intake_queue_repo, rfp_scraper_schedules_repo
 from ..repositories.rfp_scraped_rfps_repo import (
-    create_scraped_rfp,
     get_scraped_rfp_by_id,
     list_scraped_rfps,
     mark_scraped_rfp_imported,
+    update_scraped_rfp,
 )
-from ..pipeline.search.rfp_scrapers.scraper_registry import get_available_sources, get_scraper, is_source_available
+from ..pipeline.search.rfp_scrapers.scraper_registry import get_available_sources, is_source_available
+from ..pipeline.search.rfp_scraper_job_runner import process_scraper_job
 from ..repositories.outbox_repo import enqueue_event
 from ..observability.logging import get_logger
 from ..settings import settings
@@ -1500,7 +1500,7 @@ def run_scraper(request: Request, background_tasks: BackgroundTasks, body: dict 
         search_params = None
 
     job = create_scraper_job(source=source, search_params=search_params, user_sub=user_sub)
-    background_tasks.add_task(_process_scraper_job, job["id"])
+    background_tasks.add_task(process_scraper_job, job["id"])
 
     return {"ok": True, "job": job}
 
@@ -1516,7 +1516,8 @@ def list_scraper_jobs_endpoint(
     try:
         if not source:
             raise HTTPException(status_code=400, detail="source parameter is required")
-        return list_scraper_jobs(source=source, status=status, limit=limit, next_token=nextToken)
+        res = list_scraper_jobs(source=source, status=status, limit=limit, next_token=nextToken)
+        return {"ok": True, "jobs": res.get("data") or [], "nextToken": res.get("nextToken")}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -1542,7 +1543,8 @@ def list_scraped_candidates(
 ):
     """List scraped RFP candidates."""
     try:
-        return list_scraped_rfps(source=source, status=status, limit=limit, next_token=nextToken)
+        res = list_scraped_rfps(source=source, status=status, limit=limit, next_token=nextToken)
+        return {"ok": True, "candidates": res.get("data") or [], "nextToken": res.get("nextToken")}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -1590,6 +1592,10 @@ def import_scraped_candidate(candidateId: str, background_tasks: BackgroundTasks
 
         # Mark candidate as imported
         mark_scraped_rfp_imported(candidateId, rfp_id)
+        try:
+            rfp_intake_queue_repo.update_status(candidate_id=candidateId, status="imported")
+        except Exception:
+            pass
 
         return {"ok": True, "rfp": saved, "candidateId": candidateId}
     except Exception as e:
@@ -1600,79 +1606,120 @@ def import_scraped_candidate(candidateId: str, background_tasks: BackgroundTasks
         )
 
 
-def _process_scraper_job(job_id: str) -> None:
-    """Background task to process a scraper job."""
-    log.info("scraper_job_starting", jobId=job_id)
-    job = get_scraper_job_item(job_id) or {}
-    if not job:
-        return
-    if job.get("status") not in ("queued", "running"):
-        return
-
+@router.post("/scrapers/candidates/{candidateId}/skip", status_code=200)
+def skip_scraped_candidate(candidateId: str):
+    """Skip a scraped candidate (removes it from the pending intake queue)."""
+    candidate = get_scraped_rfp_by_id(candidateId)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    updated = update_scraped_rfp(candidateId, {"status": "skipped"})
     try:
-        update_scraper_job(
-            job_id=job_id,
-            updates_obj={
-                "status": "running",
-                "startedAt": now_iso(),
-            },
-        )
+        rfp_intake_queue_repo.update_status(candidate_id=candidateId, status="skipped")
+    except Exception:
+        pass
+    return {"ok": True, "candidate": updated}
 
-        source = str(job.get("source") or "").strip()
-        search_params = job.get("searchParams") or {}
 
-        if not source or not is_source_available(source):
-            raise ValueError(f"Invalid or unavailable source: {source}")
+@router.post("/scrapers/candidates/{candidateId}/unskip", status_code=200)
+def unskip_scraped_candidate(candidateId: str):
+    """Move a skipped candidate back to pending."""
+    candidate = get_scraped_rfp_by_id(candidateId)
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found")
+    updated = update_scraped_rfp(candidateId, {"status": "pending"})
+    try:
+        rfp_intake_queue_repo.update_status(candidate_id=candidateId, status="pending")
+    except Exception:
+        pass
+    return {"ok": True, "candidate": updated}
 
-        scraper = get_scraper(source)
-        if not scraper:
-            raise ValueError(f"Failed to create scraper for source: {source}")
 
-        # Run the scraper
-        with scraper:
-            candidates = scraper.scrape(search_params=search_params)
-
-        # Save candidates to database
-        saved_count = 0
-        for candidate in candidates:
-            try:
-                if isinstance(candidate, dict):
-                    candidate_dict: dict[str, Any] = candidate
-                else:
-                    candidate_dict = candidate.to_dict()
-                create_scraped_rfp(
-                    source=source,
-                    source_url=str(candidate_dict.get("sourceUrl") or ""),
-                    title=str(candidate_dict.get("title") or "Untitled RFP"),
-                    detail_url=str(candidate_dict.get("detailUrl") or ""),
-                    metadata=candidate_dict.get("metadata"),
-                )
-                saved_count += 1
-            except Exception as e:
-                log.warning("failed_to_save_candidate", candidate=str(candidate), error=str(e))
-
-        update_scraper_job(
-            job_id=job_id,
-            updates_obj={
-                "status": "completed",
-                "candidatesFound": len(candidates),
-                "candidatesImported": saved_count,
-                "finishedAt": now_iso(),
-            },
-        )
-        log.info(
-            "scraper_job_completed",
-            jobId=job_id,
-            candidates_found=len(candidates),
-            candidates_saved=saved_count,
-        )
+@router.get("/scrapers/intake")
+def list_intake_queue(status: str | None = None, limit: int = 50, nextToken: str | None = None):
+    """List intake queue items across all sources."""
+    st = str(status or "pending").strip().lower()
+    try:
+        res = rfp_intake_queue_repo.list_intake(status=st, limit=limit, next_token=nextToken)  # type: ignore[arg-type]
+        return {"ok": True, "items": res.get("data") or [], "nextToken": res.get("nextToken")}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        update_scraper_job(
-            job_id=job_id,
-            updates_obj={
-                "status": "failed",
-                "error": str(e) or "Failed to process scraper job",
-                "finishedAt": now_iso(),
-            },
-        )
-        log.exception("scraper_job_failed", jobId=job_id)
+        log.exception("list_intake_queue_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to list intake queue")
+
+
+@router.get("/scrapers/schedules")
+def list_scraper_schedules(limit: int = 100, nextToken: str | None = None):
+    try:
+        res = rfp_scraper_schedules_repo.list_schedules(limit=limit, next_token=nextToken)
+        return {"ok": True, "schedules": res.get("data") or [], "nextToken": res.get("nextToken")}
+    except Exception as e:
+        log.exception("list_scraper_schedules_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to list scraper schedules")
+
+
+@router.post("/scrapers/schedules", status_code=201)
+def create_scraper_schedule(request: Request, body: dict = Body(...)):
+    user = getattr(getattr(request, "state", None), "user", None)
+    user_sub = str(getattr(user, "sub", "") or "").strip() if user else None
+
+    name = str((body or {}).get("name") or "").strip() or None
+    source = str((body or {}).get("source") or "").strip()
+    if not source:
+        raise HTTPException(status_code=400, detail="source is required")
+    if not is_source_available(source):
+        raise HTTPException(status_code=400, detail=f"Scraper not available for source: {source}")
+
+    frequency = str((body or {}).get("frequency") or "daily").strip().lower()
+    if frequency != "daily":
+        raise HTTPException(status_code=400, detail="Only daily schedules are supported")
+    enabled = bool((body or {}).get("enabled", True))
+    search_params = (body or {}).get("searchParams")
+    if not isinstance(search_params, dict):
+        search_params = {}
+
+    sched = rfp_scraper_schedules_repo.create_schedule(
+        name=name,
+        source=source,
+        frequency="daily",
+        enabled=enabled,
+        search_params=search_params,
+        created_by_user_sub=user_sub,
+    )
+    return {"ok": True, "schedule": sched}
+
+
+@router.put("/scrapers/schedules/{scheduleId}")
+def update_scraper_schedule(scheduleId: str, body: dict = Body(...)):
+    try:
+        updated = rfp_scraper_schedules_repo.update_schedule(schedule_id=scheduleId, updates_obj=body or {})
+        if not updated:
+            raise HTTPException(status_code=404, detail="Schedule not found")
+        return {"ok": True, "schedule": updated}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.exception("update_scraper_schedule_failed", scheduleId=scheduleId, error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to update schedule")
+
+
+@router.post("/scrapers/schedules/{scheduleId}/run", status_code=201)
+def run_scraper_schedule_now(scheduleId: str, background_tasks: BackgroundTasks):
+    sched = rfp_scraper_schedules_repo.get_schedule(schedule_id=scheduleId)
+    if not sched:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    source = str(sched.get("source") or "").strip()
+    if not source or not is_source_available(source):
+        raise HTTPException(status_code=400, detail=f"Scraper not available for source: {source}")
+    search_params = sched.get("searchParams") if isinstance(sched.get("searchParams"), dict) else None
+    job = create_scraper_job(source=source, search_params=search_params, user_sub=None)
+    background_tasks.add_task(process_scraper_job, job["id"])
+    try:
+        # Optionally bump nextRunAt forward since it was run manually.
+        rfp_scraper_schedules_repo.mark_ran(schedule_id=scheduleId)
+    except Exception:
+        pass
+    return {"ok": True, "job": job, "scheduleId": scheduleId}
+
+
+ 

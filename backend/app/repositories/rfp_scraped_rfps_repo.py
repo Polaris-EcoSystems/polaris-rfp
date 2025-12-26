@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
+from ..db.dynamodb.errors import DdbConflict
 from ..db.dynamodb.table import get_main_table
+from . import rfp_intake_queue_repo
 
 
 def now_iso() -> str:
@@ -28,6 +31,39 @@ def _scraped_rfp_type_item(candidate_id: str, source: str, created_at: str) -> d
     }
 
 
+def _norm_url(u: str) -> str:
+    s = str(u or "").strip()
+    if not s:
+        return ""
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+
+        sp = urlsplit(s)
+        scheme = (sp.scheme or "").lower()
+        netloc = (sp.netloc or "").lower()
+        path = (sp.path or "").rstrip("/")
+        query = sp.query or ""
+        return urlunsplit((scheme, netloc, path, query, ""))  # drop fragment
+    except Exception:
+        return s.rstrip("/")
+
+
+def _dedup_hash(*, source: str, detail_url: str, source_url: str) -> str:
+    d = _norm_url(detail_url)
+    s = _norm_url(source_url)
+    src = str(source or "").strip().lower()
+    basis = d or s
+    raw = f"{src}|{basis}".encode("utf-8", errors="ignore")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _dedup_key(*, dedup_sha: str) -> dict[str, str]:
+    h = str(dedup_sha or "").strip().lower()
+    if not h:
+        raise ValueError("dedup_sha is required")
+    return {"pk": f"SCRAPEDRFP_DEDUP#{h}", "sk": "MAP"}
+
+
 def normalize_scraped_rfp_for_api(item: dict[str, Any] | None) -> dict[str, Any] | None:
     """Normalize a scraped RFP item for API responses."""
     if not item:
@@ -46,27 +82,94 @@ def normalize_scraped_rfp_for_api(item: dict[str, Any] | None) -> dict[str, Any]
 
 def create_scraped_rfp(*, source: str, source_url: str, title: str, detail_url: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     """Create a scraped RFP candidate record."""
+    cand, _created = create_scraped_rfp_deduped(
+        source=source,
+        source_url=source_url,
+        title=title,
+        detail_url=detail_url,
+        metadata=metadata,
+    )
+    return cand
+
+
+def create_scraped_rfp_deduped(
+    *,
+    source: str,
+    source_url: str,
+    title: str,
+    detail_url: str,
+    metadata: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], bool]:
+    """
+    Create a scraped candidate, de-duping by (source, normalized detailUrl|sourceUrl).
+
+    Returns: (candidate, created_new)
+    """
     candidate_id = new_id("scraped")
     created_at = now_iso()
 
-    item: dict[str, Any] = {
+    src = str(source or "").strip()
+    su = str(source_url or "").strip()
+    du = str(detail_url or "").strip()
+    ttl = str(title or "").strip() or "Untitled RFP"
+    md = metadata if isinstance(metadata, dict) else {}
+
+    dedup_sha = _dedup_hash(source=src, detail_url=du, source_url=su)
+
+    candidate_item: dict[str, Any] = {
         **scraped_rfp_key(candidate_id),
         "entityType": "ScrapedRfp",
         "candidateId": candidate_id,
-        "source": source,
-        "sourceUrl": source_url,
-        "title": title,
-        "detailUrl": detail_url,
-        "metadata": metadata or {},
+        "source": src,
+        "sourceUrl": su,
+        "title": ttl,
+        "detailUrl": du,
+        "metadata": md,
         "status": "pending",  # pending, imported, skipped, failed
         "importedRfpId": None,
         "createdAt": created_at,
         "updatedAt": created_at,
-        **_scraped_rfp_type_item(candidate_id, source, created_at),
+        **_scraped_rfp_type_item(candidate_id, src, created_at),
     }
 
-    get_main_table().put_item(item=item, condition_expression="attribute_not_exists(pk)")
-    return normalize_scraped_rfp_for_api(item) or {}
+    dedup_item: dict[str, Any] = {
+        **_dedup_key(dedup_sha=dedup_sha),
+        "entityType": "ScrapedRfpDedup",
+        "dedupSha": dedup_sha,
+        "candidateId": candidate_id,
+        "source": src,
+        "detailUrl": _norm_url(du) or None,
+        "sourceUrl": _norm_url(su) or None,
+        "createdAt": created_at,
+        "updatedAt": created_at,
+    }
+    dedup_item = {k: v for k, v in dedup_item.items() if v is not None}
+
+    t = get_main_table()
+    try:
+        t.transact_write(
+            puts=(
+                t.tx_put(item=dedup_item, condition_expression="attribute_not_exists(pk)"),
+                t.tx_put(item=candidate_item, condition_expression="attribute_not_exists(pk)"),
+            )
+        )
+        norm = normalize_scraped_rfp_for_api(candidate_item) or {}
+        try:
+            rfp_intake_queue_repo.upsert_from_candidate(candidate=norm)
+        except Exception:
+            pass
+        return norm, True
+    except DdbConflict:
+        existing_map = t.get_item(key=_dedup_key(dedup_sha=dedup_sha)) or {}
+        existing_id = str(existing_map.get("candidateId") or "").strip()
+        if existing_id:
+            existing = get_scraped_rfp_by_id(existing_id) or {}
+            try:
+                rfp_intake_queue_repo.upsert_from_candidate(candidate=existing)
+            except Exception:
+                pass
+            return existing, False
+        raise
 
 
 def get_scraped_rfp_by_id(candidate_id: str) -> dict[str, Any] | None:
@@ -157,7 +260,13 @@ def update_scraped_rfp(candidate_id: str, updates_obj: dict[str, Any]) -> dict[s
         return_values="ALL_NEW",
     )
 
-    return normalize_scraped_rfp_for_api(updated)
+    norm = normalize_scraped_rfp_for_api(updated)
+    if norm:
+        try:
+            rfp_intake_queue_repo.upsert_from_candidate(candidate=norm)
+        except Exception:
+            pass
+    return norm
 
 
 def mark_scraped_rfp_imported(candidate_id: str, rfp_id: str) -> dict[str, Any] | None:

@@ -779,6 +779,8 @@ export interface ScraperSource {
   baseUrl: string
   requiresAuth: boolean
   available: boolean
+  kind?: 'browser' | 'api' | 'hybrid' | string
+  authKind?: 'none' | 'user_session' | 'service_account' | 'api_key' | 'cookie_jar' | string
 }
 
 export interface ScraperJob {
@@ -788,6 +790,7 @@ export interface ScraperJob {
   searchParams?: Record<string, any>
   candidatesFound?: number
   candidatesImported?: number
+  candidatesDeduped?: number
   error?: string
   createdAt?: string
   startedAt?: string
@@ -804,6 +807,34 @@ export interface ScrapedCandidate {
   status: 'pending' | 'imported' | 'skipped' | 'failed'
   importedRfpId?: string
   createdAt?: string
+}
+
+export interface ScraperIntakeItem {
+  _id: string
+  candidateId: string
+  status: 'pending' | 'imported' | 'skipped' | 'failed'
+  source?: string
+  title: string
+  detailUrl?: string
+  sourceUrl?: string
+  metadata?: Record<string, any>
+  importedRfpId?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface ScraperSchedule {
+  _id: string
+  scheduleId: string
+  name: string
+  source: string
+  frequency: 'daily'
+  enabled: boolean
+  searchParams?: Record<string, any>
+  nextRunAt?: string
+  lastRunAt?: string | null
+  createdAt?: string
+  updatedAt?: string
 }
 
 export const scraperApi = {
@@ -852,6 +883,51 @@ export const scraperApi = {
       proxyUrl(
         `/api/rfp/scrapers/candidates/${cleanPathToken(candidateId)}/import`,
       ),
+      null,
+    ),
+  skipCandidate: (candidateId: string) =>
+    api.post<{ ok: boolean; candidate?: ScrapedCandidate }>(
+      proxyUrl(
+        `/api/rfp/scrapers/candidates/${cleanPathToken(candidateId)}/skip`,
+      ),
+      null,
+    ),
+  unskipCandidate: (candidateId: string) =>
+    api.post<{ ok: boolean; candidate?: ScrapedCandidate }>(
+      proxyUrl(
+        `/api/rfp/scrapers/candidates/${cleanPathToken(candidateId)}/unskip`,
+      ),
+      null,
+    ),
+  listIntake: (params?: { status?: string; limit?: number; nextToken?: string }) =>
+    api.get<{ ok: boolean; items: ScraperIntakeItem[]; nextToken?: string }>(
+      proxyUrl('/api/rfp/scrapers/intake'),
+      { params },
+    ),
+  listSchedules: (params?: { limit?: number; nextToken?: string }) =>
+    api.get<{ ok: boolean; schedules: ScraperSchedule[]; nextToken?: string }>(
+      proxyUrl('/api/rfp/scrapers/schedules'),
+      { params },
+    ),
+  createSchedule: (data: {
+    name?: string
+    source: string
+    frequency?: 'daily'
+    enabled?: boolean
+    searchParams?: Record<string, any>
+  }) =>
+    api.post<{ ok: boolean; schedule: ScraperSchedule }>(
+      proxyUrl('/api/rfp/scrapers/schedules'),
+      data,
+    ),
+  updateSchedule: (scheduleId: string, data: Partial<ScraperSchedule>) =>
+    api.put<{ ok: boolean; schedule: ScraperSchedule }>(
+      proxyUrl(`/api/rfp/scrapers/schedules/${cleanPathToken(scheduleId)}`),
+      data,
+    ),
+  runSchedule: (scheduleId: string) =>
+    api.post<{ ok: boolean; job: ScraperJob; scheduleId: string }>(
+      proxyUrl(`/api/rfp/scrapers/schedules/${cleanPathToken(scheduleId)}/run`),
       null,
     ),
 }

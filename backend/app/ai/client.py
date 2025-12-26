@@ -998,3 +998,4 @@ def stream_text(
         f"Configured OpenAI model is not available for this project (purpose '{purpose}'). "
         f"Check OPENAI_MODEL / OPENAI_MODEL_* overrides."
     ) from last_err
+

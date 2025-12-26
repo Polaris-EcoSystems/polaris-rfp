@@ -22,6 +22,7 @@ class NewContextRequest(BaseModel):
     userAgent: str | None = Field(default=None, max_length=300)
     viewportWidth: int | None = Field(default=1280, ge=320, le=3840)
     viewportHeight: int | None = Field(default=800, ge=240, le=2160)
+    storageState: dict[str, Any] | None = Field(default=None)
 
 
 class NewContextResponse(BaseModel):
@@ -170,6 +171,7 @@ async def new_context(req: NewContextRequest) -> NewContextResponse:
     ctx = await browser.new_context(
         user_agent=req.userAgent or None,
         viewport={"width": req.viewportWidth or 1280, "height": req.viewportHeight or 800},
+        storage_state=req.storageState or None,
     )
     STATE.contexts[cid] = ctx
     _touch(cid)
@@ -234,17 +236,54 @@ async def wait_for(req: WaitForRequest) -> dict[str, Any]:
 @app.post("/v1/extract")
 async def extract(req: ExtractRequest) -> dict[str, Any]:
     pg = _require_page(req.pageId)
-    loc = pg.locator(req.selector).first
     mode = (req.mode or "text").strip().lower()
+    loc_all = pg.locator(req.selector)
+    loc = loc_all.first
     if mode == "html":
         html = await loc.inner_html()
         return {"ok": True, "pageId": req.pageId, "selector": req.selector, "html": (html[:20000] + "…") if len(html) > 20000 else html}
+    if mode == "html_all":
+        handles = await loc_all.element_handles()
+        htmls: list[Any] = []
+        for h in handles[:200]:
+            try:
+                htmls.append(await h.inner_html())
+            except Exception:
+                htmls.append(None)
+        return {"ok": True, "pageId": req.pageId, "selector": req.selector, "html": htmls}
     if mode == "attr":
         attr = str(req.attribute or "").strip()
         if not attr:
             raise HTTPException(status_code=400, detail="missing_attribute")
         v = await loc.get_attribute(attr)
         return {"ok": True, "pageId": req.pageId, "selector": req.selector, "attribute": attr, "value": v}
+    if mode == "attr_all":
+        attr = str(req.attribute or "").strip()
+        if not attr:
+            raise HTTPException(status_code=400, detail="missing_attribute")
+        handles = await loc_all.element_handles()
+        values: list[Any] = []
+        for h in handles[:500]:
+            try:
+                values.append(await h.get_attribute(attr))
+            except Exception:
+                values.append(None)
+        return {"ok": True, "pageId": req.pageId, "selector": req.selector, "attribute": attr, "values": values}
+    if mode == "links_all":
+        # Convenience: return href + text for each matched element (usually 'a').
+        handles = await loc_all.element_handles()
+        links: list[dict[str, Any]] = []
+        for h in handles[:800]:
+            try:
+                href = await h.get_attribute("href")
+            except Exception:
+                href = None
+            try:
+                text = await h.inner_text()
+            except Exception:
+                text = None
+            links.append({"href": href, "text": text})
+        return {"ok": True, "pageId": req.pageId, "selector": req.selector, "links": links}
     # text
     txt = await loc.inner_text()
     return {"ok": True, "pageId": req.pageId, "selector": req.selector, "text": (txt[:20000] + "…") if len(txt) > 20000 else txt}

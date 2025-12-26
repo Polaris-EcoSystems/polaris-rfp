@@ -169,6 +169,10 @@ class Settings(BaseSettings):
         default=None, validation_alias="AGENT_ALLOWED_BROWSER_DOMAINS"
     )
 
+    # Google Custom Search (CSE) - used by the "google" scraper source
+    google_cse_api_key: str | None = Field(default=None, validation_alias="GOOGLE_CSE_API_KEY")
+    google_cse_cx: str | None = Field(default=None, validation_alias="GOOGLE_CSE_CX")
+
     # Self-modifying pipeline (PR creation + CI verification + ECS verification)
     self_modify_enabled: bool = Field(default=False, validation_alias="SELF_MODIFY_ENABLED")
     # Comma-separated Slack user IDs allowed to trigger self-modifying actions (U…).

@@ -8,11 +8,12 @@ from ..rfp_scraper_base import BaseRfpScraper, RfpScrapedCandidate
 class PlanningOrgScraper(BaseRfpScraper):
     """Scraper for American Planning Association RFP listings."""
 
-    def __init__(self):
+    def __init__(self, search_params: dict[str, Any] | None = None):
         super().__init__(
             source_name="planning.org",
             base_url="https://www.planning.org/consultants/rfp/search/",
         )
+        self._search_params = search_params if isinstance(search_params, dict) else {}
 
     def get_search_url(self, search_params: dict[str, Any] | None = None) -> str:
         """Get the search URL."""
@@ -30,26 +31,54 @@ class PlanningOrgScraper(BaseRfpScraper):
 
     def scrape_listing_page(self, search_params: dict[str, Any] | None = None) -> list[RfpScrapedCandidate]:
         """Scrape the planning.org RFP listing page."""
-        candidates: list[RfpScrapedCandidate] = []
+        sp = search_params if isinstance(search_params, dict) else self._search_params
+        max_candidates = int(sp.get("maxCandidates") or 50)
+        max_candidates = max(1, min(200, max_candidates))
 
-        # Extract RFP listings - this selector needs to be adjusted based on actual page structure
-        # Common patterns: table rows, article elements, or div containers
-        # For now, using a flexible approach that tries multiple selectors
+        # We don’t rely on fragile table selectors; instead, extract links and heuristically filter.
+        links = self.extract_links("a")
+        if not links:
+            return []
 
-        # Try to extract listings from a table
-        try:
-            # This is a placeholder - actual selectors need to be determined by inspecting the page
-            _ = self.extract_html("table.rfp-results tbody tr, .rfp-listing-item, article.rfp-item")
-            # Parse rows and extract title, URL, etc.
-            # For now, return empty list - this needs to be implemented based on actual page structure
-        except Exception:
-            pass
+        from urllib.parse import urljoin, urlparse
 
-        # TODO: Implement actual extraction logic based on page structure
-        # This would involve:
-        # 1. Finding the listing container
-        # 2. Extracting each RFP entry (title, detail URL, etc.)
-        # 3. Creating RfpScrapedCandidate objects
+        base = self.base_url
+        host = str(urlparse(base).hostname or "").lower()
 
-        return candidates
+        def looks_like_rfp(url: str) -> bool:
+            u = url.lower()
+            return ("rfp" in u) or ("rfq" in u) or ("/consultants/" in u and "/rfp" in u)
+
+        out: list[RfpScrapedCandidate] = []
+        seen: set[str] = set()
+        for lk in links:
+            href = str(lk.get("href") or "").strip()
+            if not href:
+                continue
+            abs_url = urljoin(base, href)
+            uhost = str(urlparse(abs_url).hostname or "").lower()
+            if host and uhost and uhost != host:
+                continue
+            if not looks_like_rfp(abs_url):
+                continue
+            if abs_url in seen:
+                continue
+            seen.add(abs_url)
+
+            title = str(lk.get("text") or "").strip()
+            if not title or len(title) < 4:
+                title = "Planning.org RFP"
+
+            out.append(
+                self.create_candidate(
+                    title=title,
+                    detail_url=abs_url,
+                    source_url=self.base_url,
+                    metadata={"listingUrl": self.base_url},
+                )
+            )
+            if len(out) >= max_candidates:
+                break
+
+        return out
 
