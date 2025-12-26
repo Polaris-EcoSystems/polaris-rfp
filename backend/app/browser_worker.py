@@ -4,7 +4,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -171,7 +171,8 @@ async def new_context(req: NewContextRequest) -> NewContextResponse:
     ctx = await browser.new_context(
         user_agent=req.userAgent or None,
         viewport={"width": req.viewportWidth or 1280, "height": req.viewportHeight or 800},
-        storage_state=req.storageState or None,
+        # Playwright's StorageState type is broader than our pydantic shape; runtime accepts dict.
+        storage_state=cast(Any, req.storageState or None),
     )
     STATE.contexts[cid] = ctx
     _touch(cid)

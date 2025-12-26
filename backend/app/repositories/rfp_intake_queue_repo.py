@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from boto3.dynamodb.conditions import Key
 
@@ -53,9 +53,9 @@ def upsert_from_candidate(*, candidate: dict[str, Any]) -> dict[str, Any] | None
         return None
 
     status_raw = str(candidate.get("status") or "pending").strip().lower()
-    status: IntakeStatus = "pending"  # type: ignore[assignment]
+    status: IntakeStatus = "pending"
     if status_raw in ("pending", "imported", "skipped", "failed"):
-        status = status_raw  # type: ignore[assignment]
+        status = cast(IntakeStatus, status_raw)
 
     created_at = str(candidate.get("createdAt") or "").strip() or now_iso()
     updated_at = str(candidate.get("updatedAt") or "").strip() or created_at

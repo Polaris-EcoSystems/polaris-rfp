@@ -95,7 +95,8 @@ def _discover_sources() -> dict[str, dict[str, Any]]:
 
     reg: dict[str, dict[str, Any]] = {}
     pkg = importlib.import_module("app.pipeline.search.rfp_scrapers.sources")
-    for m in pkgutil.iter_modules(pkg.__path__):  # type: ignore[attr-defined]
+    # pkg.__path__ exists for packages; mypy can infer it here.
+    for m in pkgutil.iter_modules(pkg.__path__):
         if not m.name or m.ispkg:
             continue
         mod = importlib.import_module(f"app.pipeline.search.rfp_scrapers.sources.{m.name}")
