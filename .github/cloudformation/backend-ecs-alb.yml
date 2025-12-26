@@ -69,20 +69,6 @@ Parameters:
     AllowedValues:
       ['512', '1024', '2048', '3072', '4096', '8192', '16384', '30720']
 
-  # Contracting worker (SQS + ECS)
-  ContractingWorkerDesiredCount:
-    Type: Number
-    Default: 1
-  ContractingWorkerCpu:
-    Type: String
-    Default: '512'
-    AllowedValues: ['256', '512', '1024', '2048', '4096']
-  ContractingWorkerMemory:
-    Type: String
-    Default: '1024'
-    AllowedValues:
-      ['512', '1024', '2048', '3072', '4096', '8192', '16384', '30720']
-
   HealthCheckPath:
     Type: String
     Default: '/'
@@ -211,12 +197,6 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub '/ecs/polaris-backend-${Environment}'
-      RetentionInDays: 14
-
-  ContractingWorkerLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/ecs/polaris-contracting-worker-${Environment}'
       RetentionInDays: 14
 
   # ---- Observability (CloudWatch) ----
@@ -607,18 +587,6 @@ Resources:
                   - s3:DeleteObject
                 Resource:
                   - !Sub 'arn:aws:s3:::${AssetsBucketName}/*'
-              - Sid: ContractingJobsSqsAccess
-                Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:ChangeMessageVisibility
-                  - sqs:GetQueueAttributes
-                  - sqs:GetQueueUrl
-                Resource:
-                  - !GetAtt ContractingJobsQueue.Arn
-                  - !GetAtt ContractingJobsDeadLetterQueue.Arn
               - !If
                 - UseAgentMemoryTableName
                 - Sid: AgentMemoryDynamoDBAccess
@@ -647,21 +615,6 @@ Resources:
                     - es:ESHttpHead
                   Resource: !Sub 'arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/polaris-mem-${Environment}/*'
                 - !Ref AWS::NoValue
-
-  ContractingJobsDeadLetterQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub 'polaris-contracting-jobs-dlq-${Environment}'
-      MessageRetentionPeriod: 1209600 # 14 days
-
-  ContractingJobsQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub 'polaris-contracting-jobs-${Environment}'
-      VisibilityTimeout: 300
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt ContractingJobsDeadLetterQueue.Arn
-        maxReceiveCount: 6
 
   TaskRoleSlackSecretsPolicy:
     Type: AWS::IAM::Policy
@@ -787,8 +740,6 @@ Resources:
               - Name: SLACK_SECRET_ARN
                 Value: !Ref SlackSecretArn
               - !Ref AWS::NoValue
-            - Name: CONTRACTING_JOBS_QUEUE_URL
-              Value: !Ref ContractingJobsQueue
             - !If
               - UseAgentMemoryTableName
               - Name: AGENT_MEMORY_TABLE_NAME
@@ -826,113 +777,6 @@ Resources:
             LogDriver: awslogs
             Options:
               awslogs-group: !Ref BackendLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: ecs
-
-  ContractingWorkerTaskDefinition:
-    Type: AWS::ECS::TaskDefinition
-    Properties:
-      Family: !Sub 'polaris-contracting-worker-${Environment}'
-      NetworkMode: awsvpc
-      RequiresCompatibilities: ['FARGATE']
-      Cpu: !Ref ContractingWorkerCpu
-      Memory: !Ref ContractingWorkerMemory
-      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
-      TaskRoleArn: !GetAtt TaskRole.Arn
-      ContainerDefinitions:
-        - Name: contracting-worker
-          Image: !Ref ImageUri
-          Essential: true
-          Command: ['python', '-m', 'app.workers.contracting_worker']
-          Environment:
-            - Name: NODE_ENV
-              Value: production
-            - Name: TMPDIR
-              Value: /tmp
-            - Name: DDB_TABLE_NAME
-              Value: !Ref DdbTableName
-            - Name: ASSETS_BUCKET_NAME
-              Value: !Ref AssetsBucketName
-            - Name: COGNITO_USER_POOL_ID
-              Value: !Ref CognitoUserPoolId
-            - Name: COGNITO_CLIENT_ID
-              Value: !Ref CognitoClientId
-            - Name: COGNITO_REGION
-              Value: !Ref CognitoRegion
-            - Name: MAGIC_LINK_TABLE_NAME
-              Value: !Ref MagicLinkSessionsTableName
-            - Name: OPENAI_MODEL
-              Value: !Ref OpenAiModel
-            - !If
-              - UseOpenAiProjectId
-              - Name: OPENAI_PROJECT_ID
-                Value: !Ref OpenAiProjectId
-              - !Ref AWS::NoValue
-            - !If
-              - UseOpenAiOrganizationId
-              - Name: OPENAI_ORG_ID
-                Value: !Ref OpenAiOrganizationId
-              - !Ref AWS::NoValue
-            - Name: JWT_EXPIRE
-              Value: !Ref JwtExpire
-            - Name: CANVA_CLIENT_ID
-              Value: !Ref CanvaClientId
-            - Name: CANVA_CLIENT_SECRET
-              Value: !Ref CanvaClientSecret
-            - Name: CANVA_REDIRECT_URI
-              Value: !Ref CanvaRedirectUri
-            - Name: CANVA_TOKEN_ENC_KEY
-              Value: !Ref CanvaTokenEncKey
-            - Name: SLACK_ENABLED
-              Value: !If [UseSlackSecretArn, 'true', 'false']
-            - Name: SLACK_RFP_MACHINE_CHANNEL
-              Value: !Ref SlackRfpMachineChannel
-            - !If
-              - UseSlackSecretArn
-              - Name: SLACK_SECRET_ARN
-                Value: !Ref SlackSecretArn
-              - !Ref AWS::NoValue
-            - Name: CONTRACTING_JOBS_QUEUE_URL
-              Value: !Ref ContractingJobsQueue
-            - !If
-              - UseAgentMemoryTableName
-              - Name: AGENT_MEMORY_TABLE_NAME
-                Value: !Ref AgentMemoryTableName
-              - !Ref AWS::NoValue
-            - !If
-              - UseGitHubRepo
-              - Name: GITHUB_REPO
-                Value: !Ref GitHubRepo
-              - !Ref AWS::NoValue
-            - !If
-              - UseOpenSearchEndpoint
-              - Name: OPENSEARCH_ENDPOINT
-                Value: !Ref OpenSearchEndpoint
-              - !Ref AWS::NoValue
-          Secrets: !If
-            - UseJwtSecretArn
-            - - Name: JWT_SECRET
-                ValueFrom: !Ref JwtSecretArn
-              - !If
-                - UseOpenAiApiKeySecretArn
-                - Name: OPENAI_API_KEY
-                  ValueFrom: !If
-                    - UseOpenAiApiKeySecretJsonKey
-                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
-                    - !Ref OpenAiApiKeySecretArn
-                - !Ref AWS::NoValue
-            - - !If
-                - UseOpenAiApiKeySecretArn
-                - Name: OPENAI_API_KEY
-                  ValueFrom: !If
-                    - UseOpenAiApiKeySecretJsonKey
-                    - !Sub '${OpenAiApiKeySecretArn}:${OpenAiApiKeySecretJsonKey}::'
-                    - !Ref OpenAiApiKeySecretArn
-                - !Ref AWS::NoValue
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref ContractingWorkerLogGroup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: ecs
 
@@ -1080,25 +924,6 @@ Resources:
       HealthCheckGracePeriodSeconds: 30
       EnableExecuteCommand: false
 
-  ContractingWorkerService:
-    Type: AWS::ECS::Service
-    Properties:
-      ServiceName: !Sub 'polaris-contracting-worker-${Environment}'
-      Cluster: !Ref EcsCluster
-      LaunchType: FARGATE
-      TaskDefinition: !Ref ContractingWorkerTaskDefinition
-      DesiredCount: !Ref ContractingWorkerDesiredCount
-      DeploymentConfiguration:
-        MinimumHealthyPercent: 0
-        MaximumPercent: 200
-      NetworkConfiguration:
-        AwsvpcConfiguration:
-          AssignPublicIp: DISABLED
-          Subnets: !Ref PrivateSubnetIds
-          SecurityGroups:
-            - !Ref ServiceSecurityGroup
-      EnableExecuteCommand: false
-
 Outputs:
   BackendUrl:
     Description: Backend API URL
@@ -1115,7 +940,3 @@ Outputs:
   EcsServiceName:
     Description: ECS service name
     Value: !Ref EcsService
-
-  ContractingJobsQueueUrl:
-    Description: SQS queue URL for contracting jobs
-    Value: !Ref ContractingJobsQueue

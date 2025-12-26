@@ -121,40 +121,15 @@ Parameters:
       For private channels, use the channel ID (starts with G) and ensure the bot is invited.
       Example: G0123456789
     Default: 'C0A4M5813RU'
-
-  NorthStarDailyReportChannel:
-    Type: String
-    Description: Slack channel ID for North Star daily 8am America/Chicago report
-    Default: 'C0A4M5813RU'
-
   EnableSlackTokenRotation:
     Type: String
     Description: If true, deploy a scheduled Lambda to refresh Slack access tokens into Secrets Manager
     Default: 'false'
     AllowedValues: ['true', 'false']
-
-  # North Star self-mod (optional; runs in scheduled agent job runner, not the API service)
-  SelfModifyEnabled:
-    Type: String
-    Description: If true, allow North Star to enqueue PR creation/check/verify jobs (approval-gated in Slack)
-    Default: 'false'
-    AllowedValues: ['true', 'false']
-  SelfModifyAllowedSlackUserIds:
-    Type: String
-    Description: Comma-separated Slack user IDs (U...) allowed to trigger self-mod actions
-    Default: ''
-  GitHubSecretArn:
-    Type: String
-    Description: Secrets Manager ARN holding GitHub PAT/token for gh cli
-    Default: 'arn:aws:secretsmanager:us-east-1:211125621822:secret:github-cNxbJE'
   GitHubRepo:
     Type: String
-    Description: GitHub repo (org/repo) used for self-mod PRs
+    Description: GitHub repo (org/repo) used for GitHub API operations
     Default: ''
-  GitHubBaseBranch:
-    Type: String
-    Description: Base branch for self-mod PRs
-    Default: 'main'
 
 Conditions:
   UseCustomDomain: !Equals [!Ref EnableCustomDomain, 'true']
@@ -316,48 +291,7 @@ Resources:
         SlackSecretArn: !Ref SlackSecretArn
         SlackRfpMachineChannel: !Ref SlackRfpMachineChannel
         EnableSlackTokenRotation: !Ref EnableSlackTokenRotation
-        # AgentMemoryTable is created in NorthStarAgentStack and exported
-        # Since BackendStack is created before NorthStarAgentStack, we construct the table name
-        # using the same pattern: northstar-agent-memory-${Environment}
-        # This matches the table name in northstar-agent.yml: !Sub 'northstar-agent-memory-${Environment}'
-        AgentMemoryTableName: !Sub 'northstar-agent-memory-${Environment}'
         GitHubRepo: !Ref GitHubRepo
-        # OpenSearch endpoint: construct from known domain pattern (domain is created in NorthStarAgentStack)
-        # Format: https://{domain-name}.{region}.es.amazonaws.com
-        # Domain name pattern: polaris-mem-${Environment}
-        OpenSearchEndpoint: !Sub 'https://polaris-mem-${Environment}.${AWS::Region}.es.amazonaws.com'
-
-  NorthStarAgentStack:
-    Type: AWS::CloudFormation::Stack
-    Properties:
-      TemplateURL: northstar-agent.yml
-      Parameters:
-        Environment: !Ref Environment
-        VpcId: !GetAtt NetworkStack.Outputs.VpcId
-        PrivateSubnetIds: !GetAtt NetworkStack.Outputs.PrivateSubnetIds
-        EcsClusterName: !GetAtt BackendStack.Outputs.EcsClusterName
-        EcsServiceName: !GetAtt BackendStack.Outputs.EcsServiceName
-        ImageUri: !Ref BackendImageUri
-        DdbTableName: !Ref PolarisDataTable
-        AssetsBucketName: !Ref PolarisAssetsBucket
-        CognitoUserPoolId: !GetAtt AuthStack.Outputs.UserPoolId
-        CognitoClientId: !GetAtt AuthStack.Outputs.UserPoolClientId
-        CognitoRegion: !Ref AWS::Region
-        MagicLinkSessionsTableName: !GetAtt AuthStack.Outputs.MagicLinkSessionsTableName
-        JwtSecretArn: !Ref PolarisJwtSecret
-        OpenAiApiKeySecretArn: !Ref OpenAiApiKeySecretArn
-        OpenAiApiKeySecretJsonKey: !Ref OpenAiApiKeySecretJsonKey
-        OpenAiModel: !Ref OpenAiModel
-        OpenAiProjectId: !Ref OpenAiProjectId
-        OpenAiOrganizationId: !Ref OpenAiOrganizationId
-        SlackSecretArn: !Ref SlackSecretArn
-        SlackRfpMachineChannel: !Ref SlackRfpMachineChannel
-        NorthStarDailyReportChannel: !Ref NorthStarDailyReportChannel
-        SelfModifyEnabled: !Ref SelfModifyEnabled
-        SelfModifyAllowedSlackUserIds: !Ref SelfModifyAllowedSlackUserIds
-        GitHubSecretArn: !Ref GitHubSecretArn
-        GitHubRepo: !Ref GitHubRepo
-        GitHubBaseBranch: !Ref GitHubBaseBranch
 
   FrontendStack:
     Type: AWS::CloudFormation::Stack
