@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..observability.logging import configure_logging, get_logger
-from ..repositories.outbox.outbox_repo import claim_event, list_pending, mark_done, mark_retry
+from ..repositories.outbox_repo import claim_event, list_pending, mark_done, mark_retry
 
 log = get_logger("outbox_worker")
 

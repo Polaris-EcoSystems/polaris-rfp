@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import importlib
 from fastapi import APIRouter, Body, HTTPException, Request
 
 from ..observability.logging import get_logger
-from ..repositories.rfp.proposals_repo import get_proposal_by_id
-from ..tools.categories.google.google_drive import upload_file_to_drive
+from ..repositories.rfp_proposals_repo import get_proposal_by_id
 
 router = APIRouter(tags=["googledrive"])
 log = get_logger("googledrive_public")
@@ -33,26 +33,20 @@ def upload_proposal_to_drive(proposalId: str, request: Request, body: dict = Bod
     if not proposal:
         raise HTTPException(status_code=404, detail="Proposal not found")
 
-    # Determine a folder based on the RFP (best-effort).
+    # Minimal mode: upload to Drive root (no per-RFP folder automation).
     folder_id: str | None = None
-    try:
-        rfp_id = str((proposal or {}).get("rfpId") or "").strip()
-        if rfp_id:
-            from ..infrastructure.integrations.drive.drive_project_setup import setup_project_folders
-
-            setup = setup_project_folders(rfp_id=rfp_id)
-            if isinstance(setup, dict) and setup.get("ok"):
-                folders = setup.get("folders") if isinstance(setup.get("folders"), dict) else {}
-                # Prefer Drafts, then root.
-                folder_id = str(folders.get("drafts") or folders.get("root") or "").strip() or None
-    except Exception:
-        folder_id = None
 
     try:
         payload = json.dumps(proposal, ensure_ascii=False, indent=2)
-        res = upload_file_to_drive(name=file_name, content=payload, mime_type="application/json", folder_id=folder_id)
+        upload_file_to_drive = getattr(
+            importlib.import_module("app.infrastructure.google_drive"), "upload_file_to_drive"
+        )
+        res_raw = upload_file_to_drive(
+            name=file_name, content=payload, mime_type="application/json", folder_id=folder_id
+        )
+        res: dict[str, Any] = res_raw if isinstance(res_raw, dict) else {}
         if not res.get("ok"):
-            return {"ok": False, "error": res.get("error") or "upload_failed"}
+            return {"ok": False, "error": str(res.get("error") or "upload_failed")}
         return {
             "ok": True,
             "file": {

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from ..observability.logging import get_logger
-from ..repositories.contracting.contracting_repo import get_package_by_portal_token, hash_portal_token
+from ..repositories.contracting_repo import get_package_by_portal_token, hash_portal_token
 from ..infrastructure.storage.s3_assets import presign_get_object
 
 

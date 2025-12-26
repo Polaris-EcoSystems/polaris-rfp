@@ -11,13 +11,13 @@ from fastapi.responses import FileResponse
 from pypdf import PdfReader
 import docx2txt
 
-from ..repositories.attachments.attachments_repo import (
+from ..repositories.attachments_repo import (
     add_attachments,
     delete_attachment,
     get_attachment,
     list_attachments,
 )
-from ..repositories.rfp.rfps_repo import get_rfp_by_id
+from ..repositories.rfp_rfps_repo import get_rfp_by_id
 
 router = APIRouter(tags=["attachments"])
 

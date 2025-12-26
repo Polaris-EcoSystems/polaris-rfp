@@ -7,9 +7,9 @@ from fastapi.responses import StreamingResponse
 
 from ..db.dynamodb.errors import DdbConflict
 from ..db.dynamodb.table import get_main_table
-from ..domain.pipeline.proposal_generation.ai_section_titles import generate_section_titles
-from ..domain.pipeline.intake.rfp_analyzer import analyze_rfp
-from ..repositories.rfp.rfps_repo import (
+from ..pipeline.proposal_generation.ai_section_titles import generate_section_titles
+from ..pipeline.intake.rfp_analyzer import analyze_rfp
+from ..repositories.rfp_rfps_repo import (
     create_rfp_from_analysis,
     delete_rfp,
     get_rfp_by_id,
@@ -18,8 +18,8 @@ from ..repositories.rfp.rfps_repo import (
     now_iso,
     update_rfp,
 )
-from ..modules.workflow.workflow_service import sync_for_rfp
-from ..repositories.attachments.attachments_repo import list_attachments
+from ..workflow import sync_for_rfp
+from ..repositories.attachments_repo import list_attachments
 from ..infrastructure.storage.s3_assets import (
     get_assets_bucket_name,
     get_object_bytes,
@@ -29,29 +29,29 @@ from ..infrastructure.storage.s3_assets import (
     presign_put_object,
     to_s3_uri,
 )
-from ..repositories.rfp.upload_jobs_repo import create_job, get_job, get_job_item, update_job
-from ..repositories.rfp.pdf_dedup_repo import (
+from ..repositories.rfp_upload_jobs_repo import create_job, get_job, get_job_item, update_job
+from ..repositories.rfp_pdf_dedup_repo import (
     dedup_key,
     ensure_record,
     get_by_sha256,
     normalize_sha256,
     reset_stale_mapping,
 )
-from ..repositories.rfp.scraper_jobs_repo import (
+from ..repositories.rfp_scraper_jobs_repo import (
     create_job as create_scraper_job,
     get_job as get_scraper_job,
     get_job_item as get_scraper_job_item,
     list_jobs as list_scraper_jobs,
     update_job as update_scraper_job,
 )
-from ..repositories.rfp.scraped_rfps_repo import (
+from ..repositories.rfp_scraped_rfps_repo import (
     create_scraped_rfp,
     get_scraped_rfp_by_id,
     list_scraped_rfps,
     mark_scraped_rfp_imported,
 )
-from ..domain.pipeline.search.rfp_scrapers.scraper_registry import get_available_sources, get_scraper, is_source_available
-from ..repositories.outbox.outbox_repo import enqueue_event
+from ..pipeline.search.rfp_scrapers.scraper_registry import get_available_sources, get_scraper, is_source_available
+from ..repositories.outbox_repo import enqueue_event
 from ..observability.logging import get_logger
 from ..settings import settings
 from ..ai.client import AiNotConfigured, AiError, AiUpstreamError
@@ -428,7 +428,7 @@ def _process_rfp_upload_job(job_id: str) -> None:
         if sha_actual != sha:
             # Don't poison de-dupe state with mismatched content; mark failed and allow retry.
             try:
-                from ..repositories.rfp.pdf_dedup_repo import mark_failed
+                from ..repositories.rfp_pdf_dedup_repo import mark_failed
 
                 mark_failed(sha256=sha, error="sha256 mismatch between claimed hash and uploaded object")
             except Exception:
@@ -648,56 +648,8 @@ def get_drive_folder(id: str):
     
     Returns the root folder URL and folder structure.
     """
-    try:
-        from ..infrastructure.integrations.drive.drive_project_setup import get_project_folders
-        
-        folders_result = get_project_folders(rfp_id=id)
-        if not folders_result.get("ok"):
-            return {
-                "ok": False,
-                "error": folders_result.get("error", "No Drive folder found for this RFP"),
-                "folderUrl": None,
-            }
-        
-        folders = folders_result.get("folders", {})
-        root_folder_id = folders.get("root")
-        
-        if not root_folder_id:
-            return {
-                "ok": False,
-                "error": "No root folder ID found",
-                "folderUrl": None,
-            }
-        
-        # Ensure folder is shared (for existing folders that may not have been shared)
-        try:
-            from ..tools.categories.google.google_drive import share_google_file
-            share_result = share_google_file(
-                file_id=root_folder_id,
-                allow_anyone_with_link=True,
-            )
-            if not share_result.get("ok"):
-                log.warning("failed_to_share_existing_folder", rfp_id=id, root_folder_id=root_folder_id, error=share_result.get("error"))
-        except Exception as e:
-            log.warning("error_sharing_existing_folder", rfp_id=id, root_folder_id=root_folder_id, error=str(e))
-            # Continue anyway - folder URL will still be returned
-        
-        # Construct Google Drive folder URL
-        folder_url = f"https://drive.google.com/drive/folders/{root_folder_id}"
-        
-        return {
-            "ok": True,
-            "folderUrl": folder_url,
-            "folderId": root_folder_id,
-            "folders": folders,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": "Failed to fetch Drive folder", "message": str(e)},
-        )
+    # Minimal mode: do not attempt Drive folder automation.
+    return {"ok": False, "error": "drive_folder_automation_pruned", "folderUrl": None}
 
 
 @router.get("/{id}/drive-folder/", include_in_schema=False)

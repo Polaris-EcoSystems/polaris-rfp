@@ -38,28 +38,17 @@ def discover_github_config() -> dict[str, Any]:
     
     Uses pre-loaded infrastructure config when available for faster access.
     """
-    # Try to use pre-loaded config first
-    try:
-        from ..agent_infrastructure_config import get_infrastructure_config
-        config = get_infrastructure_config()
-        infra_summary = config.get_summary()
-        github_info = infra_summary.get("github", {})
-        
-        repo = github_info.get("repo")
-        allowed_repos = github_info.get("allowedRepos", [])
-        token_configured = github_info.get("tokenConfigured", False)
-    except Exception:
-        # Fall back to runtime query if pre-loaded config not available
-        repo = str(settings.github_repo or "").strip() or None
-        allowed_repos = _allowed_repos()
-        token_configured = bool(_token())
+    # Minimal backend: compute from settings at runtime (no preloaded infra config).
+    repo = str(settings.github_repo or "").strip() or None
+    allowed_repos = _allowed_repos()
+    token_configured = bool(_token())
     
     result: dict[str, Any] = {
         "ok": True,
         "githubRepo": repo,
         "allowedRepos": allowed_repos,
         "tokenConfigured": token_configured,
-        "source": "preloaded" if "config" in locals() else "runtime",
+        "source": "runtime",
     }
     
     if repo:

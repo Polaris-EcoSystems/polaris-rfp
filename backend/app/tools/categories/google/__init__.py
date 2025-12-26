@@ -1,3 +1,0 @@
-"""
-Google integration tools.
-"""

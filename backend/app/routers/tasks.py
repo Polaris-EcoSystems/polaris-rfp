@@ -3,16 +3,16 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ..repositories.rfp.rfps_repo import get_rfp_by_id, list_rfp_proposal_summaries
-from ..repositories.outbox.outbox_repo import enqueue_event
-from ..repositories.workflows.tasks_repo import (
+from ..repositories.rfp_rfps_repo import get_rfp_by_id, list_rfp_proposal_summaries
+from ..repositories.outbox_repo import enqueue_event
+from ..repositories.workflows_tasks_repo import (
     assign_task,
     complete_task,
     get_task_by_id,
     list_tasks_for_rfp,
     reopen_task,
 )
-from ..modules.workflow.workflow_service import sync_for_rfp
+from ..workflow import sync_for_rfp
 
 
 router = APIRouter(tags=["tasks"])

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.repositories.workflows.tasks_repo import compute_pipeline_stage
+from app.stage_machine import compute_stage
 
 
 def test_pipeline_stage_is_contracting_when_latest_proposal_won():
@@ -9,6 +9,6 @@ def test_pipeline_stage_is_contracting_when_latest_proposal_won():
         {"proposalId": "p1", "updatedAt": "2025-01-01T00:00:00Z", "status": "ready_to_submit"},
         {"proposalId": "p2", "updatedAt": "2025-02-01T00:00:00Z", "status": "won"},
     ]
-    stage = compute_pipeline_stage(rfp=rfp, proposals_for_rfp=proposals)
+    stage = compute_stage(rfp=rfp, proposals_for_rfp=proposals)
     assert stage == "Contracting"
 

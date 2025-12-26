@@ -10,9 +10,10 @@ from fastapi.responses import RedirectResponse, Response
 from jose import jwt
 
 from ..settings import settings
-from ..repositories.integrations import canva_repo as canva_repo_module
+from ..repositories import integrations_canva_repo as canva_repo_module
 from ..infrastructure.storage import content_repo
-from ..repositories.rfp import proposals_repo, rfps_repo
+from ..repositories import rfp_proposals_repo as proposals_repo
+from ..repositories import rfp_rfps_repo as rfps_repo
 from ..infrastructure.integrations.canva.canva_client import (
     build_authorize_url,
     create_autofill_job,

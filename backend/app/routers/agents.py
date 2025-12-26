@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from ..repositories.agent.jobs_repo import (
+from ..repositories.agent_jobs_repo import (
     cancel_job,
     create_job,
     delete_job,
@@ -15,9 +15,7 @@ from ..repositories.agent.jobs_repo import (
     list_recent_jobs,
     update_job,
 )
-from ..repositories.agent.events_repo import list_recent_events_global
-from ..domain.agents.telemetry.agent_telemetry import get_agent_metrics
-from ..domain.agents.telemetry.agent_diagnostics import build_agent_diagnostics
+from ..repositories.agent_events_repo import list_recent_events_global
 from ..observability.logging import get_logger
 
 log = get_logger("agents_router")
@@ -33,6 +31,85 @@ def _user_sub(request: Request) -> str | None:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _get_agent_metrics_impl(*, since_iso: str, operation_type: str | None = None) -> dict[str, Any]:
+    """
+    Minimal metrics aggregation based on stored agent events.
+
+    This intentionally avoids the larger domain/agents telemetry stack so we can delete that folder.
+    """
+    try:
+        events = list_recent_events_global(since_iso=since_iso, limit=1000)
+        filtered: list[dict[str, Any]] = []
+        for e in events:
+            if not isinstance(e, dict):
+                continue
+            if str(e.get("type") or "").strip() != "agent_completion":
+                continue
+            if operation_type and str(e.get("tool") or "").strip() != str(operation_type):
+                continue
+            filtered.append(e)
+
+        if not filtered:
+            return {"count": 0, "avg_duration_ms": 0, "avg_steps": 0, "success_rate": 0.0}
+
+        durations: list[int] = []
+        steps_list: list[int] = []
+        successes = 0
+
+        for ev in filtered:
+            payload = ev.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            dur = payload.get("durationMs")
+            if isinstance(dur, (int, float)):
+                durations.append(int(dur))
+            st = payload.get("steps")
+            if isinstance(st, int):
+                steps_list.append(st)
+            if payload.get("success") is True:
+                successes += 1
+
+        avg_duration = int(sum(durations) / len(durations)) if durations else 0
+        avg_steps = int(sum(steps_list) / len(steps_list)) if steps_list else 0
+        success_rate = successes / len(filtered) if filtered else 0.0
+        return {"count": len(filtered), "avg_duration_ms": avg_duration, "avg_steps": avg_steps, "success_rate": success_rate}
+    except Exception:
+        return {"count": 0, "avg_duration_ms": 0, "avg_steps": 0, "success_rate": 0.0}
+
+
+def _build_agent_diagnostics_impl(*, hours: int = 24) -> dict[str, Any]:
+    """
+    Minimal diagnostics payload for the frontend.
+    """
+    h = max(1, min(168, int(hours or 24)))
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(hours=h)
+    start_iso = start.isoformat().replace("+00:00", "Z")
+
+    metrics = _get_agent_metrics_impl(since_iso=start_iso)
+    events = list_recent_events_global(since_iso=start_iso, limit=200)
+    activities: list[dict[str, Any]] = []
+    for e in events:
+        if not isinstance(e, dict):
+            continue
+        activities.append(
+            {
+                "type": e.get("type"),
+                "createdAt": e.get("createdAt"),
+                "tool": e.get("tool"),
+                "rfpId": e.get("rfpId"),
+                "correlationId": e.get("correlationId"),
+            }
+        )
+
+    return {
+        "ok": True,
+        "window": {"start": start_iso, "end": end.isoformat().replace("+00:00", "Z"), "hours": h},
+        "metrics": metrics,
+        "activities": activities[:200],
+    }
 
 
 @router.get("/infrastructure")
@@ -405,7 +482,7 @@ def _get_metrics_impl(
     since = datetime.now(timezone.utc) - timedelta(hours=h)
     since_iso = since.isoformat().replace("+00:00", "Z")
     
-    metrics = get_agent_metrics(since_iso=since_iso, operation_type=operation_type)
+    metrics = _get_agent_metrics_impl(since_iso=since_iso, operation_type=operation_type)
     
     return {
         "ok": True,
@@ -449,14 +526,10 @@ def _get_diagnostics_impl(
     
     Includes metrics, recent activities, jobs, and more.
     """
-    diagnostics = build_agent_diagnostics(
-        hours=hours,
-        rfp_id=rfp_id,
-        user_sub=user_sub,
-        channel_id=channel_id,
-    )
-    
-    return {"ok": True, **diagnostics}
+    diagnostics = _build_agent_diagnostics_impl(hours=hours)
+    # Keep keys stable for the frontend; include optional filters in the payload.
+    diagnostics["filters"] = {"rfpId": rfp_id, "userSub": user_sub, "channelId": channel_id}
+    return diagnostics
 
 
 @router.get("/workers")

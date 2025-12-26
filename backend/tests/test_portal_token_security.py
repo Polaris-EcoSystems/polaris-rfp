@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 
 def test_portal_token_hash_is_deterministic_and_uses_secret(monkeypatch):
-    from app.repositories.contracting import contracting_repo
+    from app.repositories import contracting_repo
 
     # Ensure pepper exists and is stable for this test.
     contracting_repo.settings.canva_token_enc_key = "unit-test-secret"
@@ -24,7 +24,7 @@ def test_portal_token_hash_is_deterministic_and_uses_secret(monkeypatch):
 
 
 def test_get_package_by_portal_token_rejects_expired(monkeypatch):
-    from app.repositories.contracting import contracting_repo
+    from app.repositories import contracting_repo
 
     contracting_repo.settings.canva_token_enc_key = "unit-test-secret"
 
@@ -66,7 +66,7 @@ def test_get_package_by_portal_token_rejects_expired(monkeypatch):
 
 
 def test_get_package_by_portal_token_rejects_revoked(monkeypatch):
-    from app.repositories.contracting import contracting_repo
+    from app.repositories import contracting_repo
 
     contracting_repo.settings.canva_token_enc_key = "unit-test-secret"
 

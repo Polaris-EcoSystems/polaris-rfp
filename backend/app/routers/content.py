@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from ..infrastructure.storage import content_repo
-from ..domain.pipeline.proposal_generation.company_capabilities import regenerate_company_capabilities
+from ..pipeline.proposal_generation.company_capabilities import regenerate_company_capabilities
 from ..infrastructure.storage.s3_assets import (
     get_assets_bucket_name,
     get_cached_headshot_url,

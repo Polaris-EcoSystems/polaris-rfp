@@ -165,11 +165,7 @@ def _default_roots() -> list[str]:
     return [
         "app.main",
         "app.browser_worker",
-        "app.workers.agent_job_runner",
-        "app.workers.ambient_tick_worker",
         "app.workers.contracting_worker",
-        "app.workers.daily_report_worker",
-        "app.workers.external_context_aggregator_worker",
         "app.workers.outbox_worker",
     ]
 

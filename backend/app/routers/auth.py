@@ -12,7 +12,7 @@ from botocore.exceptions import ClientError
 
 from ..observability.logging import get_logger
 from ..infrastructure import cognito_idp
-from ..repositories.auth.magic_links_repo import (
+from ..repositories.auth_magic_links_repo import (
     delete_magic_session,
     delete_magic_session_for_email,
     get_magic_session,
@@ -21,7 +21,7 @@ from ..repositories.auth.magic_links_repo import (
     put_magic_session_for_email,
 )
 from ..infrastructure.auth.password_reset import consume_password_reset, create_password_reset
-from ..repositories.sessions.sessions_repo import (
+from ..repositories.sessions_repo import (
     cache_access_token,
     delete_session,
     get_session,

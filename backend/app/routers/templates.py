@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from ..repositories.templates import templates_repo
-from ..domain.pipeline.proposal_generation.templates_catalog import (
+from ..repositories import templates_repo
+from ..pipeline.proposal_generation.templates_catalog import (
     get_builtin_template,
     list_builtin_template_summaries,
     to_generator_template,
