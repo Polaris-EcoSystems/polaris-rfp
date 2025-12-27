@@ -33,7 +33,7 @@ export default function FinderPage() {
   const [candidates, setCandidates] = useState<ScrapedCandidate[]>([])
   const [intake, setIntake] = useState<ScraperIntakeItem[]>([])
   const [schedules, setSchedules] = useState<ScraperSchedule[]>([])
-  const [activeTab, setActiveTab] = useState<'sources' | 'schedules' | 'jobs' | 'intake' | 'candidates'>('intake')
+  const [activeTab, setActiveTab] = useState<'sources' | 'schedules' | 'jobs' | 'intake' | 'candidates'>('sources')
   const [urlsText, setUrlsText] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [results, setResults] = useState<any[]>([])
@@ -328,7 +328,7 @@ export default function FinderPage() {
                   RFP Sources
                 </h2>
                 <p className="mt-1 text-sm text-gray-600">
-                  Available scraping sources. Click "Run" to execute a scrape job.
+                  Sources are loaded from the backend scraper registry. Only sources marked “Available” can be run.
                 </p>
               </div>
             </div>
@@ -337,61 +337,113 @@ export default function FinderPage() {
                 <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary-600" />
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {sources.map((source) => (
-                  <Card
-                    key={source.id}
-                    hover={source.available}
-                    className={source.available ? '' : 'opacity-60'}
-                  >
-                    <CardBody>
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className="font-semibold text-gray-900">
-                              {source.name}
-                            </h3>
-                            {!source.available && (
-                              <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded">
-                                Coming Soon
-                              </span>
-                            )}
-                            {source.requiresAuth && (
-                              <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
-                                Auth Required
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-sm text-gray-600 mb-3">
-                            {source.description}
-                          </p>
-                          {source.available && (
-                            <button
-                              onClick={() => runScraper(source.id)}
-                              disabled={runningJobs[source.id]}
-                              className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              <PlayIcon className="h-4 w-4" />
-                              {runningJobs[source.id] ? 'Running...' : 'Run Scraper'}
-                            </button>
-                          )}
-                          {Boolean(source.baseUrl) && (
-                          <a
-                            href={source.baseUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="ml-3 text-sm text-primary-600 hover:text-primary-800 inline-flex items-center gap-1"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            Open Site{' '}
-                            <ArrowTopRightOnSquareIcon className="w-4 h-4" />
-                          </a>
-                          )}
-                        </div>
-                      </div>
-                    </CardBody>
-                  </Card>
-                ))}
+              <div className="space-y-6">
+                <div>
+                  <div className="text-xs font-semibold text-gray-700 mb-2">Available</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {sources
+                      .filter((s) => s.available)
+                      .map((source) => (
+                        <Card key={source.id} hover className="">
+                          <CardBody>
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h3 className="font-semibold text-gray-900">
+                                    {source.name}
+                                  </h3>
+                                  {source.requiresAuth && (
+                                    <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
+                                      Auth Required
+                                    </span>
+                                  )}
+                                  {source.kind && (
+                                    <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded">
+                                      {String(source.kind).toUpperCase()}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-sm text-gray-600 mb-3">
+                                  {source.description}
+                                </p>
+                                <button
+                                  onClick={() => runScraper(source.id)}
+                                  disabled={runningJobs[source.id]}
+                                  className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  <PlayIcon className="h-4 w-4" />
+                                  {runningJobs[source.id] ? 'Running...' : 'Run Scraper'}
+                                </button>
+                                {Boolean(source.baseUrl) && (
+                                  <a
+                                    href={source.baseUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="ml-3 text-sm text-primary-600 hover:text-primary-800 inline-flex items-center gap-1"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    Open Site{' '}
+                                    <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          </CardBody>
+                        </Card>
+                      ))}
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs font-semibold text-gray-700 mb-2">Unavailable</div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {sources
+                      .filter((s) => !s.available)
+                      .map((source) => (
+                        <Card key={source.id} hover={false} className="opacity-60">
+                          <CardBody>
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <h3 className="font-semibold text-gray-900">
+                                    {source.name}
+                                  </h3>
+                                  <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded">
+                                    Unavailable
+                                  </span>
+                                  {source.requiresAuth && (
+                                    <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded">
+                                      Auth Required
+                                    </span>
+                                  )}
+                                  {source.kind && (
+                                    <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded">
+                                      {String(source.kind).toUpperCase()}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-sm text-gray-600 mb-3">
+                                  {source.description}
+                                </p>
+                                {Boolean(source.baseUrl) && (
+                                  <a
+                                    href={source.baseUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-sm text-primary-600 hover:text-primary-800 inline-flex items-center gap-1"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    Open Site{' '}
+                                    <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          </CardBody>
+                        </Card>
+                      ))}
+                  </div>
+                </div>
               </div>
             )}
           </div>
