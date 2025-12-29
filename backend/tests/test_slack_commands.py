@@ -19,6 +19,7 @@ def test_slack_commands_help_ok():
     # Patch signing secret on the imported settings singleton used by the router.
     from app.routers import integrations_slack
 
+    integrations_slack.settings.slack_enabled = True
     integrations_slack.settings.slack_signing_secret = "test-signing-secret"
 
     app = create_app()
@@ -47,6 +48,7 @@ def test_slack_commands_help_ok():
 def test_slack_commands_missing_signature_denied():
     from app.routers import integrations_slack
 
+    integrations_slack.settings.slack_enabled = True
     integrations_slack.settings.slack_signing_secret = "test-signing-secret"
 
     app = create_app()
@@ -63,6 +65,7 @@ def test_slack_commands_missing_signature_denied():
 def test_slack_interactions_block_action_ack_ok():
     from app.routers import integrations_slack
 
+    integrations_slack.settings.slack_enabled = True
     integrations_slack.settings.slack_signing_secret = "test-signing-secret"
 
     app = create_app()
@@ -90,5 +93,43 @@ def test_slack_interactions_block_action_ack_ok():
     )
     assert r.status_code == 200
     assert r.json().get("response_type") == "ephemeral"
+
+
+def test_slack_commands_secret_arn_path_ok():
+    """
+    When SLACK_SECRET_ARN is used in production, settings.slack_signing_secret may be unset.
+    The router should fall back to Secrets Manager JSON key SLACK_SIGNING_SECRET.
+
+    We stub get_secret_str() to avoid AWS calls in tests.
+    """
+    from app.routers import integrations_slack
+
+    integrations_slack.settings.slack_enabled = True
+    integrations_slack.settings.slack_signing_secret = None
+
+    original_get_secret_str = integrations_slack.get_secret_str
+    try:
+        integrations_slack.get_secret_str = lambda k: "test-signing-secret" if k == "SLACK_SIGNING_SECRET" else None
+
+        app = create_app()
+        client = TestClient(app)
+
+        body = b"text=help"
+        ts = str(int(time.time()))
+        sig = _slack_signature(secret="test-signing-secret", timestamp=ts, body=body)
+
+        r = client.post(
+            "/api/integrations/slack/commands",
+            data=body,
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "X-Slack-Request-Timestamp": ts,
+                "X-Slack-Signature": sig,
+            },
+        )
+        assert r.status_code == 200
+        assert r.json().get("response_type") == "in_channel"
+    finally:
+        integrations_slack.get_secret_str = original_get_secret_str
 
 
