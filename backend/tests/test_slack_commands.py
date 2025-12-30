@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import time
+import json
 
 from fastapi.testclient import TestClient
 
@@ -131,5 +132,103 @@ def test_slack_commands_secret_arn_path_ok():
         assert r.json().get("response_type") == "in_channel"
     finally:
         integrations_slack.get_secret_str = original_get_secret_str
+
+
+def test_slack_events_app_mention_replies_ok():
+    from app.routers import integrations_slack
+
+    integrations_slack.settings.slack_enabled = True
+    integrations_slack.settings.slack_signing_secret = "test-signing-secret"
+
+    called: dict[str, object] = {}
+
+    def _fake_chat_post_message_result(**kwargs):
+        called.update(kwargs)
+        return {"ok": True}
+
+    original_chat_post = integrations_slack.chat_post_message_result
+    try:
+        integrations_slack.chat_post_message_result = _fake_chat_post_message_result
+
+        app = create_app()
+        client = TestClient(app)
+
+        payload = {
+            "type": "event_callback",
+            "event": {
+                "type": "app_mention",
+                "user": "U123",
+                "channel": "C123",
+                "text": "Hi <@U_APP>",
+                "ts": "1700000000.000100",
+            },
+        }
+        body = json.dumps(payload).encode("utf-8")
+        ts = str(int(time.time()))
+        sig = _slack_signature(secret="test-signing-secret", timestamp=ts, body=body)
+
+        r = client.post(
+            "/api/integrations/slack/events",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Slack-Request-Timestamp": ts,
+                "X-Slack-Signature": sig,
+            },
+        )
+        assert r.status_code == 200
+        assert r.json().get("ok") is True
+        assert str(called.get("channel") or "") == "C123"
+        assert str(called.get("thread_ts") or "") == "1700000000.000100"
+        assert "polaris help" in str(called.get("text") or "").lower()
+    finally:
+        integrations_slack.chat_post_message_result = original_chat_post
+
+
+def test_slack_events_retry_does_not_reply():
+    from app.routers import integrations_slack
+
+    integrations_slack.settings.slack_enabled = True
+    integrations_slack.settings.slack_signing_secret = "test-signing-secret"
+
+    def _boom(**_kwargs):
+        raise AssertionError("Should not attempt to post on Slack retry")
+
+    original_chat_post = integrations_slack.chat_post_message_result
+    try:
+        integrations_slack.chat_post_message_result = _boom
+
+        app = create_app()
+        client = TestClient(app)
+
+        payload = {
+            "type": "event_callback",
+            "event": {
+                "type": "app_mention",
+                "user": "U123",
+                "channel": "C123",
+                "text": "Hi <@U_APP>",
+                "ts": "1700000000.000100",
+            },
+        }
+        body = json.dumps(payload).encode("utf-8")
+        ts = str(int(time.time()))
+        sig = _slack_signature(secret="test-signing-secret", timestamp=ts, body=body)
+
+        r = client.post(
+            "/api/integrations/slack/events",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Slack-Request-Timestamp": ts,
+                "X-Slack-Signature": sig,
+                "X-Slack-Retry-Num": "1",
+                "X-Slack-Retry-Reason": "http_timeout",
+            },
+        )
+        assert r.status_code == 200
+        assert r.json().get("ok") is True
+    finally:
+        integrations_slack.chat_post_message_result = original_chat_post
 
 
