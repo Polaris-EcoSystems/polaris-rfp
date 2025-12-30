@@ -13,7 +13,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from ..observability.logging import get_logger
 from ..settings import settings
 from ..infrastructure.integrations.slack.slack_secrets import get_secret_str
-from ..infrastructure.integrations.slack.slack_web import chat_post_message_result
+from ..infrastructure.integrations.slack.slack_web import chat_post_message_result, open_dm_channel
 from ..infrastructure.storage import content_repo
 from ..repositories.rfp_rfps_repo import list_rfps
 from ..repositories.rfp_proposals_repo import list_proposals
@@ -151,6 +151,86 @@ def _reply_to_app_mention(*, event: dict[str, Any], request_id: str | None = Non
         raw = str(event.get("text") or "").strip()
         # Slack formats mentions like: "<@U_APPID> hi there"
         cleaned = " ".join([p for p in raw.split() if not p.strip().startswith("<@")]).strip()
+
+        def _format_team_member_list(*, limit: int = 50) -> str:
+            try:
+                members = content_repo.list_team_members(limit=max(1, min(200, int(limit or 50))))
+            except Exception:
+                members = []
+            if not members:
+                return "No team members found."
+            lines: list[str] = []
+            for m in members:
+                if not isinstance(m, dict):
+                    continue
+                name = str(m.get("name") or "").strip()
+                title = str(m.get("title") or "").strip()
+                if not name:
+                    continue
+                lines.append(f"{name}" + (f" — {title}" if title else ""))
+                if len(lines) >= max(1, min(100, int(limit or 50))):
+                    break
+            return "*Team members*\n" + _slack_bullets(lines)
+
+        def _dm_user(*, dm_text: str) -> bool:
+            """
+            Best-effort DM to the Slack user who mentioned the app.
+            """
+            dm_ch = open_dm_channel(user_id=user)
+            if not dm_ch:
+                return False
+            res_dm = chat_post_message_result(
+                text=str(dm_text or "").strip() or "(no message)",
+                channel=dm_ch,
+                unfurl_links=False,
+            )
+            return bool(res_dm.get("ok"))
+
+        # DM mode: "dm me <request>"
+        low = cleaned.lower().strip()
+        if low.startswith("dm me"):
+            req = cleaned[5:].strip()
+            if not req:
+                req = "help"
+            dm_payload: str
+            if "team" in req.lower() and ("member" in req.lower() or "people" in req.lower() or "members" in req.lower()):
+                dm_payload = _format_team_member_list(limit=80)
+            else:
+                # fallback: answer via AI in DM
+                dm_payload = _answer_slack_question(question=req)
+
+            ok_dm = _dm_user(dm_text=dm_payload)
+            confirm = (
+                f"✅ <@{user}> I DM’d you."
+                if ok_dm
+                else f"⚠️ <@{user}> I couldn’t DM you. Is the app allowed to DM users (scopes `im:write`, `chat:write`) and installed correctly?"
+            )
+            res = chat_post_message_result(
+                text=confirm,
+                channel=channel,
+                thread_ts=ts,
+                unfurl_links=False,
+            )
+            if bool(res.get("ok")):
+                log.info(
+                    "slack_app_mention_dm_mode_ack_ok",
+                    request_id=request_id,
+                    channel=channel,
+                    user=user,
+                    thread_ts=ts,
+                    dm_ok=bool(ok_dm),
+                )
+            else:
+                log.warning(
+                    "slack_app_mention_dm_mode_ack_failed",
+                    request_id=request_id,
+                    channel=channel,
+                    user=user,
+                    thread_ts=ts,
+                    dm_ok=bool(ok_dm),
+                    error=str(res.get("error") or "") or None,
+                )
+            return
 
         if not cleaned or cleaned.lower() in {"help", "hi", "hello"}:
             text = (

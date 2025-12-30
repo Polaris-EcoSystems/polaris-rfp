@@ -237,6 +237,69 @@ def test_slack_events_app_mention_help_menu_on_hi():
         integrations_slack.chat_post_message_result = original_chat_post
 
 
+def test_slack_events_app_mention_dm_me_team_members():
+    from app.routers import integrations_slack
+
+    integrations_slack.settings.slack_enabled = True
+    integrations_slack.settings.slack_signing_secret = "test-signing-secret"
+
+    posted: list[dict[str, object]] = []
+
+    def _fake_chat_post_message_result(**kwargs):
+        posted.append(dict(kwargs))
+        return {"ok": True}
+
+    original_chat_post = integrations_slack.chat_post_message_result
+    original_open_dm = integrations_slack.open_dm_channel
+    original_list_team = integrations_slack.content_repo.list_team_members
+    try:
+        integrations_slack.chat_post_message_result = _fake_chat_post_message_result
+        integrations_slack.open_dm_channel = lambda *, user_id: "D123"
+        integrations_slack.content_repo.list_team_members = lambda *, limit=200: [
+            {"name": "Alice", "title": "PM"},
+            {"name": "Bob", "title": "Engineer"},
+        ]
+
+        app = create_app()
+        client = TestClient(app)
+
+        payload = {
+            "type": "event_callback",
+            "event": {
+                "type": "app_mention",
+                "user": "U123",
+                "channel": "C123",
+                "text": "<@U_APP> dm me list of team members",
+                "ts": "1700000000.000100",
+            },
+        }
+        body = json.dumps(payload).encode("utf-8")
+        ts = str(int(time.time()))
+        sig = _slack_signature(secret="test-signing-secret", timestamp=ts, body=body)
+
+        r = client.post(
+            "/api/integrations/slack/events",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Slack-Request-Timestamp": ts,
+                "X-Slack-Signature": sig,
+            },
+        )
+        assert r.status_code == 200
+        assert r.json().get("ok") is True
+
+        # We should DM the user (channel D123) and also ack in-thread in C123.
+        assert any(str(p.get("channel")) == "D123" for p in posted)
+        assert any(str(p.get("channel")) == "C123" for p in posted)
+        dm = next(p for p in posted if str(p.get("channel")) == "D123")
+        assert "team members" in str(dm.get("text") or "").lower()
+    finally:
+        integrations_slack.chat_post_message_result = original_chat_post
+        integrations_slack.open_dm_channel = original_open_dm
+        integrations_slack.content_repo.list_team_members = original_list_team
+
+
 def test_slack_events_retry_does_not_reply():
     from app.routers import integrations_slack
 
