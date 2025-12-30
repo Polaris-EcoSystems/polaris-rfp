@@ -525,6 +525,18 @@ def call_text(
             if attempt >= 2 and _is_parse_failure(prev_err):
                 mt = int(min(int(settings.openai_max_output_tokens_cap or mt), int(mt * 1.5)))
             try:
+                # GPT-5 family models are Responses-API-first. If the installed OpenAI SDK
+                # doesn't support `client.responses`, do NOT try these models via
+                # chat.completions (OpenAI rejects them as "not a chat model").
+                if _is_gpt5_family(model) and not _supports_responses_api(client):
+                    log.warning(
+                        "ai_gpt5_requires_responses_api_falling_back",
+                        purpose=purpose,
+                        model=model,
+                    )
+                    # Try next fallback model immediately (no retries on this model).
+                    break
+
                 # Prefer Responses API for GPT-5 family (supports reasoning/verbosity).
                 if _is_gpt5_family(model) and _supports_responses_api(client):
                     t = tuning_for(purpose=purpose, kind="text", attempt=attempt, prev_err=prev_err)
@@ -591,63 +603,64 @@ def call_text(
                         )
                     else:
                         raise
-                    out = (completion.choices[0].message.content or "").strip()
-                    if not out:
-                        raise AiParseError("empty_model_response")
-                    
-                    # Extract token usage from Chat Completions API
-                    usage_obj = getattr(completion, "usage", None)
-                    input_tokens = None
-                    output_tokens = None
-                    total_tokens = None
-                    
-                    if usage_obj:
-                        input_tokens = getattr(usage_obj, "prompt_tokens", None)
-                        output_tokens = getattr(usage_obj, "completion_tokens", None)
-                        total_tokens = getattr(usage_obj, "total_tokens", None)
-                        # Calculate total if not provided
-                        if total_tokens is None and input_tokens is not None and output_tokens is not None:
-                            total_tokens = input_tokens + output_tokens
-                    
-                    # Record token usage to budget tracker if provided
-                    if token_budget_tracker and (input_tokens is not None or output_tokens is not None):
-                        try:
-                            token_budget_tracker.record_llm_call(
-                                input_tokens=input_tokens,
-                                output_tokens=output_tokens,
-                            )
-                            # Check if budget exhausted
-                            if token_budget_tracker.is_budget_exhausted():
-                                log.warning("token_budget_exhausted", purpose=purpose, model=model)
-                        except Exception as e:
-                            log.warning("token_budget_record_failed", error=str(e))
-                    
-                    msg = _run_validator(validate, out)
-                    if msg:
-                        raise AiParseError(f"validation_failed: {msg}")
-                    _circuit_record_success()
+
+                out = (completion.choices[0].message.content or "").strip()
+                if not out:
+                    raise AiParseError("empty_model_response")
+
+                # Extract token usage from Chat Completions API
+                usage_obj = getattr(completion, "usage", None)
+                input_tokens = None
+                output_tokens = None
+                total_tokens = None
+
+                if usage_obj:
+                    input_tokens = getattr(usage_obj, "prompt_tokens", None)
+                    output_tokens = getattr(usage_obj, "completion_tokens", None)
+                    total_tokens = getattr(usage_obj, "total_tokens", None)
+                    # Calculate total if not provided
+                    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+                        total_tokens = input_tokens + output_tokens
+
+                # Record token usage to budget tracker if provided
+                if token_budget_tracker and (input_tokens is not None or output_tokens is not None):
                     try:
-                        log.info(
-                            "ai_call_ok",
-                            purpose=purpose,
-                            model=model,
-                            attempts=attempt,
-                            response_format="chat_text",
+                        token_budget_tracker.record_llm_call(
                             input_tokens=input_tokens,
                             output_tokens=output_tokens,
-                            total_tokens=total_tokens,
                         )
-                    except Exception:
-                        pass
-                    return out, AiMeta(
+                        # Check if budget exhausted
+                        if token_budget_tracker.is_budget_exhausted():
+                            log.warning("token_budget_exhausted", purpose=purpose, model=model)
+                    except Exception as e:
+                        log.warning("token_budget_record_failed", error=str(e))
+
+                msg = _run_validator(validate, out)
+                if msg:
+                    raise AiParseError(f"validation_failed: {msg}")
+                _circuit_record_success()
+                try:
+                    log.info(
+                        "ai_call_ok",
                         purpose=purpose,
                         model=model,
                         attempts=attempt,
-                        used_response_format="chat_text",
+                        response_format="chat_text",
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
                         total_tokens=total_tokens,
                     )
+                except Exception:
+                    pass
+                return out, AiMeta(
+                    purpose=purpose,
+                    model=model,
+                    attempts=attempt,
+                    used_response_format="chat_text",
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    total_tokens=total_tokens,
+                )
             except Exception as e:
                 last_err = e
                 prev_err = e
