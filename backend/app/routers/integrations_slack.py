@@ -151,11 +151,19 @@ def _reply_to_app_mention(*, event: dict[str, Any], request_id: str | None = Non
         raw = str(event.get("text") or "").strip()
         # Slack formats mentions like: "<@U_APPID> hi there"
         cleaned = " ".join([p for p in raw.split() if not p.strip().startswith("<@")]).strip()
-        if not cleaned:
-            cleaned = "help"
 
-        # Keep mentions very fast/stable: point at slash commands for richer flows.
-        text = f"Hi <@{user}> — try `/polaris ask {cleaned}` (or `/polaris help`)."
+        if not cleaned or cleaned.lower() in {"help", "hi", "hello"}:
+            text = (
+                f"Hi <@{user}> — try one of these:\n"
+                "• `/polaris ask <question>`\n"
+                "• `/polaris recent`\n"
+                "• `/polaris proposals`\n"
+                "• `/polaris upload [n]`\n"
+                "Or type a real question after mentioning me and I’ll answer here."
+            )
+        else:
+            ans = _answer_slack_question(question=cleaned)
+            text = f"<@{user}> {ans}"
 
         res = chat_post_message_result(
             text=text,
