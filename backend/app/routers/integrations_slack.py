@@ -282,14 +282,16 @@ def _build_slack_ask_context(*, max_rfps: int = 10, max_proposals: int = 10) -> 
 
     try:
         rfps_page = list_rfps(page=1, limit=max(1, min(20, int(max_rfps or 10))), next_token=None)
-        rfps = rfps_page.get("data") if isinstance(rfps_page, dict) else []
-        ctx["recentRfps"] = rfps[: max(1, min(20, int(max_rfps or 10)))]
+        rfps_any = rfps_page.get("data") if isinstance(rfps_page, dict) else []
+        rfps_list: list[dict[str, Any]] = rfps_any if isinstance(rfps_any, list) else []
+        ctx["recentRfps"] = rfps_list[: max(1, min(20, int(max_rfps or 10)))]
     except Exception:
         ctx["recentRfps"] = []
 
     try:
         props_page = list_proposals(page=1, limit=max(1, min(20, int(max_proposals or 10))), next_token=None)
-        props = props_page.get("data") if isinstance(props_page, dict) else []
+        props_any = props_page.get("data") if isinstance(props_page, dict) else []
+        props: list[dict[str, Any]] = props_any if isinstance(props_any, list) else []
         # Don't include full sections.
         slim_p = []
         for p in props or []:
