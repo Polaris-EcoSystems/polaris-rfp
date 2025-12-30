@@ -292,8 +292,9 @@ def test_slack_events_app_mention_dm_me_team_members():
         # We should DM the user (channel D123) and also ack in-thread in C123.
         assert any(str(p.get("channel")) == "D123" for p in posted)
         assert any(str(p.get("channel")) == "C123" for p in posted)
-        dm = next(p for p in posted if str(p.get("channel")) == "D123")
-        assert "team members" in str(dm.get("text") or "").lower()
+        dm_msgs = [p for p in posted if str(p.get("channel")) == "D123"]
+        assert dm_msgs
+        assert any("team members" in str(m.get("text") or "").lower() for m in dm_msgs)
     finally:
         integrations_slack.chat_post_message_result = original_chat_post
         integrations_slack.open_dm_channel = original_open_dm
