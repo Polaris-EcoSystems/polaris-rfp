@@ -6,11 +6,12 @@ import time
 from urllib.parse import parse_qs
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from ..observability.logging import get_logger
 from ..settings import settings
 from ..infrastructure.integrations.slack.slack_secrets import get_secret_str
+from ..infrastructure.integrations.slack.slack_web import chat_post_message_result
 
 router = APIRouter(tags=["integrations"])
 log = get_logger("integrations_slack")
@@ -122,10 +123,63 @@ async def _require_slack_request(request: Request) -> bytes:
     return body
 
 
+def _reply_to_app_mention(*, event: dict[str, Any], request_id: str | None = None) -> None:
+    """
+    Best-effort reply to an app mention event.
+
+    Keep it minimal: we just guide users toward supported slash commands.
+    """
+    try:
+        channel = str(event.get("channel") or "").strip()
+        user = str(event.get("user") or "").strip()
+        ts = str(event.get("ts") or "").strip() or None
+        bot_id = str(event.get("bot_id") or "").strip() or None
+
+        # Avoid responding to bot-generated events.
+        if bot_id:
+            return
+        if not channel or not user:
+            return
+
+        text = (
+            f"Hi <@{user}> — try `/polaris help`.\n"
+            "Supported right now: `/polaris help`, `/polaris upload [n]`."
+        )
+
+        res = chat_post_message_result(
+            text=text,
+            channel=channel,
+            thread_ts=ts,
+            unfurl_links=False,
+        )
+        if bool(res.get("ok")):
+            log.info(
+                "slack_app_mention_replied",
+                request_id=request_id,
+                channel=channel,
+                user=user,
+                thread_ts=ts,
+            )
+        else:
+            log.warning(
+                "slack_app_mention_reply_failed",
+                request_id=request_id,
+                channel=channel,
+                user=user,
+                thread_ts=ts,
+                error=str(res.get("error") or "") or None,
+            )
+    except Exception as e:
+        log.warning(
+            "slack_app_mention_reply_exception",
+            request_id=request_id,
+            error=str(e) or "unknown_error",
+        )
+
+
 @router.post("/slack/events")
-async def slack_events(request: Request) -> dict[str, Any]:
-    # Validate Slack signature then ACK quickly. This minimal backend does not
-    # process event callbacks yet (we’re pruning to the smallest core).
+async def slack_events(request: Request, background_tasks: BackgroundTasks) -> dict[str, Any]:
+    # Validate Slack signature then ACK quickly.
     await _require_slack_request(request)
     try:
         payload = await request.json()
@@ -134,6 +188,29 @@ async def slack_events(request: Request) -> dict[str, Any]:
 
     if payload.get("type") == "url_verification":
         return {"challenge": payload.get("challenge")}
+
+    # Slack can retry deliveries (e.g. if it doesn't get a fast 2xx).
+    # Avoid doing side-effects on retries to prevent duplicate replies.
+    retry_num = str(request.headers.get("X-Slack-Retry-Num") or "").strip()
+    if retry_num:
+        log.info(
+            "slack_event_retry_ack",
+            request_id=str(getattr(getattr(request, "state", None), "request_id", None) or "") or None,
+            retry_num=retry_num,
+            retry_reason=str(request.headers.get("X-Slack-Retry-Reason") or "").strip() or None,
+        )
+        return {"ok": True}
+
+    if payload.get("type") == "event_callback":
+        event_raw = payload.get("event")
+        event = event_raw if isinstance(event_raw, dict) else {}
+        if str(event.get("type") or "").strip() == "app_mention":
+            rid = getattr(getattr(request, "state", None), "request_id", None)
+            background_tasks.add_task(
+                _reply_to_app_mention,
+                event=event,
+                request_id=str(rid) if rid else None,
+            )
 
     return {"ok": True}
 
