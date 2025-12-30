@@ -301,10 +301,14 @@ def _responses_http_create_text(
     if not out:
         raise AiParseError("empty_model_response")
 
-    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-    input_tokens = usage.get("input_tokens") if isinstance(usage.get("input_tokens"), int) else None
-    output_tokens = usage.get("output_tokens") if isinstance(usage.get("output_tokens"), int) else None
-    total_tokens = usage.get("total_tokens") if isinstance(usage.get("total_tokens"), int) else None
+    usage_raw = data.get("usage")
+    usage: dict[str, Any] = usage_raw if isinstance(usage_raw, dict) else {}
+    it = usage.get("input_tokens")
+    ot = usage.get("output_tokens")
+    tt = usage.get("total_tokens")
+    input_tokens = int(it) if isinstance(it, int) else None
+    output_tokens = int(ot) if isinstance(ot, int) else None
+    total_tokens = int(tt) if isinstance(tt, int) else None
     if total_tokens is None and input_tokens is not None and output_tokens is not None:
         total_tokens = input_tokens + output_tokens
 
