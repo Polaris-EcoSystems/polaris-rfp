@@ -147,6 +147,60 @@ def test_slack_events_app_mention_replies_ok():
         return {"ok": True}
 
     original_chat_post = integrations_slack.chat_post_message_result
+    original_answer = integrations_slack._answer_slack_question
+    try:
+        integrations_slack.chat_post_message_result = _fake_chat_post_message_result
+        integrations_slack._answer_slack_question = lambda *, question: "ANSWER: " + str(question)
+
+        app = create_app()
+        client = TestClient(app)
+
+        payload = {
+            "type": "event_callback",
+            "event": {
+                "type": "app_mention",
+                "user": "U123",
+                "channel": "C123",
+                "text": "<@U_APP> What can you do for me?",
+                "ts": "1700000000.000100",
+            },
+        }
+        body = json.dumps(payload).encode("utf-8")
+        ts = str(int(time.time()))
+        sig = _slack_signature(secret="test-signing-secret", timestamp=ts, body=body)
+
+        r = client.post(
+            "/api/integrations/slack/events",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Slack-Request-Timestamp": ts,
+                "X-Slack-Signature": sig,
+            },
+        )
+        assert r.status_code == 200
+        assert r.json().get("ok") is True
+        assert str(called.get("channel") or "") == "C123"
+        assert str(called.get("thread_ts") or "") == "1700000000.000100"
+        assert "answer:" in str(called.get("text") or "").lower()
+    finally:
+        integrations_slack.chat_post_message_result = original_chat_post
+        integrations_slack._answer_slack_question = original_answer
+
+
+def test_slack_events_app_mention_help_menu_on_hi():
+    from app.routers import integrations_slack
+
+    integrations_slack.settings.slack_enabled = True
+    integrations_slack.settings.slack_signing_secret = "test-signing-secret"
+
+    called: dict[str, object] = {}
+
+    def _fake_chat_post_message_result(**kwargs):
+        called.update(kwargs)
+        return {"ok": True}
+
+    original_chat_post = integrations_slack.chat_post_message_result
     try:
         integrations_slack.chat_post_message_result = _fake_chat_post_message_result
 
@@ -178,9 +232,7 @@ def test_slack_events_app_mention_replies_ok():
         )
         assert r.status_code == 200
         assert r.json().get("ok") is True
-        assert str(called.get("channel") or "") == "C123"
-        assert str(called.get("thread_ts") or "") == "1700000000.000100"
-        assert "polaris help" in str(called.get("text") or "").lower()
+        assert "polaris ask" in str(called.get("text") or "").lower()
     finally:
         integrations_slack.chat_post_message_result = original_chat_post
 
