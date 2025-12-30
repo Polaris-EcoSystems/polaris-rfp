@@ -6,8 +6,7 @@ from types import SimpleNamespace
 def test_call_text_skips_gpt5_when_responses_api_unavailable(monkeypatch):
     """
     If the installed OpenAI SDK doesn't expose `client.responses`, GPT-5 family models
-    must NOT be called via chat.completions (OpenAI rejects them as "not a chat model").
-    We should fall back to a chat-capable model instead.
+    must still work by falling back to a direct HTTP call to the Responses API (not chat.completions).
     """
     from app.ai import client as ai_client
 
@@ -19,23 +18,36 @@ def test_call_text_skips_gpt5_when_responses_api_unavailable(monkeypatch):
     monkeypatch.setattr(ai_client, "_supports_responses_api", lambda _c: False)
     monkeypatch.setattr(ai_client.time, "sleep", lambda _s: None)
 
-    calls: list[str] = []
+    chat_calls: list[str] = []
+    http_calls: list[str] = []
 
     class _FakeChatCompletions:
         def create(self, *, model: str, **_kwargs):
-            calls.append(model)
-            # Minimal OpenAI SDK-shaped response
-            msg = SimpleNamespace(content="ok")
-            choice = SimpleNamespace(message=msg)
-            return SimpleNamespace(choices=[choice], usage=None)
+            chat_calls.append(model)
+            raise AssertionError("chat.completions should not be used for GPT-5 when responses is unavailable")
 
     fake = SimpleNamespace(chat=SimpleNamespace(completions=_FakeChatCompletions()))
     monkeypatch.setattr(ai_client, "_client", lambda timeout_s=60: fake)
 
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+        text = '{"id":"resp_123","output_text":"ok","usage":{"input_tokens":1,"output_tokens":2}}'
+
+        def json(self):
+            return {"id": "resp_123", "output_text": "ok", "usage": {"input_tokens": 1, "output_tokens": 2}}
+
+    def _fake_post(url: str, **kwargs):
+        http_calls.append(url)
+        return _Resp()
+
+    monkeypatch.setattr(ai_client.httpx, "post", _fake_post)
+
     out, meta = ai_client.call_text(purpose="slack_agent", messages=[{"role": "user", "content": "hi"}], retries=1)
     assert out == "ok"
-    assert meta.model == "gpt-4o-mini"
-    assert calls == ["gpt-4o-mini"]
+    assert meta.model == "gpt-5.2"
+    assert chat_calls == []
+    assert http_calls and http_calls[0].endswith("/v1/responses")
 
 
 def test_call_text_chat_success_path_returns_output(monkeypatch):

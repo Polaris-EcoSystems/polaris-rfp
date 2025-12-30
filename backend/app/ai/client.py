@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, TypeVar
 
+import httpx
 from pydantic import BaseModel
 
 from ..observability.logging import get_logger
@@ -204,6 +205,123 @@ def _supports_responses_api(client: Any) -> bool:
         return bool(r) and callable(getattr(r, "create", None))
     except Exception:
         return False
+
+
+def _openai_http_headers() -> dict[str, str]:
+    """
+    Headers for direct HTTP calls to OpenAI (Responses API fallback).
+    """
+    if not settings.openai_api_key:
+        raise AiNotConfigured("OPENAI_API_KEY not configured")
+    headers: dict[str, str] = {
+        "Authorization": f"Bearer {settings.openai_api_key}",
+        "Content-Type": "application/json",
+    }
+    if settings.openai_project_id and str(settings.openai_project_id).strip():
+        headers["OpenAI-Project"] = str(settings.openai_project_id).strip()
+    if settings.openai_organization_id and str(settings.openai_organization_id).strip():
+        headers["OpenAI-Organization"] = str(settings.openai_organization_id).strip()
+    return headers
+
+
+def _responses_text_from_json(resp: dict[str, Any]) -> str:
+    """
+    Best-effort extraction of output text from a Responses API JSON response.
+    """
+    out_text = resp.get("output_text")
+    if isinstance(out_text, str) and out_text.strip():
+        return out_text.strip()
+
+    out = resp.get("output")
+    items = out if isinstance(out, list) else []
+    chunks: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        parts = content if isinstance(content, list) else []
+        for c in parts:
+            if not isinstance(c, dict):
+                continue
+            t = c.get("text")
+            if isinstance(t, str) and t.strip():
+                chunks.append(t.strip())
+                continue
+            if isinstance(t, dict):
+                v = t.get("value")
+                if isinstance(v, str) and v.strip():
+                    chunks.append(v.strip())
+                    continue
+    return "\n".join(chunks).strip()
+
+
+def _responses_http_create_text(
+    *,
+    model: str,
+    purpose: str,
+    messages: list[dict[str, str]],
+    max_tokens: int,
+    temperature: float,
+    reasoning_effort: str,
+    verbosity: str,
+    timeout_s: int,
+) -> tuple[str, AiMeta]:
+    """
+    Direct HTTP fallback to the OpenAI Responses API.
+
+    Use this when the installed OpenAI SDK is too old to expose `client.responses`,
+    but we still want GPT-5 family models.
+    """
+    inp = _messages_to_single_input(messages)
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": inp,
+        "max_output_tokens": int(max_tokens),
+        "reasoning": {"effort": reasoning_effort},
+        "text": {"verbosity": verbosity},
+    }
+    if str(reasoning_effort).strip().lower() == "none":
+        payload["temperature"] = float(temperature)
+
+    r = httpx.post(
+        "https://api.openai.com/v1/responses",
+        headers=_openai_http_headers(),
+        json=payload,
+        timeout=max(5.0, float(timeout_s or 60)),
+    )
+    if int(r.status_code) >= 400:
+        # Let the retry logic see status codes where possible.
+        raise AiUpstreamError(f"responses_api_http_error {r.status_code}: {r.text[:800]}")
+
+    data = r.json() if r.content else {}
+    if not isinstance(data, dict):
+        raise AiParseError("invalid_responses_api_payload")
+
+    out = _responses_text_from_json(data)
+    if not out:
+        raise AiParseError("empty_model_response")
+
+    usage_raw = data.get("usage")
+    usage: dict[str, Any] = usage_raw if isinstance(usage_raw, dict) else {}
+    it = usage.get("input_tokens")
+    ot = usage.get("output_tokens")
+    tt = usage.get("total_tokens")
+    input_tokens = int(it) if isinstance(it, int) else None
+    output_tokens = int(ot) if isinstance(ot, int) else None
+    total_tokens = int(tt) if isinstance(tt, int) else None
+    if total_tokens is None and input_tokens is not None and output_tokens is not None:
+        total_tokens = input_tokens + output_tokens
+
+    return out, AiMeta(
+        purpose=purpose,
+        model=model,
+        attempts=1,
+        used_response_format="responses_http_text",
+        response_id=str(data.get("id") or "") or None,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+    )
 
 
 def _clip(s: str, max_len: int) -> str:
@@ -525,31 +643,31 @@ def call_text(
             if attempt >= 2 and _is_parse_failure(prev_err):
                 mt = int(min(int(settings.openai_max_output_tokens_cap or mt), int(mt * 1.5)))
             try:
-                # GPT-5 family models are Responses-API-first. If the installed OpenAI SDK
-                # doesn't support `client.responses`, do NOT try these models via
-                # chat.completions (OpenAI rejects them as "not a chat model").
-                if _is_gpt5_family(model) and not _supports_responses_api(client):
-                    log.warning(
-                        "ai_gpt5_requires_responses_api_falling_back",
-                        purpose=purpose,
-                        model=model,
-                    )
-                    # Try next fallback model immediately (no retries on this model).
-                    break
-
                 # Prefer Responses API for GPT-5 family (supports reasoning/verbosity).
-                if _is_gpt5_family(model) and _supports_responses_api(client):
+                if _is_gpt5_family(model):
                     t = tuning_for(purpose=purpose, kind="text", attempt=attempt, prev_err=prev_err)
-                    out, meta = _responses_create_text(
-                        client=client,
-                        model=model,
-                        purpose=purpose,
-                        messages=attempt_messages,
-                        max_tokens=mt,
-                        temperature=temperature,
-                        reasoning_effort=t.reasoning_effort,
-                        verbosity=t.verbosity,
-                    )
+                    if _supports_responses_api(client):
+                        out, meta = _responses_create_text(
+                            client=client,
+                            model=model,
+                            purpose=purpose,
+                            messages=attempt_messages,
+                            max_tokens=mt,
+                            temperature=temperature,
+                            reasoning_effort=t.reasoning_effort,
+                            verbosity=t.verbosity,
+                        )
+                    else:
+                        out, meta = _responses_http_create_text(
+                            model=model,
+                            purpose=purpose,
+                            messages=attempt_messages,
+                            max_tokens=mt,
+                            temperature=temperature,
+                            reasoning_effort=t.reasoning_effort,
+                            verbosity=t.verbosity,
+                            timeout_s=timeout_s,
+                        )
                     msg = _run_validator(validate, out)
                     if msg:
                         raise AiParseError(f"validation_failed: {msg}")
