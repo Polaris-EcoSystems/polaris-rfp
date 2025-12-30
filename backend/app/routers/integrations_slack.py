@@ -179,12 +179,27 @@ def _reply_to_app_mention(*, event: dict[str, Any], request_id: str | None = Non
             dm_ch = open_dm_channel(user_id=user)
             if not dm_ch:
                 return False
-            res_dm = chat_post_message_result(
-                text=str(dm_text or "").strip() or "(no message)",
-                channel=dm_ch,
-                unfurl_links=False,
-            )
-            return bool(res_dm.get("ok"))
+            text_full = str(dm_text or "").strip() or "(no message)"
+            max_len = 3500
+            chunks = [text_full[i : i + max_len] for i in range(0, len(text_full), max_len)] or ["(no message)"]
+            for i, chunk in enumerate(chunks):
+                res_dm = chat_post_message_result(
+                    text=chunk,
+                    channel=dm_ch,
+                    unfurl_links=False,
+                )
+                if not bool(res_dm.get("ok")):
+                    log.warning(
+                        "slack_dm_post_failed",
+                        request_id=request_id,
+                        dm_channel=dm_ch,
+                        user=user,
+                        chunk_index=i,
+                        chunk_count=len(chunks),
+                        error=str(res_dm.get("error") or "") or None,
+                    )
+                    return False
+            return True
 
         # DM mode: "dm me <request>"
         low = cleaned.lower().strip()
