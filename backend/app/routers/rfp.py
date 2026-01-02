@@ -52,7 +52,11 @@ from app.repositories.rfp_scraped_rfps_repo import (
     mark_scraped_rfp_imported,
     update_scraped_rfp,
 )
-from app.pipeline.search.rfp_scrapers.scraper_registry import get_available_sources, is_source_available
+from app.pipeline.search.rfp_scrapers.scraper_registry import (
+    get_available_sources,
+    is_source_available,
+    is_source_available_for_user,
+)
 from app.pipeline.search.rfp_scraper_job_runner import process_scraper_job
 from app.repositories.outbox_repo import enqueue_event
 from app.observability.logging import get_logger
@@ -1612,16 +1616,59 @@ def remove_buyer_profiles_slash(id: str, body: dict = Body(...)):
 
 
 @router.get("/scrapers/sources")
-def list_scraper_sources(refresh: bool = False):
+def list_scraper_sources(request: Request, refresh: bool = False, debug: bool = False):
     """Get list of available RFP scraper sources."""
-    sources = get_available_sources(force_refresh=bool(refresh))
+    user = getattr(getattr(request, "state", None), "user", None)
+    user_sub = str(getattr(user, "sub", "") or "").strip() if user else None
+    sources = get_available_sources(user_sub=user_sub, force_refresh=bool(refresh))
+    try:
+        # Diagnostic logging: why are sources unavailable?
+        rid = getattr(getattr(request, "state", None), "request_id", None)
+        unavailable = [s for s in sources if not bool(s.get("available"))]
+        available_count = len(sources) - len(unavailable)
+        reason_counts: dict[str, int] = {}
+        examples: dict[str, list[str]] = {}
+        for s in unavailable:
+            sid = str(s.get("id") or "").strip() or "unknown"
+            reason = str(s.get("unavailableReason") or "").strip() or "unknown"
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+            if debug:
+                examples.setdefault(reason, [])
+                if len(examples[reason]) < 10:
+                    examples[reason].append(sid)
+
+        # Log more loudly when explicitly requested or in dev, otherwise keep it quiet.
+        if debug or refresh or settings.is_development:
+            log.info(
+                "scraper_sources_listed",
+                request_id=str(rid) if rid else None,
+                user_sub=user_sub or None,
+                total=len(sources),
+                available=available_count,
+                unavailable=len(unavailable),
+                unavailable_reasons=reason_counts,
+                unavailable_examples=examples if debug else None,
+            )
+        else:
+            log.debug(
+                "scraper_sources_listed",
+                request_id=str(rid) if rid else None,
+                user_sub=user_sub or None,
+                total=len(sources),
+                available=available_count,
+                unavailable=len(unavailable),
+                unavailable_reasons=reason_counts,
+            )
+    except Exception:
+        # Never break the endpoint due to logging.
+        pass
     return {"ok": True, "sources": sources}
 
 
 @router.get("/scrapers/sources/", include_in_schema=False)
-def list_scraper_sources_slash(refresh: bool = False):
+def list_scraper_sources_slash(request: Request, refresh: bool = False, debug: bool = False):
     # Accept trailing slash to avoid 404s when clients normalize URLs.
-    return list_scraper_sources(refresh=refresh)
+    return list_scraper_sources(request=request, refresh=refresh, debug=debug)
 
 
 @router.post("/scrapers/run", status_code=201)
@@ -1640,8 +1687,23 @@ def run_scraper(request: Request, background_tasks: BackgroundTasks, body: dict 
     if not source:
         raise HTTPException(status_code=400, detail="source is required")
 
-    if not is_source_available(source):
-        raise HTTPException(status_code=400, detail=f"Scraper not available for source: {source}")
+    ok, reason = is_source_available_for_user(source, user_sub=user_sub)
+    if not ok:
+        try:
+            rid = getattr(getattr(request, "state", None), "request_id", None)
+            log.info(
+                "scraper_run_blocked",
+                request_id=str(rid) if rid else None,
+                user_sub=user_sub or None,
+                source=source,
+                reason=reason or None,
+            )
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=400,
+            detail=f"Scraper not available for source: {source}" + (f" ({reason})" if reason else ""),
+        )
 
     search_params = (body or {}).get("searchParams")
     if not isinstance(search_params, dict):
@@ -1849,8 +1911,23 @@ def create_scraper_schedule(request: Request, body: dict = Body(...)):
     source = str((body or {}).get("source") or "").strip()
     if not source:
         raise HTTPException(status_code=400, detail="source is required")
-    if not is_source_available(source):
-        raise HTTPException(status_code=400, detail=f"Scraper not available for source: {source}")
+    ok, reason = is_source_available_for_user(source, user_sub=user_sub)
+    if not ok:
+        try:
+            rid = getattr(getattr(request, "state", None), "request_id", None)
+            log.info(
+                "scraper_schedule_create_blocked",
+                request_id=str(rid) if rid else None,
+                user_sub=user_sub or None,
+                source=source,
+                reason=reason or None,
+            )
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=400,
+            detail=f"Scraper not available for source: {source}" + (f" ({reason})" if reason else ""),
+        )
 
     frequency = str((body or {}).get("frequency") or "daily").strip().lower()
     if frequency != "daily":

@@ -8,6 +8,8 @@ from app.pipeline.search.rfp_scrapers.framework import ScraperContext
 from app.pipeline.search.rfp_scrapers.framework import RfpScraper
 from app.settings import settings
 from app.observability.logging import get_logger
+from app.infrastructure.token_crypto import decrypt_string
+from app.repositories import finder_repo
 
 log = get_logger("rfp_scraper_registry")
 
@@ -32,20 +34,62 @@ def _settings_ready(meta: dict[str, Any]) -> bool:
     return True
 
 
-def get_available_sources(*, force_refresh: bool = False) -> list[dict[str, Any]]:
+def _user_ready(*, meta: dict[str, Any], user_sub: str | None) -> tuple[bool, str]:
+    """
+    Check whether a source is runnable for the current user.
+
+    This is intentionally conservative: if a source requires a user session
+    and we can't confirm the session is configured, we treat it as unavailable.
+    """
+    requires_auth = bool(meta.get("requiresAuth"))
+    if not requires_auth:
+        return True, ""
+
+    auth_kind = str(meta.get("authKind") or "").strip() or "user_session"
+    if auth_kind != "user_session":
+        # Other auth modes (api_key/service_account/etc.) are governed by settings.
+        return True, ""
+
+    if not user_sub:
+        return False, "missing_user_session"
+
+    sid = str(meta.get("id") or "").strip()
+    if sid == "linkedin":
+        item = finder_repo.get_user_linkedin_state(user_sub=user_sub)
+        enc = (item or {}).get("encryptedStorageState") if isinstance(item, dict) else None
+        if not enc:
+            return False, "linkedin_storage_state_missing"
+        try:
+            raw = decrypt_string(enc)
+            if not raw:
+                return False, "linkedin_storage_state_could_not_decrypt"
+            storage_state = finder_repo.normalize_storage_state(raw)
+            if not storage_state:
+                return False, "linkedin_storage_state_invalid"
+        except Exception:
+            return False, "linkedin_storage_state_invalid"
+
+    return True, ""
+
+
+def get_available_sources(*, user_sub: str | None = None, force_refresh: bool = False) -> list[dict[str, Any]]:
     """Get list of scraper sources with metadata (discovered from source modules)."""
     reg = _discover_sources(force_refresh=force_refresh)
     out: list[dict[str, Any]] = []
     for sid, spec in reg.items():
         meta = dict(spec.get("SOURCE") or {})
         implemented = bool(meta.get("implemented"))
-        available = bool(implemented and _settings_ready(meta))
+        settings_ok = bool(_settings_ready(meta))
+        user_ok, user_reason = _user_ready(meta=meta, user_sub=user_sub)
+        available = bool(implemented and settings_ok and user_ok)
         unavailable_reason = ""
         if not implemented:
             # surface import/discovery issues if present
             unavailable_reason = str(meta.get("importError") or "").strip() or "not_implemented"
-        elif not available:
+        elif not settings_ok:
             unavailable_reason = "missing_required_settings"
+        elif not user_ok:
+            unavailable_reason = user_reason or "missing_user_session"
         out.append(
             {
                 "id": sid,
@@ -100,6 +144,27 @@ def is_source_available(source: str) -> bool:
     spec = reg.get(sid) or {}
     meta = spec.get("SOURCE") or {}
     return bool(meta.get("implemented") and _settings_ready(meta))
+
+
+def is_source_available_for_user(source: str, *, user_sub: str | None) -> tuple[bool, str]:
+    """
+    Like is_source_available, but also checks per-user requirements (e.g. LinkedIn session).
+    Returns (ok, reason).
+    """
+    sid = str(source or "").strip()
+    if not sid:
+        return False, "missing_source"
+    reg = _discover_sources()
+    spec = reg.get(sid) or {}
+    meta = spec.get("SOURCE") or {}
+    if not bool(meta.get("implemented")):
+        return False, "not_implemented"
+    if not _settings_ready(meta):
+        return False, "missing_required_settings"
+    user_ok, user_reason = _user_ready(meta=meta, user_sub=user_sub)
+    if not user_ok:
+        return False, user_reason or "missing_user_session"
+    return True, ""
 
 
 def clear_source_cache() -> None:
