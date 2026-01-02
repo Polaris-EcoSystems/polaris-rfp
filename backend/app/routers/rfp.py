@@ -1618,6 +1618,12 @@ def list_scraper_sources(refresh: bool = False):
     return {"ok": True, "sources": sources}
 
 
+@router.get("/scrapers/sources/", include_in_schema=False)
+def list_scraper_sources_slash(refresh: bool = False):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return list_scraper_sources(refresh=refresh)
+
+
 @router.post("/scrapers/run", status_code=201)
 def run_scraper(request: Request, background_tasks: BackgroundTasks, body: dict = Body(...)):
     """
@@ -1667,6 +1673,17 @@ def list_scraper_jobs_endpoint(
         raise HTTPException(status_code=500, detail="Failed to list scraper jobs")
 
 
+@router.get("/scrapers/jobs/", include_in_schema=False)
+def list_scraper_jobs_endpoint_slash(
+    source: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    nextToken: str | None = None,
+):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return list_scraper_jobs_endpoint(source=source, status=status, limit=limit, nextToken=nextToken)
+
+
 @router.get("/scrapers/jobs/{jobId}")
 def get_scraper_job_endpoint(jobId: str):
     """Get a specific scraper job."""
@@ -1692,6 +1709,17 @@ def list_scraped_candidates(
     except Exception as e:
         log.exception("list_scraped_candidates_failed", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to list scraped candidates")
+
+
+@router.get("/scrapers/candidates/", include_in_schema=False)
+def list_scraped_candidates_slash(
+    source: str,
+    status: str | None = None,
+    limit: int = 50,
+    nextToken: str | None = None,
+):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return list_scraped_candidates(source=source, status=status, limit=limit, nextToken=nextToken)
 
 
 @router.get("/scrapers/candidates/{candidateId}")
@@ -1790,6 +1818,12 @@ def list_intake_queue(status: str | None = None, limit: int = 50, nextToken: str
         raise HTTPException(status_code=500, detail="Failed to list intake queue")
 
 
+@router.get("/scrapers/intake/", include_in_schema=False)
+def list_intake_queue_slash(status: str | None = None, limit: int = 50, nextToken: str | None = None):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return list_intake_queue(status=status, limit=limit, nextToken=nextToken)
+
+
 @router.get("/scrapers/schedules")
 def list_scraper_schedules(limit: int = 100, nextToken: str | None = None):
     try:
@@ -1798,6 +1832,12 @@ def list_scraper_schedules(limit: int = 100, nextToken: str | None = None):
     except Exception as e:
         log.exception("list_scraper_schedules_failed", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to list scraper schedules")
+
+
+@router.get("/scrapers/schedules/", include_in_schema=False)
+def list_scraper_schedules_slash(limit: int = 100, nextToken: str | None = None):
+    # Accept trailing slash to avoid 404s when clients normalize URLs.
+    return list_scraper_schedules(limit=limit, nextToken=nextToken)
 
 
 @router.post("/scrapers/schedules", status_code=201)
