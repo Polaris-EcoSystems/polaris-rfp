@@ -84,6 +84,22 @@ def default_state(*, rfp_id: str) -> dict[str, Any]:
         # Google Drive integration.
         "driveFolders": {},  # Map of folder type to Drive folder ID
         "driveFiles": [],  # Array of {fileId, fileName, folderId, category, uploadedAt, uploadedBy}
+        # Lightweight “tracker” fields (mirrors legacy spreadsheet columns).
+        # Keep these as plain strings/bools so the UI can edit easily.
+        "tracker": {
+            "pointPerson": None,
+            "supportRole": None,
+            "notes": None,
+            "dateLastConfirmed": None,  # ISO date or freeform
+            "mailing": None,  # bool-like in UI
+            "qaLink": None,
+            "announceDate": None,
+            "fundingArrives": None,
+            "value": None,
+            "entity": None,
+            "source": None,
+            "applyingEntity": None,
+        },
     }
 
 

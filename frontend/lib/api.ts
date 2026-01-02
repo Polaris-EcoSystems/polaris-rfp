@@ -321,6 +321,34 @@ export interface RFP {
       mappedSections?: string[]
     }[]
   }
+  // OpportunityState is fetched separately; this is just the core RFP record.
+}
+
+export type OpportunityState = {
+  _id: string
+  rfpId: string
+  version?: number
+  state?: {
+    tracker?: {
+      pointPerson?: string | null
+      supportRole?: string | null
+      notes?: string | null
+      dateLastConfirmed?: string | null
+      mailing?: boolean | null
+      qaLink?: string | null
+      announceDate?: string | null
+      fundingArrives?: string | null
+      value?: string | null
+      entity?: string | null
+      source?: string | null
+      applyingEntity?: string | null
+    }
+    owners?: Record<string, any>
+    dueDates?: Record<string, any>
+    [key: string]: any
+  }
+  createdAt?: string
+  updatedAt?: string
 }
 
 export interface Proposal {
@@ -770,6 +798,28 @@ export const rfpApi = {
       folders?: Record<string, string>
       error?: string
     }>(proxyUrl(`/api/rfp/${cleanPathToken(id)}/drive-folder`)),
+  getOpportunityState: (id: string) =>
+    api.get<{ ok: boolean; state: OpportunityState }>(
+      proxyUrl(`/api/rfp/${cleanPathToken(id)}/opportunity-state`),
+    ),
+  updateOpportunityState: (id: string, patch: any) =>
+    api.put<{ ok: boolean; state: OpportunityState }>(
+      proxyUrl(`/api/rfp/${cleanPathToken(id)}/opportunity-state`),
+      patch,
+    ),
+  importOpportunityTracker: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.post<{
+      ok: boolean
+      created: string[]
+      updated: string[]
+      errors: { row: number; error: string; opportunity?: string }[]
+      stats: { rows: number; created: number; updated: number; errors: number }
+    }>(proxyUrl(`/api/rfp/opportunity-tracker/import`), form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
 }
 
 export interface ScraperSource {

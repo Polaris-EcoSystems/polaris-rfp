@@ -39,6 +39,17 @@ export default function FinderPage() {
   const [results, setResults] = useState<any[]>([])
   const [error, setError] = useState<string | null>(null)
 
+  // Opportunity Tracker CSV import
+  const [trackerDragOver, setTrackerDragOver] = useState(false)
+  const [trackerImporting, setTrackerImporting] = useState(false)
+  const [trackerImportError, setTrackerImportError] = useState<string | null>(null)
+  const [trackerImportResult, setTrackerImportResult] = useState<{
+    created: string[]
+    updated: string[]
+    stats: { rows: number; created: number; updated: number; errors: number }
+    errors: { row: number; error: string; opportunity?: string }[]
+  } | null>(null)
+
   // Custom source quick-run / schedule form
   const [customListingUrl, setCustomListingUrl] = useState('')
   const [customLinkPattern, setCustomLinkPattern] = useState('rfp')
@@ -320,6 +331,154 @@ export default function FinderPage() {
               },
             ]}
           />
+
+          <div className="bg-white shadow rounded-lg p-6 space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  Import Opportunity Tracker (CSV)
+                </h2>
+                <p className="mt-1 text-sm text-gray-600">
+                  Drag and drop your <span className="font-medium">Opportunity Tracker - Ongoing Grants.csv</span> here to
+                  populate the database. Imported items will show up under{' '}
+                  <Link href="/rfps" className="text-primary-700 hover:underline">
+                    RFPs
+                  </Link>{' '}
+                  and in each RFP’s <span className="font-medium">Tracker</span> section.
+                </p>
+              </div>
+              <div className="shrink-0">
+                <label className="inline-flex">
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const f = e.target.files?.[0]
+                      if (!f) return
+                      setTrackerImportError(null)
+                      setTrackerImportResult(null)
+                      setTrackerImporting(true)
+                      try {
+                        const resp = await rfpApi.importOpportunityTracker(f)
+                        setTrackerImportResult(resp.data)
+                      } catch (err: any) {
+                        console.error('Tracker import failed:', err)
+                        setTrackerImportError(
+                          err?.response?.data?.detail ||
+                            err?.message ||
+                            'Failed to import CSV',
+                        )
+                      } finally {
+                        setTrackerImporting(false)
+                        // allow re-selecting same file
+                        e.target.value = ''
+                      }
+                    }}
+                  />
+                  <Button disabled={trackerImporting}>
+                    {trackerImporting ? 'Importing…' : 'Choose CSV'}
+                  </Button>
+                </label>
+              </div>
+            </div>
+
+            <div
+              onDragEnter={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setTrackerDragOver(true)
+              }}
+              onDragOver={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setTrackerDragOver(true)
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setTrackerDragOver(false)
+              }}
+              onDrop={async (e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setTrackerDragOver(false)
+                const f = e.dataTransfer?.files?.[0]
+                if (!f) return
+                if (!String(f.name || '').toLowerCase().endsWith('.csv')) {
+                  setTrackerImportError('Please drop a .csv file.')
+                  return
+                }
+                setTrackerImportError(null)
+                setTrackerImportResult(null)
+                setTrackerImporting(true)
+                try {
+                  const resp = await rfpApi.importOpportunityTracker(f)
+                  setTrackerImportResult(resp.data)
+                } catch (err: any) {
+                  console.error('Tracker import failed:', err)
+                  setTrackerImportError(
+                    err?.response?.data?.detail || err?.message || 'Failed to import CSV',
+                  )
+                } finally {
+                  setTrackerImporting(false)
+                }
+              }}
+              className={`rounded-lg border-2 border-dashed p-6 text-center transition-colors ${
+                trackerDragOver
+                  ? 'border-primary-400 bg-primary-50'
+                  : 'border-gray-300 bg-gray-50'
+              }`}
+            >
+              <div className="text-sm font-medium text-gray-900">
+                Drop CSV file here
+              </div>
+              <div className="mt-1 text-xs text-gray-600">
+                We’ll upsert rows (deduped) into RFPs + Tracker fields.
+              </div>
+            </div>
+
+            {trackerImportError ? (
+              <div className="text-sm text-red-700">{trackerImportError}</div>
+            ) : null}
+
+            {trackerImportResult ? (
+              <div className="rounded-lg border border-gray-200 bg-white p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm font-semibold text-gray-900">
+                    Import complete
+                  </div>
+                  <Link
+                    href="/rfps"
+                    className="text-sm text-primary-700 hover:underline"
+                  >
+                    View RFPs
+                  </Link>
+                </div>
+                <div className="mt-2 text-sm text-gray-700">
+                  Rows: <span className="font-medium">{trackerImportResult.stats.rows}</span> • Created:{' '}
+                  <span className="font-medium">{trackerImportResult.stats.created}</span> • Updated:{' '}
+                  <span className="font-medium">{trackerImportResult.stats.updated}</span> • Errors:{' '}
+                  <span className="font-medium">{trackerImportResult.stats.errors}</span>
+                </div>
+                {trackerImportResult.errors?.length ? (
+                  <div className="mt-3">
+                    <div className="text-xs font-semibold text-gray-700">
+                      Errors (first {trackerImportResult.errors.length})
+                    </div>
+                    <ul className="mt-2 space-y-1 text-xs text-red-700">
+                      {trackerImportResult.errors.slice(0, 10).map((e) => (
+                        <li key={`${e.row}:${e.error}`}>
+                          Row {e.row}: {e.opportunity ? `"${e.opportunity}" — ` : ''}
+                          {e.error}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
 
           <div className="bg-white shadow rounded-lg p-6 space-y-4">
             <div className="flex items-center justify-between mb-4">

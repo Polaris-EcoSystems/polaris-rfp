@@ -1130,3 +1130,4 @@ def stream_text(
         f"Check OPENAI_MODEL / OPENAI_MODEL_* overrides."
     ) from last_err
 
+

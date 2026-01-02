@@ -9,6 +9,7 @@ from ..db.dynamodb.errors import DdbConflict
 from ..db.dynamodb.table import get_main_table
 from ..pipeline.proposal_generation.ai_section_titles import generate_section_titles
 from ..pipeline.intake.rfp_analyzer import analyze_rfp
+from ..pipeline.intake.opportunity_tracker_import import parse_opportunity_tracker_csv, row_to_rfp_and_tracker
 from ..repositories.rfp_rfps_repo import (
     create_rfp_from_analysis,
     delete_rfp,
@@ -37,6 +38,8 @@ from ..repositories.rfp_pdf_dedup_repo import (
     normalize_sha256,
     reset_stale_mapping,
 )
+from ..repositories.rfp_opportunity_state_repo import ensure_state_exists, get_state, patch_state
+from ..repositories.opportunity_tracker_repo import compute_row_key_sha, get_mapping, put_mapping, touch_mapping
 from ..repositories.rfp_scraper_jobs_repo import (
     create_job as create_scraper_job,
     get_job as get_scraper_job,
@@ -169,6 +172,107 @@ async def upload(file: UploadFile = File(...)):
 async def upload_slash(file: UploadFile = File(...)):
     # Accept trailing slash to avoid 307 redirect (which breaks large uploads and proxying).
     return await upload(file=file)
+
+
+@router.post("/opportunity-tracker/import")
+async def import_opportunity_tracker(request: Request, file: UploadFile = File(...)):
+    """
+    Import the Opportunity Tracker CSV (Google Sheets export).
+
+    This creates/upserts:
+    - RFP records (minimal fields: title/clientName/submissionDeadline)
+    - OpportunityState.state.tracker fields (Point Person, Notes, Value, etc.)
+
+    Idempotency/dedupe:
+    - A stable row key (sha256) is computed from Opportunity + Due Date + Entity + Applying Entity + Q/A link.
+    - If a row was previously imported, we update the existing RFP + tracker instead of creating a duplicate.
+    """
+    try:
+        raw = await file.read()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Failed to read uploaded file")
+
+    text = (raw or b"").decode("utf-8", errors="ignore")
+    try:
+        rows = parse_opportunity_tracker_csv(text)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid Opportunity Tracker CSV: {str(e) or 'parse error'}")
+
+    created: list[str] = []
+    updated: list[str] = []
+    errors: list[dict[str, Any]] = []
+
+    # CSV is small, but keep a hard cap to avoid accidental huge uploads.
+    for idx, row in enumerate(rows[:2000], start=1):
+        try:
+            conv = row_to_rfp_and_tracker(row)
+            opportunity = str(conv.get("opportunity") or "").strip()
+            entity = str(conv.get("entity") or "").strip()
+            applying_entity = str(conv.get("applyingEntity") or "").strip()
+            due_date = str(conv.get("dueDate") or "").strip()
+            qa = str((row or {}).get("Question/Answers") or "").strip()
+
+            row_sha = compute_row_key_sha(parts=[opportunity, due_date, entity, applying_entity, qa])
+            mapping = get_mapping(row_key_sha=row_sha) or {}
+            rfp_id = str(mapping.get("rfpId") or "").strip() or None
+
+            # Build patches.
+            analysis = conv.get("rfpAnalysis") if isinstance(conv.get("rfpAnalysis"), dict) else {}
+            tracker_patch = conv.get("trackerPatch") if isinstance(conv.get("trackerPatch"), dict) else {}
+            due_patch = conv.get("dueDatesPatch") if isinstance(conv.get("dueDatesPatch"), dict) else {}
+
+            st_patch: dict[str, Any] = {"tracker": tracker_patch}
+            if due_patch:
+                st_patch["dueDates"] = due_patch
+
+            if rfp_id:
+                # Update minimal RFP fields.
+                patch: dict[str, Any] = {}
+                if isinstance(analysis, dict):
+                    if analysis.get("title"):
+                        patch["title"] = analysis.get("title")
+                    if analysis.get("clientName"):
+                        patch["clientName"] = analysis.get("clientName")
+                    if analysis.get("submissionDeadline"):
+                        patch["submissionDeadline"] = analysis.get("submissionDeadline")
+                if patch:
+                    update_rfp(rfp_id, patch)
+
+                # Update tracker (no snapshot spam on bulk import).
+                patch_state(rfp_id=rfp_id, patch=st_patch, updated_by_user_sub=None, create_snapshot=False)
+                touch_mapping(row_key_sha=row_sha)
+                updated.append(rfp_id)
+                continue
+
+            # Create new RFP.
+            saved = create_rfp_from_analysis(
+                analysis=analysis if isinstance(analysis, dict) else {},
+                source_file_name=f"OpportunityTrackerCSV:{file.filename or 'upload.csv'}",
+                source_file_size=int(len(raw or b"")),
+            )
+            rfp_id = str((saved or {}).get("_id") or "").strip() or None
+            if not rfp_id:
+                raise RuntimeError("Failed to create RFP")
+
+            put_mapping(row_key_sha=row_sha, rfp_id=rfp_id)
+            patch_state(rfp_id=rfp_id, patch=st_patch, updated_by_user_sub=None, create_snapshot=False)
+            created.append(rfp_id)
+        except Exception as e:
+            errors.append(
+                {
+                    "row": idx,
+                    "error": str(e) or "Failed to import row",
+                    "opportunity": str((row or {}).get("Opportunity") or "")[:200],
+                }
+            )
+
+    return {
+        "ok": True,
+        "created": created,
+        "updated": updated,
+        "errors": errors[:50],
+        "stats": {"rows": len(rows), "created": len(created), "updated": len(updated), "errors": len(errors)},
+    }
 
 
 @router.post("/upload/presign")
@@ -1369,6 +1473,44 @@ def update_review(id: str, request: Request, body: dict = Body(...)):
 def update_review_slash(id: str, request: Request, body: dict = Body(...)):
     # Accept trailing slash to avoid 404s when clients normalize URLs.
     return update_review(id=id, request=request, body=body)
+
+
+@router.get("/{id}/opportunity-state")
+def get_opportunity_state(id: str):
+    """
+    Get the durable OpportunityState for this RFP (tracker/owners/dueDates/etc).
+    """
+    rid = str(id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="id is required")
+    ensure_state_exists(rfp_id=rid)
+    st = get_state(rfp_id=rid)
+    if not st:
+        raise HTTPException(status_code=404, detail="OpportunityState not found")
+    return {"ok": True, "state": st}
+
+
+@router.put("/{id}/opportunity-state")
+def put_opportunity_state(id: str, request: Request, body: dict = Body(...)):
+    """
+    Patch OpportunityState.state (shallow merge with safe semantics).
+    Body is a patch applied to the `state` object (see rfp_opportunity_state_repo.patch_state).
+    """
+    user = getattr(getattr(request, "state", None), "user", None)
+    user_sub = str(getattr(user, "sub", "") or "").strip() if user else None
+
+    rid = str(id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=400, detail="id is required")
+    patch = body if isinstance(body, dict) else {}
+    ensure_state_exists(rfp_id=rid)
+    updated = patch_state(rfp_id=rid, patch=patch, updated_by_user_sub=user_sub or None, create_snapshot=True)
+    return {"ok": True, "state": updated}
+
+
+@router.put("/{id}/opportunity-state/", include_in_schema=False)
+def put_opportunity_state_slash(id: str, request: Request, body: dict = Body(...)):
+    return put_opportunity_state(id=id, request=request, body=body)
 
 
 @router.get("/{id}/proposals")

@@ -14,3 +14,4 @@ export function sessionIdCookieName(): string {
   return SESSION_ID_COOKIE_NAME
 }
 
+

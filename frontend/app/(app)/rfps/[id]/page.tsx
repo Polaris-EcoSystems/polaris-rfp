@@ -11,6 +11,7 @@ import {
   extractList,
   proposalApi,
   proxyUrl,
+  OpportunityState,
   RFP,
   rfpApi,
   tasksApi,
@@ -71,6 +72,38 @@ export default function RFPDetailPage() {
   const [driveFolderError, setDriveFolderError] = useState<string | null>(null)
 
   const [rfp, setRfp] = useState<RFP | null>(null)
+  const [opportunityState, setOpportunityState] =
+    useState<OpportunityState | null>(null)
+  const [tracker, setTracker] = useState<{
+    pointPerson: string
+    supportRole: string
+    notes: string
+    dateLastConfirmed: string
+    mailing: boolean
+    qaLink: string
+    announceDate: string
+    fundingArrives: string
+    value: string
+    entity: string
+    source: string
+    applyingEntity: string
+  }>({
+    pointPerson: '',
+    supportRole: '',
+    notes: '',
+    dateLastConfirmed: '',
+    mailing: false,
+    qaLink: '',
+    announceDate: '',
+    fundingArrives: '',
+    value: '',
+    entity: '',
+    source: '',
+    applyingEntity: '',
+  })
+  const [trackerLoading, setTrackerLoading] = useState(false)
+  const [trackerSaving, setTrackerSaving] = useState(false)
+  const [trackerError, setTrackerError] = useState<string>('')
   const [workflowTasks, setWorkflowTasks] = useState<WorkflowTask[]>([])
   const [workflowTasksLoading, setWorkflowTasksLoading] = useState(false)
   const [meSub, setMeSub] = useState<string>('')
@@ -775,6 +808,7 @@ export default function RFPDetailPage() {
   type CollapsibleSectionId =
     | 'suitability'
     | 'overview'
+    | 'tracker'
     | 'requirements'
     | 'deliverables'
     | 'attachments'
@@ -794,6 +828,7 @@ export default function RFPDetailPage() {
       // Order matters: this drives TOC ordering + persisted open/close defaults.
       // Requested flow: Overview → Deliverables & criteria → Suitability.
       { id: 'overview', label: 'Overview', defaultOpen: true },
+      { id: 'tracker', label: 'Tracker', defaultOpen: true },
       {
         id: 'deliverables',
         label: 'Deliverables & criteria',
@@ -1387,6 +1422,44 @@ export default function RFPDetailPage() {
       }
     })()
 
+    return () => {
+      cancelled = true
+    }
+  }, [rfp?._id])
+
+  useEffect(() => {
+    if (!rfp?._id) return
+    let cancelled = false
+    ;(async () => {
+      setTrackerLoading(true)
+      setTrackerError('')
+      try {
+        const resp = await rfpApi.getOpportunityState(rfp._id)
+        const st = resp.data?.state
+        if (cancelled) return
+        setOpportunityState(st || null)
+        const t = (st as any)?.state?.tracker || {}
+        setTracker({
+          pointPerson: String(t?.pointPerson || ''),
+          supportRole: String(t?.supportRole || ''),
+          notes: String(t?.notes || ''),
+          dateLastConfirmed: String(t?.dateLastConfirmed || ''),
+          mailing: Boolean(t?.mailing),
+          qaLink: String(t?.qaLink || ''),
+          announceDate: String(t?.announceDate || ''),
+          fundingArrives: String(t?.fundingArrives || ''),
+          value: String(t?.value || ''),
+          entity: String(t?.entity || ''),
+          source: String(t?.source || ''),
+          applyingEntity: String(t?.applyingEntity || ''),
+        })
+      } catch (e: any) {
+        console.warn('Failed to load opportunity state:', e)
+        if (!cancelled) setTrackerError('Failed to load tracker fields.')
+      } finally {
+        if (!cancelled) setTrackerLoading(false)
+      }
+    })()
     return () => {
       cancelled = true
     }
@@ -2767,6 +2840,242 @@ export default function RFPDetailPage() {
                 </div>
               </div>
 
+              <Section sid="tracker" title="Tracker">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm text-gray-700">
+                    Spreadsheet-style tracking fields (owners, notes, key dates, value).
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!rfp?._id) return
+                      setTrackerSaving(true)
+                      setTrackerError('')
+                      try {
+                        const resp = await rfpApi.updateOpportunityState(rfp._id, {
+                          tracker: {
+                            pointPerson: tracker.pointPerson || null,
+                            supportRole: tracker.supportRole || null,
+                            notes: tracker.notes || null,
+                            dateLastConfirmed: tracker.dateLastConfirmed || null,
+                            mailing: tracker.mailing,
+                            qaLink: tracker.qaLink || null,
+                            announceDate: tracker.announceDate || null,
+                            fundingArrives: tracker.fundingArrives || null,
+                            value: tracker.value || null,
+                            entity: tracker.entity || null,
+                            source: tracker.source || null,
+                            applyingEntity: tracker.applyingEntity || null,
+                          },
+                        })
+                        setOpportunityState(resp.data?.state || null)
+                        toast.success('Saved tracker')
+                      } catch (e: any) {
+                        console.error('Failed to save tracker:', e)
+                        setTrackerError('Failed to save tracker.')
+                        toast.error('Failed to save tracker')
+                      } finally {
+                        setTrackerSaving(false)
+                      }
+                    }}
+                    disabled={trackerLoading || trackerSaving}
+                    className="inline-flex items-center px-3 py-2 text-xs font-semibold rounded-md text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50"
+                  >
+                    {trackerSaving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+
+                {trackerError ? (
+                  <div className="mt-2 text-sm text-red-700">{trackerError}</div>
+                ) : null}
+
+                <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Point person
+                    </label>
+                    <input
+                      value={tracker.pointPerson}
+                      onChange={(e) =>
+                        setTracker((p) => ({ ...p, pointPerson: e.target.value }))
+                      }
+                      className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="Saxon"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Support role
+                    </label>
+                    <input
+                      value={tracker.supportRole}
+                      onChange={(e) =>
+                        setTracker((p) => ({ ...p, supportRole: e.target.value }))
+                      }
+                      className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="Cale"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Entity
+                    </label>
+                    <input
+                      value={tracker.entity}
+                      onChange={(e) =>
+                        setTracker((p) => ({ ...p, entity: e.target.value }))
+                      }
+                      className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="Client / issuer"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Applying entity
+                    </label>
+                    <input
+                      value={tracker.applyingEntity}
+                      onChange={(e) =>
+                        setTracker((p) => ({
+                          ...p,
+                          applyingEntity: e.target.value,
+                        }))
+                      }
+                      className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="Polaris EcoSystems"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Value
+                    </label>
+                    <input
+                      value={tracker.value}
+                      onChange={(e) =>
+                        setTracker((p) => ({ ...p, value: e.target.value }))
+                      }
+                      className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="$150,000"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Source
+                    </label>
+                    <input
+                      value={tracker.source}
+                      onChange={(e) =>
+                        setTracker((p) => ({ ...p, source: e.target.value }))
+                      }
+                      className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="OpenGov / Google / LinkedIn / ..."
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Date last confirmed
+                    </label>
+                    <input
+                      value={tracker.dateLastConfirmed}
+                      onChange={(e) =>
+                        setTracker((p) => ({
+                          ...p,
+                          dateLastConfirmed: e.target.value,
+                        }))
+                      }
+                      className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="2026-01-05"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 pt-6">
+                    <input
+                      id="tracker-mailing"
+                      type="checkbox"
+                      checked={tracker.mailing}
+                      onChange={(e) =>
+                        setTracker((p) => ({ ...p, mailing: e.target.checked }))
+                      }
+                      className="h-4 w-4"
+                    />
+                    <label
+                      htmlFor="tracker-mailing"
+                      className="text-sm text-gray-700"
+                    >
+                      Mailing?
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Q/A link
+                    </label>
+                    <input
+                      value={tracker.qaLink}
+                      onChange={(e) =>
+                        setTracker((p) => ({ ...p, qaLink: e.target.value }))
+                      }
+                      className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="https://…"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Announce date
+                    </label>
+                    <input
+                      value={tracker.announceDate}
+                      onChange={(e) =>
+                        setTracker((p) => ({ ...p, announceDate: e.target.value }))
+                      }
+                      className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="2026-02-28"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Funding arrives
+                    </label>
+                    <input
+                      value={tracker.fundingArrives}
+                      onChange={(e) =>
+                        setTracker((p) => ({
+                          ...p,
+                          fundingArrives: e.target.value,
+                        }))
+                      }
+                      className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                      placeholder="Win date + 30–45 days"
+                    />
+                  </div>
+                  <div />
+                </div>
+
+                <div className="mt-4">
+                  <label className="block text-xs font-semibold text-gray-700">
+                    Notes
+                  </label>
+                  <textarea
+                    value={tracker.notes}
+                    onChange={(e) =>
+                      setTracker((p) => ({ ...p, notes: e.target.value }))
+                    }
+                    rows={4}
+                    className="mt-1 w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    placeholder="Notes from your tracker…"
+                  />
+                </div>
+
+                {opportunityState?.updatedAt ? (
+                  <div className="mt-3 text-xs text-gray-500">
+                    Last updated: {String(opportunityState.updatedAt).slice(0, 19)}
+                  </div>
+                ) : null}
+              </Section>
+
               <Section sid="overview" title="Overview">
                 <SectionAiSummaryCard sid="overview" />
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -3762,4 +4071,5 @@ export default function RFPDetailPage() {
     </div>
   )
 }
+
 
