@@ -10,6 +10,7 @@ from starlette.responses import Response
 from .middleware.access_log import AccessLogMiddleware
 from .middleware.auth import AuthMiddleware
 from .middleware.cors import build_allowed_origin_regex, build_allowed_origins
+from .middleware.normalize_path import NormalizePathMiddleware
 from .middleware.portal_rate_limit import PortalRateLimitMiddleware
 from .middleware.request_context import RequestContextMiddleware
 from .observability.logging import configure_logging, get_logger
@@ -93,6 +94,8 @@ def create_app() -> FastAPI:
         expose_headers=["ETag"],
         max_age=3000,
     )
+    # Normalize API paths (strip trailing slashes) to prevent hard 404s with redirect_slashes=False.
+    app.add_middleware(NormalizePathMiddleware)
     # Outermost: request context (request-id) wraps everything.
     app.add_middleware(RequestContextMiddleware)
 
