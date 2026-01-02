@@ -1612,9 +1612,9 @@ def remove_buyer_profiles_slash(id: str, body: dict = Body(...)):
 
 
 @router.get("/scrapers/sources")
-def list_scraper_sources():
+def list_scraper_sources(refresh: bool = False):
     """Get list of available RFP scraper sources."""
-    sources = get_available_sources()
+    sources = get_available_sources(force_refresh=bool(refresh))
     return {"ok": True, "sources": sources}
 
 

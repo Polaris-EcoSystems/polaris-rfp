@@ -7,7 +7,12 @@ from typing import Any
 from .framework import ScraperContext
 from .framework import RfpScraper
 from ....settings import settings
+from ....observability.logging import get_logger
 
+log = get_logger("rfp_scraper_registry")
+
+# Cache discovered source modules in long-running processes (prod).
+# In development we disable caching so newly added sources show up without a restart.
 _CACHE: dict[str, dict[str, Any]] | None = None
 
 
@@ -27,14 +32,20 @@ def _settings_ready(meta: dict[str, Any]) -> bool:
     return True
 
 
-def get_available_sources() -> list[dict[str, Any]]:
+def get_available_sources(*, force_refresh: bool = False) -> list[dict[str, Any]]:
     """Get list of scraper sources with metadata (discovered from source modules)."""
-    reg = _discover_sources()
+    reg = _discover_sources(force_refresh=force_refresh)
     out: list[dict[str, Any]] = []
     for sid, spec in reg.items():
         meta = dict(spec.get("SOURCE") or {})
         implemented = bool(meta.get("implemented"))
         available = bool(implemented and _settings_ready(meta))
+        unavailable_reason = ""
+        if not implemented:
+            # surface import/discovery issues if present
+            unavailable_reason = str(meta.get("importError") or "").strip() or "not_implemented"
+        elif not available:
+            unavailable_reason = "missing_required_settings"
         out.append(
             {
                 "id": sid,
@@ -45,6 +56,9 @@ def get_available_sources() -> list[dict[str, Any]]:
                 "available": available,
                 "kind": meta.get("kind") or "browser",
                 "authKind": meta.get("authKind") or ("user_session" if meta.get("requiresAuth") else "none"),
+                # Optional fields (frontend ignores unknown keys, but they're helpful for debugging)
+                "unavailableReason": unavailable_reason,
+                "importError": meta.get("importError") or "",
             }
         )
     # Stable ordering for UI
@@ -88,9 +102,19 @@ def is_source_available(source: str) -> bool:
     return bool(meta.get("implemented") and _settings_ready(meta))
 
 
-def _discover_sources() -> dict[str, dict[str, Any]]:
+def clear_source_cache() -> None:
+    """Clear the in-process source discovery cache (mostly useful for tests/debug)."""
     global _CACHE
-    if isinstance(_CACHE, dict):
+    _CACHE = None
+
+
+def _discover_sources(*, force_refresh: bool = False) -> dict[str, dict[str, Any]]:
+    global _CACHE
+    if settings.is_development:
+        # Avoid confusion during local development: new/renamed sources should show up immediately.
+        force_refresh = True
+
+    if (not force_refresh) and isinstance(_CACHE, dict):
         return _CACHE
 
     reg: dict[str, dict[str, Any]] = {}
@@ -99,14 +123,61 @@ def _discover_sources() -> dict[str, dict[str, Any]]:
     for m in pkgutil.iter_modules(pkg.__path__):
         if not m.name or m.ispkg:
             continue
-        mod = importlib.import_module(f"app.pipeline.search.rfp_scrapers.sources.{m.name}")
+        module_path = f"app.pipeline.search.rfp_scrapers.sources.{m.name}"
+        try:
+            mod = importlib.import_module(module_path)
+        except Exception as e:
+            # Be resilient: a missing optional dependency (e.g. googleapiclient) shouldn't hide *all* sources.
+            # We still surface the source in the registry (unavailable) so the UI can show it + the reason.
+            msg = str(e) or e.__class__.__name__
+            log.warning("scraper_source_import_failed", module=module_path, error=msg)
+            reg[m.name] = {
+                "SOURCE": {
+                    "id": m.name,
+                    "name": m.name,
+                    "description": f"Failed to import source module ({module_path}): {msg}",
+                    "baseUrl": "",
+                    "requiresAuth": False,
+                    "implemented": False,
+                    "importError": msg,
+                },
+                "create": None,
+            }
+            continue
+
         meta = getattr(mod, "SOURCE", None)
         create = getattr(mod, "create", None)
         if not isinstance(meta, dict):
+            reg[m.name] = {
+                "SOURCE": {
+                    "id": m.name,
+                    "name": m.name,
+                    "description": f"Source module missing SOURCE manifest: {module_path}",
+                    "baseUrl": "",
+                    "requiresAuth": False,
+                    "implemented": False,
+                    "importError": "missing_SOURCE_manifest",
+                },
+                "create": None,
+            }
             continue
+
         sid = str(meta.get("id") or "").strip()
         if not sid:
+            reg[m.name] = {
+                "SOURCE": {
+                    "id": m.name,
+                    "name": m.name,
+                    "description": f"Source manifest missing id: {module_path}",
+                    "baseUrl": "",
+                    "requiresAuth": bool(meta.get("requiresAuth")),
+                    "implemented": False,
+                    "importError": "missing_SOURCE_id",
+                },
+                "create": None,
+            }
             continue
+
         reg[sid] = {"SOURCE": meta, "create": create}
 
     _CACHE = reg
