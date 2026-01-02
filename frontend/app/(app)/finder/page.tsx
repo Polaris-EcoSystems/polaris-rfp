@@ -28,6 +28,7 @@ import { useEffect, useState } from 'react'
 export default function FinderPage() {
   const [sources, setSources] = useState<ScraperSource[]>([])
   const [sourcesLoading, setSourcesLoading] = useState(true)
+  const [showSourceDiagnostics, setShowSourceDiagnostics] = useState(false)
   const [runningJobs, setRunningJobs] = useState<Record<string, boolean>>({})
   const [jobs, setJobs] = useState<ScraperJob[]>([])
   const [candidates, setCandidates] = useState<ScrapedCandidate[]>([])
@@ -60,10 +61,10 @@ export default function FinderPage() {
     loadIntake()
   }, [])
 
-  const loadSources = async () => {
+  const loadSources = async (opts?: { refresh?: boolean; debug?: boolean }) => {
     try {
       setSourcesLoading(true)
-      const resp = await scraperApi.listSources()
+      const resp = await scraperApi.listSources(opts)
       setSources(resp.data?.sources || [])
     } catch (e) {
       console.error('Failed to load sources:', e)
@@ -490,6 +491,23 @@ export default function FinderPage() {
                   Sources are loaded from the backend scraper registry. Only sources marked “Available” can be run.
                 </p>
               </div>
+              <div className="flex items-center gap-3">
+                <label className="flex items-center gap-2 text-xs text-gray-700 select-none">
+                  <input
+                    type="checkbox"
+                    checked={showSourceDiagnostics}
+                    onChange={(e) => setShowSourceDiagnostics(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  Show diagnostics
+                </label>
+                <button
+                  onClick={() => loadSources({ refresh: true, debug: showSourceDiagnostics })}
+                  className="text-sm text-primary-600 hover:text-primary-800"
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
             {sourcesLoading ? (
               <div className="flex items-center justify-center h-48">
@@ -525,6 +543,22 @@ export default function FinderPage() {
                                 <p className="text-sm text-gray-600 mb-3">
                                   {source.description}
                                 </p>
+                                {showSourceDiagnostics && (source.unavailableReason || source.importError) ? (
+                                  <div className="mb-3 text-xs text-gray-600 space-y-1">
+                                    {source.unavailableReason ? (
+                                      <div>
+                                        <span className="font-semibold">Reason:</span>{' '}
+                                        <span className="font-mono">{source.unavailableReason}</span>
+                                      </div>
+                                    ) : null}
+                                    {source.importError ? (
+                                      <div className="text-red-700">
+                                        <span className="font-semibold">Import error:</span>{' '}
+                                        <span className="font-mono break-words">{source.importError}</span>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
                                 <button
                                   onClick={() => runScraper(source.id)}
                                   disabled={runningJobs[source.id]}
@@ -584,6 +618,22 @@ export default function FinderPage() {
                                 <p className="text-sm text-gray-600 mb-3">
                                   {source.description}
                                 </p>
+                                {showSourceDiagnostics && (source.unavailableReason || source.importError) ? (
+                                  <div className="mb-3 text-xs text-gray-600 space-y-1">
+                                    {source.unavailableReason ? (
+                                      <div>
+                                        <span className="font-semibold">Reason:</span>{' '}
+                                        <span className="font-mono">{source.unavailableReason}</span>
+                                      </div>
+                                    ) : null}
+                                    {source.importError ? (
+                                      <div className="text-red-700">
+                                        <span className="font-semibold">Import error:</span>{' '}
+                                        <span className="font-mono break-words">{source.importError}</span>
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : null}
                                 {Boolean(source.baseUrl) && (
                                   <a
                                     href={source.baseUrl}

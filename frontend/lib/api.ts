@@ -831,6 +831,8 @@ export interface ScraperSource {
   available: boolean
   kind?: 'browser' | 'api' | 'hybrid' | string
   authKind?: 'none' | 'user_session' | 'service_account' | 'api_key' | 'cookie_jar' | string
+  unavailableReason?: string
+  importError?: string
 }
 
 export interface ScraperJob {
@@ -888,9 +890,10 @@ export interface ScraperSchedule {
 }
 
 export const scraperApi = {
-  listSources: () =>
+  listSources: (params?: { refresh?: boolean; debug?: boolean }) =>
     api.get<{ ok: boolean; sources: ScraperSource[] }>(
       proxyUrl('/api/rfp/scrapers/sources'),
+      { params },
     ),
   run: (data: { source: string; searchParams?: Record<string, any> }) =>
     api.post<{ ok: boolean; job: ScraperJob }>(
