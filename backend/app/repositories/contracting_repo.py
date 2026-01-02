@@ -9,9 +9,9 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from ..db.dynamodb.errors import DdbNotFound
-from ..db.dynamodb.table import get_main_table
-from ..settings import settings
+from app.db.dynamodb.errors import DdbNotFound
+from app.db.dynamodb.table import get_main_table
+from app.settings import settings
 
 
 def _now_iso() -> str:

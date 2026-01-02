@@ -9,8 +9,8 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
-from ..observability.logging import get_logger
-from ..repositories.integrations_canva_repo import get_connection_for_user
+from app.observability.logging import get_logger
+from app.repositories.integrations_canva_repo import get_connection_for_user
 log = get_logger("integrations_router")
 
 router = APIRouter(tags=["integrations"])
@@ -101,7 +101,7 @@ def _get_integrations_status_impl(request: Request) -> dict[str, Any]:
         else:
             # Try to validate the connection by checking if we can get a valid token
             try:
-                from ..infrastructure.integrations.canva.canva_client import get_valid_access_token_for_user
+                from app.infrastructure.integrations.canva.canva_client import get_valid_access_token_for_user
                 access_token, updated_conn = get_valid_access_token_for_user(user_id)
                 
                 if access_token:
@@ -139,7 +139,7 @@ def _get_integrations_status_impl(request: Request) -> dict[str, Any]:
     
     # Slack Status
     try:
-        from ..infrastructure.integrations.slack.slack_web import is_slack_configured, slack_api_get
+        from app.infrastructure.integrations.slack.slack_web import is_slack_configured, slack_api_get
         
         configured = is_slack_configured()
         token_valid = False
@@ -186,7 +186,7 @@ def _get_integrations_status_impl(request: Request) -> dict[str, Any]:
     
     # GitHub Status
     try:
-        from ..infrastructure.github.github_api import discover_github_config
+        from app.infrastructure.github.github_api import discover_github_config
 
         gh = discover_github_config()
         repo = gh.get("githubRepo")
@@ -199,7 +199,7 @@ def _get_integrations_status_impl(request: Request) -> dict[str, Any]:
         if token_configured:
             # Test the token by making a simple API call
             try:
-                from ..infrastructure.github.github_api import _token
+                from app.infrastructure.github.github_api import _token
                 token = _token()
                 if token:
                     import httpx
@@ -287,7 +287,7 @@ def _get_recent_activities_impl(request: Request, limit: int = 5) -> dict[str, A
     activities: list[dict[str, Any]] = []
     
     try:
-        from ..repositories.agent_events_repo import list_recent_events_global
+        from app.repositories.agent_events_repo import list_recent_events_global
         
         events = list_recent_events_global(since_iso=since_iso, limit=lim * 10)  # Get more for filtering
         

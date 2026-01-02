@@ -5,11 +5,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from ...ai.verified_calls import call_json_verified
-from ...ai.schemas import CapabilitiesStatementAI
+from app.ai.verified_calls import call_json_verified
+from app.ai.schemas import CapabilitiesStatementAI
 
-from ...settings import settings
-from ...infrastructure.storage import content_repo
+from app.settings import settings
+from app.infrastructure.storage import content_repo
 
 
 def _now_iso() -> str:

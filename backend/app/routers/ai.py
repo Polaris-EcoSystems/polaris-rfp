@@ -3,16 +3,16 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
-from ..ai.client import AiNotConfigured, AiUpstreamError
-from ..ai.verified_calls import call_text_verified
-from ..ai.user_context import load_user_profile_from_request, user_context_block
-from ..ai.schemas import (
+from app.ai.client import AiNotConfigured, AiUpstreamError
+from app.ai.verified_calls import call_text_verified
+from app.ai.user_context import load_user_profile_from_request, user_context_block
+from app.ai.schemas import (
     AiEditTextRequest,
     AiEditTextResponse,
     AiGenerateContentRequest,
     AiGenerateContentResponse,
 )
-from ..observability.logging import get_logger
+from app.observability.logging import get_logger
 
 router = APIRouter(tags=["ai"])
 log = get_logger("api.ai")

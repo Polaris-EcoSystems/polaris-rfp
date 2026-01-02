@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .aws_clients import secretsmanager_client
-from ..observability.logging import get_logger
+from app.infrastructure.aws_clients import secretsmanager_client
+from app.observability.logging import get_logger
 
 log = get_logger("google_drive_integration")
 

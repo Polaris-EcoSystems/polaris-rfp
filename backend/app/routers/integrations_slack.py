@@ -10,15 +10,15 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from ..observability.logging import get_logger
-from ..settings import settings
-from ..infrastructure.integrations.slack.slack_secrets import get_secret_str
-from ..infrastructure.integrations.slack.slack_web import chat_post_message_result, open_dm_channel
-from ..infrastructure.storage import content_repo
-from ..repositories.rfp_rfps_repo import list_rfps
-from ..repositories.rfp_proposals_repo import list_proposals
-from ..ai.client import AiNotConfigured, AiUpstreamError
-from ..ai.verified_calls import call_text_verified
+from app.observability.logging import get_logger
+from app.settings import settings
+from app.infrastructure.integrations.slack.slack_secrets import get_secret_str
+from app.infrastructure.integrations.slack.slack_web import chat_post_message_result, open_dm_channel
+from app.infrastructure.storage import content_repo
+from app.repositories.rfp_rfps_repo import list_rfps
+from app.repositories.rfp_proposals_repo import list_proposals
+from app.ai.client import AiNotConfigured, AiUpstreamError
+from app.ai.verified_calls import call_text_verified
 
 router = APIRouter(tags=["integrations"])
 log = get_logger("integrations_slack")

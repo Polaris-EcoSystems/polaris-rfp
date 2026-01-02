@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .opportunities import ensure_from_rfp, set_stage as set_opportunity_stage
-from .repositories.rfp_rfps_repo import get_rfp_by_id, list_rfp_proposal_summaries
-from .repositories.rfp_opportunity_state_repo import ensure_state_exists, patch_state
-from .repositories.workflows_tasks_repo import seed_missing_tasks_for_stage
-from .stage_machine import compute_stage
+from app.opportunities import ensure_from_rfp, set_stage as set_opportunity_stage
+from app.repositories.rfp_rfps_repo import get_rfp_by_id, list_rfp_proposal_summaries
+from app.repositories.rfp_opportunity_state_repo import ensure_state_exists, patch_state
+from app.repositories.workflows_tasks_repo import seed_missing_tasks_for_stage
+from app.stage_machine import compute_stage
 
 
 def sync_for_rfp(

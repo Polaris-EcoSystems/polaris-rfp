@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...ai.client import AiError, AiNotConfigured
-from ...ai.schemas import SectionTitlesAI
-from ...ai.verified_calls import call_json_verified
+from app.ai.client import AiError, AiNotConfigured
+from app.ai.schemas import SectionTitlesAI
+from app.ai.verified_calls import call_json_verified
 
 
 def generate_section_titles(rfp: dict[str, Any]) -> list[str]:

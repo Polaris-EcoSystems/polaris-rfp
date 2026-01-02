@@ -4,7 +4,7 @@ import secrets
 import time
 from dataclasses import dataclass
 
-from ...db.dynamodb.table import get_main_table
+from app.db.dynamodb.table import get_main_table
 
 
 @dataclass

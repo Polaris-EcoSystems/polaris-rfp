@@ -9,8 +9,8 @@ from cachetools import TTLCache
 from jose import jwt
 from jose.exceptions import JWTError
 
-from ..settings import settings
-from ..infrastructure import cognito_idp
+from app.settings import settings
+from app.infrastructure import cognito_idp
 
 
 @dataclass

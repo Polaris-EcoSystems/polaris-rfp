@@ -5,8 +5,8 @@ from typing import Any
 
 from googleapiclient.discovery import build
 
-from ..rfp_scraper_base import RfpScrapedCandidate
-from .framework import NoopScraper
+from app.pipeline.search.rfp_scraper_base import RfpScrapedCandidate
+from app.pipeline.search.rfp_scrapers.framework import NoopScraper
 
 
 class GoogleCseRfpScraper(NoopScraper):

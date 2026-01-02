@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from ...ai.client import AiError
-from ...ai.verified_calls import call_text_verified
-from ...ai.verification import forbid_regex
-from ...settings import settings
+from app.ai.client import AiError
+from app.ai.verified_calls import call_text_verified
+from app.ai.verification import forbid_regex
+from app.settings import settings
 
 
 def replace_company_name(text: str, target_company_name: str) -> str:

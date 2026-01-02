@@ -7,7 +7,7 @@ from typing import Any, Callable, TypeVar
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from .errors import (
+from app.db.dynamodb.errors import (
     DdbConflict,
     DdbError,
     DdbInternal,

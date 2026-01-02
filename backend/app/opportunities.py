@@ -4,7 +4,7 @@ import importlib
 from datetime import datetime, timezone
 from typing import Any
 
-from .db.dynamodb.table import get_main_table
+from app.db.dynamodb.table import get_main_table
 
 
 def _now_iso() -> str:

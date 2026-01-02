@@ -4,8 +4,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from ..db.dynamodb.errors import DdbConflict
-from ..db.dynamodb.table import get_main_table
+from app.db.dynamodb.errors import DdbConflict
+from app.db.dynamodb.table import get_main_table
 
 
 def _now_iso() -> str:
@@ -116,10 +116,10 @@ def seed_from_platform(*, rfp_id: str) -> dict[str, Any]:
         raise ValueError("rfp_id is required")
 
     # Local imports to keep module load light and avoid cyclic import issues.
-    from .contracting_repo import get_case_by_proposal_id
-    from ..repositories.rfp_proposals_repo import list_proposals_by_rfp
-    from ..repositories.rfp_rfps_repo import get_rfp_by_id
-    from ..stage_machine import compute_stage as compute_pipeline_stage
+    from app.repositories.contracting_repo import get_case_by_proposal_id
+    from app.repositories.rfp_proposals_repo import list_proposals_by_rfp
+    from app.repositories.rfp_rfps_repo import get_rfp_by_id
+    from app.stage_machine import compute_stage as compute_pipeline_stage
 
     rfp = get_rfp_by_id(rid) or {}
     proposals = list_proposals_by_rfp(rid) or []

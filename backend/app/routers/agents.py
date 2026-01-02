@@ -5,7 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from ..repositories.agent_jobs_repo import (
+from app.repositories.agent_jobs_repo import (
     cancel_job,
     create_job,
     delete_job,
@@ -15,8 +15,8 @@ from ..repositories.agent_jobs_repo import (
     list_recent_jobs,
     update_job,
 )
-from ..repositories.agent_events_repo import list_recent_events_global
-from ..observability.logging import get_logger
+from app.repositories.agent_events_repo import list_recent_events_global
+from app.observability.logging import get_logger
 
 log = get_logger("agents_router")
 

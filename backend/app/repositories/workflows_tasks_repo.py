@@ -6,10 +6,10 @@ from typing import Any, Iterable
 
 import importlib
 
-from ..db.dynamodb.errors import DdbConflict
-from ..db.dynamodb.table import get_main_table
-from ..pipeline.workflow_task_templates import STAGE_TASK_TEMPLATES, PipelineStage, StageTaskTemplate
-from ..stage_machine import compute_stage as _compute_stage
+from app.db.dynamodb.errors import DdbConflict
+from app.db.dynamodb.table import get_main_table
+from app.pipeline.workflow_task_templates import STAGE_TASK_TEMPLATES, PipelineStage, StageTaskTemplate
+from app.stage_machine import compute_stage as _compute_stage
 
 
 def _ddb_key() -> Any:

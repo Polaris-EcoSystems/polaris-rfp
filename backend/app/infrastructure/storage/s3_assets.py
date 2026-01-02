@@ -8,7 +8,7 @@ from typing import Any
 import boto3
 from cachetools import TTLCache
 
-from ...settings import settings
+from app.settings import settings
 
 
 def get_assets_bucket_name() -> str:

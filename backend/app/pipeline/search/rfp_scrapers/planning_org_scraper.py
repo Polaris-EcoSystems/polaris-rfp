@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..rfp_scraper_base import BaseRfpScraper, RfpScrapedCandidate
+from app.pipeline.search.rfp_scraper_base import BaseRfpScraper, RfpScrapedCandidate
 
 
 class PlanningOrgScraper(BaseRfpScraper):

@@ -7,9 +7,9 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from ..db.dynamodb.errors import DdbConflict
-from ..db.dynamodb.table import get_main_table
-from . import rfp_intake_queue_repo
+from app.db.dynamodb.errors import DdbConflict
+from app.db.dynamodb.table import get_main_table
+from app.repositories import rfp_intake_queue_repo
 
 
 def now_iso() -> str:

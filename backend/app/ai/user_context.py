@@ -5,8 +5,8 @@ from typing import Any
 
 from fastapi import Request
 
-from .context import clip_text
-from ..repositories.user_profiles_repo import get_user_profile
+from app.ai.context import clip_text
+from app.repositories.user_profiles_repo import get_user_profile
 
 
 def load_user_profile_from_request(request: Request) -> dict[str, Any] | None:

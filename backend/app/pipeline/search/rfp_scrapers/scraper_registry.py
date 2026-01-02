@@ -4,10 +4,10 @@ import importlib
 import pkgutil
 from typing import Any
 
-from .framework import ScraperContext
-from .framework import RfpScraper
-from ....settings import settings
-from ....observability.logging import get_logger
+from app.pipeline.search.rfp_scrapers.framework import ScraperContext
+from app.pipeline.search.rfp_scrapers.framework import RfpScraper
+from app.settings import settings
+from app.observability.logging import get_logger
 
 log = get_logger("rfp_scraper_registry")
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..framework import ScraperContext, UnimplementedScraper
+from app.pipeline.search.rfp_scrapers.framework import ScraperContext, UnimplementedScraper
 
 SOURCE: dict[str, Any] = {
     "id": "energywerx",

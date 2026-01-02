@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from ...repositories import finder_repo
-from ..proposal_generation.buyer_scoring import enrich_buyer_profile_with_ai, score_buyer_likelihood
-from ...infrastructure.browser.linkedin_playwright import LinkedInSessionError, discover_people_for_company
-from ...repositories.rfp_rfps_repo import get_rfp_by_id
-from ...infrastructure.token_crypto import decrypt_string
-from ...infrastructure.integrations.slack.slack_notifier import notify_finder_run_done, notify_finder_run_error
+from app.repositories import finder_repo
+from app.pipeline.proposal_generation.buyer_scoring import enrich_buyer_profile_with_ai, score_buyer_likelihood
+from app.infrastructure.browser.linkedin_playwright import LinkedInSessionError, discover_people_for_company
+from app.repositories.rfp_rfps_repo import get_rfp_by_id
+from app.infrastructure.token_crypto import decrypt_string
+from app.infrastructure.integrations.slack.slack_notifier import notify_finder_run_done, notify_finder_run_error
 
 
 def _load_storage_state_for_user(user_sub: str) -> dict[str, Any]:

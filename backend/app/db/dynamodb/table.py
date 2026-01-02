@@ -5,10 +5,10 @@ from typing import Any, Iterable
 
 from boto3.dynamodb.types import TypeSerializer
 
-from .client import dynamodb_client, table_resource
-from .errors import DdbInternal, DdbNotFound
-from .pagination import decode_next_token, encode_next_token
-from .retry import RetryPolicy, ddb_call
+from app.db.dynamodb.client import dynamodb_client, table_resource
+from app.db.dynamodb.errors import DdbInternal, DdbNotFound
+from app.db.dynamodb.pagination import decode_next_token, encode_next_token
+from app.db.dynamodb.retry import RetryPolicy, ddb_call
 
 
 _serializer = TypeSerializer()
@@ -245,7 +245,7 @@ class DynamoTable:
 
 
 def get_main_table() -> DynamoTable:
-    from ...settings import settings
+    from app.settings import settings
 
     if not settings.ddb_table_name:
         raise DdbInternal(message="DDB_TABLE_NAME is not set", operation="Config")

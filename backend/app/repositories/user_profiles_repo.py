@@ -6,8 +6,8 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from ..db.dynamodb.table import get_main_table
-from .slack_identity_links_repo import upsert_slack_identity_link
+from app.db.dynamodb.table import get_main_table
+from app.repositories.slack_identity_links_repo import upsert_slack_identity_link
 def _normalize_roles(roles: Any) -> list[str]:
     """
     Minimal role normalization (the previous roles module was removed during pruning).

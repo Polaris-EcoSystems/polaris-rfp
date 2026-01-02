@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .infrastructure.storage import content_repo
+from app.infrastructure.storage import content_repo
 
 
 def _pick_first_job_title(job_titles: Any) -> str:

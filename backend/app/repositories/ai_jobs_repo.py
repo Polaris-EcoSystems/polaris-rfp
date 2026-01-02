@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from boto3.dynamodb.conditions import Key
 
-from ..db.dynamodb.table import get_main_table
+from app.db.dynamodb.table import get_main_table
 
 AiJobStatus = Literal["queued", "running", "completed", "failed"]
 

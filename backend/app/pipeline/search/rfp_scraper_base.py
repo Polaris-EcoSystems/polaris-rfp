@@ -3,8 +3,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ...observability.logging import get_logger
-from ...infrastructure.browser.browser_worker_client import (
+from app.observability.logging import get_logger
+from app.infrastructure.browser.browser_worker_client import (
     close,
     extract,
     goto,

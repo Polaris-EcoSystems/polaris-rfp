@@ -7,7 +7,7 @@ from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from ..settings import settings
+from app.settings import settings
 
 
 def _get_key() -> bytes:

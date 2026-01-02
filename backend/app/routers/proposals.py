@@ -8,16 +8,16 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from ..ai.client import AiError
-from ..ai.user_context import load_user_profile_from_request, user_context_block
-from ..ai.verified_calls import call_text_verified
-from ..settings import settings
-from ..infrastructure.storage import content_repo
-from ..repositories import templates_repo
-from ..repositories.ai_jobs_repo import create_job as create_ai_job
-from ..repositories.ai_jobs_repo import update_job as update_ai_job
-from ..repositories.contracting_repo import create_case, get_case_by_proposal_id
-from ..repositories.rfp_proposals_repo import (
+from app.ai.client import AiError
+from app.ai.user_context import load_user_profile_from_request, user_context_block
+from app.ai.verified_calls import call_text_verified
+from app.settings import settings
+from app.infrastructure.storage import content_repo
+from app.repositories import templates_repo
+from app.repositories.ai_jobs_repo import create_job as create_ai_job
+from app.repositories.ai_jobs_repo import update_job as update_ai_job
+from app.repositories.contracting_repo import create_case, get_case_by_proposal_id
+from app.repositories.rfp_proposals_repo import (
     create_proposal,
     delete_proposal,
     get_proposal_by_id,
@@ -25,17 +25,17 @@ from ..repositories.rfp_proposals_repo import (
     update_proposal,
     update_proposal_review,
 )
-from ..repositories.rfp_rfps_repo import get_rfp_by_id
-from ..pipeline.proposal_generation.shared_section_formatters import (
+from app.repositories.rfp_rfps_repo import get_rfp_by_id
+from app.pipeline.proposal_generation.shared_section_formatters import (
     format_cover_letter_section,
     format_experience_section,
     format_title_section,
 )
-from ..repositories.outbox_repo import enqueue_event
-from ..workflow import sync_for_rfp
-from ..pipeline.proposal_generation.team_member_profiles import pick_team_member_bio, pick_team_member_experience
-from ..pipeline.proposal_generation.templates_catalog import get_builtin_template, to_generator_template
-from ..observability.logging import get_logger
+from app.repositories.outbox_repo import enqueue_event
+from app.workflow import sync_for_rfp
+from app.pipeline.proposal_generation.team_member_profiles import pick_team_member_bio, pick_team_member_experience
+from app.pipeline.proposal_generation.templates_catalog import get_builtin_template, to_generator_template
+from app.observability.logging import get_logger
 
 router = APIRouter(tags=["proposals"])
 log = get_logger("proposals")

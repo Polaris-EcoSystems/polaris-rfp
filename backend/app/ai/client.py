@@ -10,9 +10,9 @@ from typing import Any, Callable, TypeVar
 import httpx
 from pydantic import BaseModel
 
-from ..observability.logging import get_logger
-from ..settings import settings
-from .tuning import Validator, tuning_for
+from app.observability.logging import get_logger
+from app.settings import settings
+from app.ai.tuning import Validator, tuning_for
 
 log = get_logger("ai")
 

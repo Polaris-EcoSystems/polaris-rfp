@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..observability.logging import configure_logging, get_logger
-from ..pipeline.search.rfp_scraper_job_runner import process_scraper_job
-from ..repositories.rfp_scraper_jobs_repo import create_job as create_scraper_job
-from ..repositories import rfp_scraper_schedules_repo
+from app.observability.logging import configure_logging, get_logger
+from app.pipeline.search.rfp_scraper_job_runner import process_scraper_job
+from app.repositories.rfp_scraper_jobs_repo import create_job as create_scraper_job
+from app.repositories import rfp_scraper_schedules_repo
 
 log = get_logger("rfp_scraper_scheduler_worker")
 

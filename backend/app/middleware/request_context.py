@@ -5,7 +5,7 @@ import uuid
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from ..observability.context import request_id_var
+from app.observability.context import request_id_var
 
 
 class RequestContextMiddleware(BaseHTTPMiddleware):

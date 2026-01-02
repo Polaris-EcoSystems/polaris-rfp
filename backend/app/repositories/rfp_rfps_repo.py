@@ -12,8 +12,8 @@ def _ddb_key() -> Any:
     mod = importlib.import_module("boto3.dynamodb.conditions")
     return getattr(mod, "Key")
 
-from ..db.dynamodb.table import get_main_table
-from ..rfp_logic import check_disqualification, compute_date_sanity, compute_fit_score
+from app.db.dynamodb.table import get_main_table
+from app.rfp_logic import check_disqualification, compute_date_sanity, compute_fit_score
 
 
 def now_iso() -> str:
@@ -85,9 +85,9 @@ def create_rfp_from_analysis(
     # Create/ensure Opportunity profile row (back-compat: opportunityId == rfpId)
     # Best-effort: do not fail RFP creation if this fails.
     try:
-        from ..opportunities import ensure_from_rfp
-        from ..stage_machine import compute_stage
-        from .rfp_proposals_repo import list_proposals_by_rfp
+        from app.opportunities import ensure_from_rfp
+        from app.stage_machine import compute_stage
+        from app.repositories.rfp_proposals_repo import list_proposals_by_rfp
 
         stage = None
         try:

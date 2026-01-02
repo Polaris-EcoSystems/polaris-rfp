@@ -4,8 +4,8 @@ from typing import Callable, TypeVar
 
 from pydantic import BaseModel
 
-from .client import AiMeta, call_json, call_text
-from .verification import (
+from app.ai.client import AiMeta, call_json, call_text
+from app.ai.verification import (
     Validator,
     forbid_contains,
     forbid_regex,

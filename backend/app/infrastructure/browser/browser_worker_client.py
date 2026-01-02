@@ -5,8 +5,8 @@ from urllib.parse import urlparse
 
 import httpx
 
-from ...settings import settings
-from ..allowlist import parse_csv, uniq
+from app.settings import settings
+from app.infrastructure.allowlist import parse_csv, uniq
 
 
 def _base_url() -> str:

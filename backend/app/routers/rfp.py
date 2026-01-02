@@ -5,12 +5,12 @@ from typing import Any, Iterator
 from fastapi import APIRouter, BackgroundTasks, Body, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
-from ..db.dynamodb.errors import DdbConflict
-from ..db.dynamodb.table import get_main_table
-from ..pipeline.proposal_generation.ai_section_titles import generate_section_titles
-from ..pipeline.intake.rfp_analyzer import analyze_rfp
-from ..pipeline.intake.opportunity_tracker_import import parse_opportunity_tracker_csv, row_to_rfp_and_tracker
-from ..repositories.rfp_rfps_repo import (
+from app.db.dynamodb.errors import DdbConflict
+from app.db.dynamodb.table import get_main_table
+from app.pipeline.proposal_generation.ai_section_titles import generate_section_titles
+from app.pipeline.intake.rfp_analyzer import analyze_rfp
+from app.pipeline.intake.opportunity_tracker_import import parse_opportunity_tracker_csv, row_to_rfp_and_tracker
+from app.repositories.rfp_rfps_repo import (
     create_rfp_from_analysis,
     delete_rfp,
     get_rfp_by_id,
@@ -19,9 +19,9 @@ from ..repositories.rfp_rfps_repo import (
     now_iso,
     update_rfp,
 )
-from ..workflow import sync_for_rfp
-from ..repositories.attachments_repo import list_attachments
-from ..infrastructure.storage.s3_assets import (
+from app.workflow import sync_for_rfp
+from app.repositories.attachments_repo import list_attachments
+from app.infrastructure.storage.s3_assets import (
     get_assets_bucket_name,
     get_object_bytes,
     head_object,
@@ -30,37 +30,37 @@ from ..infrastructure.storage.s3_assets import (
     presign_put_object,
     to_s3_uri,
 )
-from ..repositories.rfp_upload_jobs_repo import create_job, get_job, get_job_item, update_job
-from ..repositories.rfp_pdf_dedup_repo import (
+from app.repositories.rfp_upload_jobs_repo import create_job, get_job, get_job_item, update_job
+from app.repositories.rfp_pdf_dedup_repo import (
     dedup_key,
     ensure_record,
     get_by_sha256,
     normalize_sha256,
     reset_stale_mapping,
 )
-from ..repositories.rfp_opportunity_state_repo import ensure_state_exists, get_state, patch_state
-from ..repositories.opportunity_tracker_repo import compute_row_key_sha, get_mapping, put_mapping, touch_mapping
-from ..repositories.rfp_scraper_jobs_repo import (
+from app.repositories.rfp_opportunity_state_repo import ensure_state_exists, get_state, patch_state
+from app.repositories.opportunity_tracker_repo import compute_row_key_sha, get_mapping, put_mapping, touch_mapping
+from app.repositories.rfp_scraper_jobs_repo import (
     create_job as create_scraper_job,
     get_job as get_scraper_job,
     list_jobs as list_scraper_jobs,
 )
-from ..repositories import rfp_intake_queue_repo, rfp_scraper_schedules_repo
-from ..repositories.rfp_scraped_rfps_repo import (
+from app.repositories import rfp_intake_queue_repo, rfp_scraper_schedules_repo
+from app.repositories.rfp_scraped_rfps_repo import (
     get_scraped_rfp_by_id,
     list_scraped_rfps,
     mark_scraped_rfp_imported,
     update_scraped_rfp,
 )
-from ..pipeline.search.rfp_scrapers.scraper_registry import get_available_sources, is_source_available
-from ..pipeline.search.rfp_scraper_job_runner import process_scraper_job
-from ..repositories.outbox_repo import enqueue_event
-from ..observability.logging import get_logger
-from ..settings import settings
-from ..ai.client import AiNotConfigured, AiError, AiUpstreamError
-from ..ai.context import clip_text
-from ..ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI
-from ..ai.verified_calls import call_json_verified, call_text_verified
+from app.pipeline.search.rfp_scrapers.scraper_registry import get_available_sources, is_source_available
+from app.pipeline.search.rfp_scraper_job_runner import process_scraper_job
+from app.repositories.outbox_repo import enqueue_event
+from app.observability.logging import get_logger
+from app.settings import settings
+from app.ai.client import AiNotConfigured, AiError, AiUpstreamError
+from app.ai.context import clip_text
+from app.ai.schemas import RfpDatesAI, RfpListsAI, RfpMetaAI
+from app.ai.verified_calls import call_json_verified, call_text_verified
 
 import json
 import time
@@ -532,7 +532,7 @@ def _process_rfp_upload_job(job_id: str) -> None:
         if sha_actual != sha:
             # Don't poison de-dupe state with mismatched content; mark failed and allow retry.
             try:
-                from ..repositories.rfp_pdf_dedup_repo import mark_failed
+                from app.repositories.rfp_pdf_dedup_repo import mark_failed
 
                 mark_failed(sha256=sha, error="sha256 mismatch between claimed hash and uploaded object")
             except Exception:

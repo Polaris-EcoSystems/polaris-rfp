@@ -4,7 +4,7 @@ import re
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from ..repositories.contracting_repo import (
+from app.repositories.contracting_repo import (
     add_contract_template_version,
     create_contract_template,
     get_contract_template,
@@ -12,7 +12,7 @@ from ..repositories.contracting_repo import (
     list_contract_templates,
     set_contract_template_current_version,
 )
-from ..infrastructure.storage.s3_assets import get_object_bytes, presign_get_object, presign_put_object, put_object_bytes
+from app.infrastructure.storage.s3_assets import get_object_bytes, presign_get_object, presign_put_object, put_object_bytes
 
 
 router = APIRouter(tags=["contract_templates"])
@@ -113,7 +113,7 @@ def presign_version_upload(request: Request, templateId: str, body: dict = Body(
 
     # Generate a version id early so the upload key is stable.
     # We still require commit to record the version.
-    from ..repositories.contracting_repo import _new_id as _new  # local import to keep module API private
+    from app.repositories.contracting_repo import _new_id as _new  # local import to keep module API private
 
     version_id = _new("ctv")
     key = _template_upload_key(template_id=templateId, version_id=version_id, file_name=file_name)
@@ -175,7 +175,7 @@ def preview_version(
         raise HTTPException(status_code=400, detail="templateId and versionId are required")
     tpl_ver = None
     try:
-        from ..repositories.contracting_repo import get_contract_template_version
+        from app.repositories.contracting_repo import get_contract_template_version
 
         tpl_ver = get_contract_template_version(tid, vid)
     except Exception:

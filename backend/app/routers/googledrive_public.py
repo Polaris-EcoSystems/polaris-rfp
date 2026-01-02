@@ -6,8 +6,8 @@ from typing import Any
 import importlib
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from ..observability.logging import get_logger
-from ..repositories.rfp_proposals_repo import get_proposal_by_id
+from app.observability.logging import get_logger
+from app.repositories.rfp_proposals_repo import get_proposal_by_id
 
 router = APIRouter(tags=["googledrive"])
 log = get_logger("googledrive_public")

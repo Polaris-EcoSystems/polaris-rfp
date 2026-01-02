@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from ...observability.logging import get_logger
-from ...repositories.rfp_scraper_jobs_repo import (
+from app.observability.logging import get_logger
+from app.repositories.rfp_scraper_jobs_repo import (
     get_job_item as get_scraper_job_item,
     update_job as update_scraper_job,
 )
-from ...repositories.rfp_scraped_rfps_repo import create_scraped_rfp_deduped
-from .rfp_scrapers.scraper_registry import get_scraper, is_source_available
-from ...repositories.rfp_scraped_rfps_repo import now_iso
+from app.repositories.rfp_scraped_rfps_repo import create_scraped_rfp_deduped
+from app.pipeline.search.rfp_scrapers.scraper_registry import get_scraper, is_source_available
+from app.repositories.rfp_scraped_rfps_repo import now_iso
 
 log = get_logger("rfp_scraper_job_runner")
 

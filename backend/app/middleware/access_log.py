@@ -5,7 +5,7 @@ import time
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from ..observability.logging import get_logger
+from app.observability.logging import get_logger
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):

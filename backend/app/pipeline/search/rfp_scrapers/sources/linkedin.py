@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ....infrastructure.token_crypto import decrypt_string
-from ....repositories import finder_repo
-from ..framework import ScraperContext
-from ..linkedin_content_search_scraper import LinkedInContentSearchScraper
+from app.infrastructure.token_crypto import decrypt_string
+from app.repositories import finder_repo
+from app.pipeline.search.rfp_scrapers.framework import ScraperContext
+from app.pipeline.search.rfp_scrapers.linkedin_content_search_scraper import LinkedInContentSearchScraper
 
 SOURCE: dict[str, Any] = {
     "id": "linkedin",

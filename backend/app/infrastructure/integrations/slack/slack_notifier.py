@@ -2,18 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
-from ....settings import settings
-from ....repositories.rfp_rfps_repo import get_rfp_by_id
-from .slack_secrets import get_secret_str
-from ....repositories.sessions_repo import list_sessions_for_user
-from .slack_web import (
+from app.settings import settings
+from app.repositories.rfp_rfps_repo import get_rfp_by_id
+from app.infrastructure.integrations.slack.slack_secrets import get_secret_str
+from app.repositories.sessions_repo import list_sessions_for_user
+from app.infrastructure.integrations.slack.slack_web import (
     chat_post_message_result,
     lookup_user_id_by_email,
     open_dm_channel,
     post_message,
     post_message_result,
 )
-from ....observability.logging import get_logger
+from app.observability.logging import get_logger
 
 
 def _rfp_url(rfp_id: str) -> str:

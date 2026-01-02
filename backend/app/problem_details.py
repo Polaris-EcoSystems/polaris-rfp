@@ -5,7 +5,7 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import ORJSONResponse
 
-from .settings import get_settings
+from app.settings import get_settings
 
 PROBLEM_JSON = "application/problem+json"
 

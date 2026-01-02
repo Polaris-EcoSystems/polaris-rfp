@@ -9,12 +9,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 from jose import jwt
 
-from ..settings import settings
-from ..repositories import integrations_canva_repo as canva_repo_module
-from ..infrastructure.storage import content_repo
-from ..repositories import rfp_proposals_repo as proposals_repo
-from ..repositories import rfp_rfps_repo as rfps_repo
-from ..infrastructure.integrations.canva.canva_client import (
+from app.settings import settings
+from app.repositories import integrations_canva_repo as canva_repo_module
+from app.infrastructure.storage import content_repo
+from app.repositories import rfp_proposals_repo as proposals_repo
+from app.repositories import rfp_rfps_repo as rfps_repo
+from app.infrastructure.integrations.canva.canva_client import (
     build_authorize_url,
     create_autofill_job,
     create_export_job,
@@ -29,8 +29,8 @@ from ..infrastructure.integrations.canva.canva_client import (
     poll_job,
     upsert_connection_for_user,
 )
-from ..infrastructure.integrations.canva.canva_mapper import build_dataset_values, diagnose_dataset_values
-from ..infrastructure.token_crypto import decrypt_string, encrypt_string
+from app.infrastructure.integrations.canva.canva_mapper import build_dataset_values, diagnose_dataset_values
+from app.infrastructure.token_crypto import decrypt_string, encrypt_string
 
 router = APIRouter(tags=["integrations_canva"])
 

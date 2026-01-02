@@ -6,18 +6,18 @@ from typing import Any
 
 import boto3
 
-from ..observability.logging import configure_logging, get_logger
-from ..pipeline.contracting.contracting_docgen import generate_budget_xlsx, render_contract_docx
-from ..repositories.contracting_jobs_repo import (
+from app.observability.logging import configure_logging, get_logger
+from app.pipeline.contracting.contracting_docgen import generate_budget_xlsx, render_contract_docx
+from app.repositories.contracting_jobs_repo import (
     complete_job,
     fail_job,
     get_job,
     try_mark_running,
     update_progress,
 )
-from ..repositories.contracting_repo import get_client_package
-from ..infrastructure.storage.s3_assets import get_object_bytes, put_object_bytes
-from ..settings import settings
+from app.repositories.contracting_repo import get_client_package
+from app.infrastructure.storage.s3_assets import get_object_bytes, put_object_bytes
+from app.settings import settings
 
 
 log = get_logger("contracting_worker")

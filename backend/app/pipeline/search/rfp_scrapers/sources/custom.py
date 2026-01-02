@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..custom_links_scraper import CustomLinksScraper
-from ..framework import ScraperContext
+from app.pipeline.search.rfp_scrapers.custom_links_scraper import CustomLinksScraper
+from app.pipeline.search.rfp_scrapers.framework import ScraperContext
 
 SOURCE: dict[str, Any] = {
     "id": "custom",

@@ -3,9 +3,9 @@ from __future__ import annotations
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from ..auth.cognito import CognitoAuthError, verify_bearer_token
-from ..observability.logging import get_logger
-from ..problem_details import problem_response
+from app.auth.cognito import CognitoAuthError, verify_bearer_token
+from app.observability.logging import get_logger
+from app.problem_details import problem_response
 
 
 def is_public_path(path: str) -> bool:

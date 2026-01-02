@@ -5,7 +5,7 @@ import logging
 import sys
 from typing import Any
 
-from .context import get_request_id
+from app.observability.context import get_request_id
 
 structlog: Any
 try:

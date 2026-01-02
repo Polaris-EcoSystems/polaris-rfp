@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..observability.logging import configure_logging, get_logger
-from ..repositories.outbox_repo import claim_event, list_pending, mark_done, mark_retry
+from app.observability.logging import configure_logging, get_logger
+from app.repositories.outbox_repo import claim_event, list_pending, mark_done, mark_retry
 
 log = get_logger("outbox_worker")
 
@@ -19,19 +19,19 @@ def dispatch_event(event: dict[str, Any]) -> dict[str, Any]:
     payload: dict[str, Any] = payload_raw if isinstance(payload_raw, dict) else {}
 
     if et == "slack.task_assigned":
-        from ..infrastructure.integrations.slack.slack_notifier import notify_task_assigned
+        from app.infrastructure.integrations.slack.slack_notifier import notify_task_assigned
 
         notify_task_assigned(task=payload.get("task") or {}, actor_user_sub=payload.get("actorUserSub"))
         return {"ok": True}
 
     if et == "slack.task_completed":
-        from ..infrastructure.integrations.slack.slack_notifier import notify_task_completed
+        from app.infrastructure.integrations.slack.slack_notifier import notify_task_completed
 
         notify_task_completed(task=payload.get("task") or {}, actor_user_sub=payload.get("actorUserSub"))
         return {"ok": True}
 
     if et == "slack.proposal_created":
-        from ..infrastructure.integrations.slack.slack_notifier import notify_proposal_created
+        from app.infrastructure.integrations.slack.slack_notifier import notify_proposal_created
 
         notify_proposal_created(
             proposal_id=str(payload.get("proposalId") or ""),
@@ -41,7 +41,7 @@ def dispatch_event(event: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True}
 
     if et == "slack.rfp_upload_completed":
-        from ..infrastructure.integrations.slack.slack_notifier import notify_rfp_upload_job_completed
+        from app.infrastructure.integrations.slack.slack_notifier import notify_rfp_upload_job_completed
 
         notify_rfp_upload_job_completed(
             job_id=str(payload.get("jobId") or ""),
@@ -52,7 +52,7 @@ def dispatch_event(event: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True}
 
     if et == "slack.rfp_upload_failed":
-        from ..infrastructure.integrations.slack.slack_notifier import notify_rfp_upload_job_failed
+        from app.infrastructure.integrations.slack.slack_notifier import notify_rfp_upload_job_failed
 
         notify_rfp_upload_job_failed(
             job_id=str(payload.get("jobId") or ""),

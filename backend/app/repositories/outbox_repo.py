@@ -7,8 +7,8 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from ..db.dynamodb.errors import DdbConflict
-from ..db.dynamodb.table import get_main_table
+from app.db.dynamodb.errors import DdbConflict
+from app.db.dynamodb.table import get_main_table
 
 
 def _now_iso() -> str:

@@ -10,9 +10,9 @@ import time
 from pydantic import BaseModel, EmailStr, Field
 from botocore.exceptions import ClientError
 
-from ..observability.logging import get_logger
-from ..infrastructure import cognito_idp
-from ..repositories.auth_magic_links_repo import (
+from app.observability.logging import get_logger
+from app.infrastructure import cognito_idp
+from app.repositories.auth_magic_links_repo import (
     delete_magic_session,
     delete_magic_session_for_email,
     get_magic_session,
@@ -20,8 +20,8 @@ from ..repositories.auth_magic_links_repo import (
     put_magic_session,
     put_magic_session_for_email,
 )
-from ..infrastructure.auth.password_reset import consume_password_reset, create_password_reset
-from ..repositories.sessions_repo import (
+from app.infrastructure.auth.password_reset import consume_password_reset, create_password_reset
+from app.repositories.sessions_repo import (
     cache_access_token,
     delete_session,
     get_session,
@@ -32,9 +32,9 @@ from ..repositories.sessions_repo import (
     try_acquire_refresh_lock,
     try_get_recent_cached_access_token,
 )
-from ..infrastructure.token_crypto import decrypt_string, encrypt_string
-from ..settings import settings
-from ..auth.cognito import verify_bearer_token
+from app.infrastructure.token_crypto import decrypt_string, encrypt_string
+from app.settings import settings
+from app.auth.cognito import verify_bearer_token
 
 router = APIRouter(tags=["auth"])
 log = get_logger("auth")

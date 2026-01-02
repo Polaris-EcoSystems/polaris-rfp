@@ -4,8 +4,8 @@ import os
 
 from fastapi import FastAPI
 
-from ..settings import Settings
-from .logging import get_logger
+from app.settings import Settings
+from app.observability.logging import get_logger
 
 
 def _truthy(v: str | None) -> bool:

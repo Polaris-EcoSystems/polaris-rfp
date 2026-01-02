@@ -5,12 +5,12 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Body, File, HTTPException, Request, UploadFile
 
-from ..auth.cognito import VerifiedUser
-from ..repositories import finder_repo
-from ..pipeline.search.finder_worker import run_finder_job
-from ..infrastructure.browser.linkedin_playwright import LinkedInSessionError, validate_linkedin_session
-from ..repositories.rfp_rfps_repo import get_rfp_by_id, update_rfp
-from ..infrastructure.token_crypto import decrypt_string, encrypt_string
+from app.auth.cognito import VerifiedUser
+from app.repositories import finder_repo
+from app.pipeline.search.finder_worker import run_finder_job
+from app.infrastructure.browser.linkedin_playwright import LinkedInSessionError, validate_linkedin_session
+from app.repositories.rfp_rfps_repo import get_rfp_by_id, update_rfp
+from app.infrastructure.token_crypto import decrypt_string, encrypt_string
 
 
 router = APIRouter(tags=["finder"])

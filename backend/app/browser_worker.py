@@ -10,9 +10,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
-from .observability.logging import configure_logging, get_logger
-from .infrastructure.storage import s3_assets
-from .settings import settings
+from app.observability.logging import configure_logging, get_logger
+from app.infrastructure.storage import s3_assets
+from app.settings import settings
 
 
 log = get_logger("browser_worker")

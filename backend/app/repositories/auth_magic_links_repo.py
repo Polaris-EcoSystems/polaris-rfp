@@ -5,8 +5,8 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from ..settings import settings
-from ..db.dynamodb.table import get_table
+from app.settings import settings
+from app.db.dynamodb.table import get_table
 
 
 def _table():

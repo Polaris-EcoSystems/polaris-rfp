@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from ..repositories.contracting_repo import (
+from app.repositories.contracting_repo import (
     add_supporting_doc,
     create_client_package,
     create_esign_envelope,
@@ -25,16 +25,16 @@ from ..repositories.contracting_repo import (
     revoke_client_package,
     update_case,
 )
-from ..pipeline.contracting.contracting_schemas import validate_key_terms
-from ..pipeline.contracting.contracting_docgen import generate_budget_xlsx as _generate_budget_xlsx
-from ..pipeline.contracting.contracting_docgen import render_contract_docx as _render_contract_docx
-from ..infrastructure.integrations.esign_service import mark_signed as _esign_mark_signed
-from ..infrastructure.integrations.esign_service import send_envelope as _esign_send
-from ..repositories.contracting_jobs_repo import create_job as create_contracting_job
-from ..repositories.contracting_jobs_repo import get_job as get_contracting_job
-from ..repositories.contracting_jobs_repo import list_jobs_for_case
-from ..pipeline.contracting.contracting_queue import enqueue_contracting_job
-from ..infrastructure.storage.s3_assets import presign_get_object, presign_put_object
+from app.pipeline.contracting.contracting_schemas import validate_key_terms
+from app.pipeline.contracting.contracting_docgen import generate_budget_xlsx as _generate_budget_xlsx
+from app.pipeline.contracting.contracting_docgen import render_contract_docx as _render_contract_docx
+from app.infrastructure.integrations.esign_service import mark_signed as _esign_mark_signed
+from app.infrastructure.integrations.esign_service import send_envelope as _esign_send
+from app.repositories.contracting_jobs_repo import create_job as create_contracting_job
+from app.repositories.contracting_jobs_repo import get_job as get_contracting_job
+from app.repositories.contracting_jobs_repo import list_jobs_for_case
+from app.pipeline.contracting.contracting_queue import enqueue_contracting_job
+from app.infrastructure.storage.s3_assets import presign_get_object, presign_put_object
 
 
 router = APIRouter(tags=["contracting"])
@@ -158,7 +158,7 @@ def presign_support_doc_upload(request: Request, caseId: str, body: dict = Body(
     expires_at = _iso_or_none((body or {}).get("expiresAt"))
 
     # Generate a doc id early so the key is stable between presign and commit.
-    from ..repositories.contracting_repo import _new_id as _new  # keep repo API minimal
+    from app.repositories.contracting_repo import _new_id as _new  # keep repo API minimal
 
     doc_id = _new("support_doc")
     key = _supporting_doc_key(case_id=caseId, doc_id=doc_id, file_name=file_name)
@@ -397,7 +397,7 @@ def generate_contract(request: Request, caseId: str, body: dict = Body(default_f
                     created_by_user_sub=_user_sub(request),
                 )
                 try:
-                    from ..repositories.contracting_jobs_repo import complete_job
+                    from app.repositories.contracting_jobs_repo import complete_job
 
                     complete_job(job_id=str(job.get("jobId") or ""), result={"contract": out.get("version")})
                 except Exception:
@@ -436,7 +436,7 @@ def generate_budget_xlsx(request: Request, caseId: str, body: dict = Body(defaul
                     created_by_user_sub=_user_sub(request),
                 )
                 try:
-                    from ..repositories.contracting_jobs_repo import complete_job
+                    from app.repositories.contracting_jobs_repo import complete_job
 
                     complete_job(job_id=str(job.get("jobId") or ""), result={"budget": out.get("version")})
                 except Exception:

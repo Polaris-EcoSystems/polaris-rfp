@@ -4,9 +4,9 @@ from typing import Any
 
 import httpx
 
-from ...settings import settings
-from .github_secrets import get_secret_str as github_secret_str
-from ..allowlist import parse_csv, uniq
+from app.settings import settings
+from app.infrastructure.github.github_secrets import get_secret_str as github_secret_str
+from app.infrastructure.allowlist import parse_csv, uniq
 
 
 def _allowed_repos() -> list[str]:

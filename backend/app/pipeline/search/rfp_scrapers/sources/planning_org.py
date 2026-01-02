@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..framework import ScraperContext
-from ..planning_org_scraper import PlanningOrgScraper
+from app.pipeline.search.rfp_scrapers.framework import ScraperContext
+from app.pipeline.search.rfp_scrapers.planning_org_scraper import PlanningOrgScraper
 
 SOURCE: dict[str, Any] = {
     "id": "planning.org",

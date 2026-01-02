@@ -4,19 +4,19 @@ import io
 from datetime import datetime, timezone
 from typing import Any
 
-from ...observability.logging import get_logger
-from ...infrastructure.storage import content_repo
-from ...repositories.contracting_repo import (
+from app.observability.logging import get_logger
+from app.infrastructure.storage import content_repo
+from app.repositories.contracting_repo import (
     add_budget_version,
     add_contract_doc_version,
     get_case_by_id,
     get_contract_template,
     get_contract_template_version,
 )
-from ...repositories.rfp_proposals_repo import get_proposal_by_id
-from ...repositories.rfp_rfps_repo import get_rfp_by_id
-from ...infrastructure.storage.s3_assets import get_object_bytes, put_object_bytes
-from .contracting_schemas import ContractingKeyTerms
+from app.repositories.rfp_proposals_repo import get_proposal_by_id
+from app.repositories.rfp_rfps_repo import get_rfp_by_id
+from app.infrastructure.storage.s3_assets import get_object_bytes, put_object_bytes
+from app.pipeline.contracting.contracting_schemas import ContractingKeyTerms
 
 
 log = get_logger("contracting_docgen")

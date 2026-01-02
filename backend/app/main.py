@@ -7,16 +7,16 @@ from fastapi.responses import ORJSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 
-from .middleware.access_log import AccessLogMiddleware
-from .middleware.auth import AuthMiddleware
-from .middleware.cors import build_allowed_origin_regex, build_allowed_origins
-from .middleware.normalize_path import NormalizePathMiddleware
-from .middleware.portal_rate_limit import PortalRateLimitMiddleware
-from .middleware.request_context import RequestContextMiddleware
-from .observability.logging import configure_logging, get_logger
-from .observability.otel import configure_otel, instrument_app
-from .problem_details import problem_response
-from .db.dynamodb.errors import (
+from app.middleware.access_log import AccessLogMiddleware
+from app.middleware.auth import AuthMiddleware
+from app.middleware.cors import build_allowed_origin_regex, build_allowed_origins
+from app.middleware.normalize_path import NormalizePathMiddleware
+from app.middleware.portal_rate_limit import PortalRateLimitMiddleware
+from app.middleware.request_context import RequestContextMiddleware
+from app.observability.logging import configure_logging, get_logger
+from app.observability.otel import configure_otel, instrument_app
+from app.problem_details import problem_response
+from app.db.dynamodb.errors import (
     DdbConflict,
     DdbError,
     DdbNotFound,
@@ -24,29 +24,29 @@ from .db.dynamodb.errors import (
     DdbUnavailable,
     DdbValidation,
  )
-from .routers.health import router as health_router
-from .routers.auth import router as auth_router
-from .routers.content import router as content_router
-from .routers.rfp import router as rfp_router
-from .routers.attachments import router as attachments_router
-from .routers.proposals import router as proposals_router
-from .routers.templates import router as templates_router
-from .routers.ai import router as ai_router
-from .routers.ai_jobs import router as ai_jobs_router
-from .routers.integrations import router as integrations_router
-from .routers.integrations_canva import router as canva_router
-from .routers.googledrive_public import router as googledrive_public_router
-from .routers.integrations_slack import router as slack_router
-from .routers.northstar_audit import router as northstar_audit_router
-from .routers.profile import router as profile_router
-from .routers.finder import router as finder_router
-from .routers.tasks import router as tasks_router
-from .routers.user_profile import router as user_profile_router
-from .routers.contracting import router as contracting_router
-from .routers.contract_templates import router as contract_templates_router
-from .routers.client_portal import router as client_portal_router
-from .routers.agents import router as agents_router
-from .settings import settings
+from app.routers.health import router as health_router
+from app.routers.auth import router as auth_router
+from app.routers.content import router as content_router
+from app.routers.rfp import router as rfp_router
+from app.routers.attachments import router as attachments_router
+from app.routers.proposals import router as proposals_router
+from app.routers.templates import router as templates_router
+from app.routers.ai import router as ai_router
+from app.routers.ai_jobs import router as ai_jobs_router
+from app.routers.integrations import router as integrations_router
+from app.routers.integrations_canva import router as canva_router
+from app.routers.googledrive_public import router as googledrive_public_router
+from app.routers.integrations_slack import router as slack_router
+from app.routers.northstar_audit import router as northstar_audit_router
+from app.routers.profile import router as profile_router
+from app.routers.finder import router as finder_router
+from app.routers.tasks import router as tasks_router
+from app.routers.user_profile import router as user_profile_router
+from app.routers.contracting import router as contracting_router
+from app.routers.contract_templates import router as contract_templates_router
+from app.routers.client_portal import router as client_portal_router
+from app.routers.agents import router as agents_router
+from app.settings import settings
 
 
 def create_app() -> FastAPI:

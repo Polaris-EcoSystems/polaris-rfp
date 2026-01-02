@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Literal
 
-from ..settings import settings
+from app.settings import settings
 
 
 AiKind = Literal["text", "json", "tools"]

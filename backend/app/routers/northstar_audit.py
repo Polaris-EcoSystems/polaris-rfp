@@ -5,12 +5,12 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from ..repositories.agent_events_repo import list_recent_events, list_recent_events_global
-from ..repositories.rfp_agent_journal_repo import list_recent_entries
-from ..repositories.agent_jobs_repo import claim_due_jobs
-from ..repositories.change_proposals_repo import list_recent_change_proposals
-from ..repositories.rfp_opportunity_state_repo import ensure_state_exists, get_state
-from ..repositories.slack_thread_bindings_repo import get_binding as get_thread_binding
+from app.repositories.agent_events_repo import list_recent_events, list_recent_events_global
+from app.repositories.rfp_agent_journal_repo import list_recent_entries
+from app.repositories.agent_jobs_repo import claim_due_jobs
+from app.repositories.change_proposals_repo import list_recent_change_proposals
+from app.repositories.rfp_opportunity_state_repo import ensure_state_exists, get_state
+from app.repositories.slack_thread_bindings_repo import get_binding as get_thread_binding
 
 
 router = APIRouter(tags=["northstar"])

@@ -7,8 +7,8 @@ from typing import Any
 
 from boto3.dynamodb.conditions import Key
 
-from ..db.dynamodb.table import get_main_table
-from ..infrastructure.token_crypto import decrypt_string, encrypt_string
+from app.db.dynamodb.table import get_main_table
+from app.infrastructure.token_crypto import decrypt_string, encrypt_string
 
 
 def session_key(*, sid: str) -> dict[str, str]:

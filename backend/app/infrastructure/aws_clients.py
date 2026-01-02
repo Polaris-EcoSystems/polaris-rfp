@@ -5,7 +5,7 @@ from functools import lru_cache
 import boto3
 from botocore.config import Config
 
-from ..settings import settings
+from app.settings import settings
 
 
 @lru_cache(maxsize=1)

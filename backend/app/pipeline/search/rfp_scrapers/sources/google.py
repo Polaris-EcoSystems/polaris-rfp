@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ....settings import settings
-from ..framework import ScraperContext
-from ..google_cse_scraper import GoogleCseRfpScraper
+from app.settings import settings
+from app.pipeline.search.rfp_scrapers.framework import ScraperContext
+from app.pipeline.search.rfp_scrapers.google_cse_scraper import GoogleCseRfpScraper
 
 SOURCE: dict[str, Any] = {
     "id": "google",
